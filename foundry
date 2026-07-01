@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: foundry <command> [args]
+
+Commands:
+  up            Start the Foundry stack
+  down          Stop the Foundry stack
+  status        Show status of Foundry services
+  new-project   Register a new project (greenfield or brownfield)
+  logs          Tail logs from Foundry services
+
+  -h, --help    Show this help message
+EOF
+}
+
+not_implemented() {
+    echo "foundry: '$1' is not implemented yet — see TODO.md for the phase that adds it." >&2
+    exit 1
+}
+
+command="${1:-}"
+
+case "$command" in
+    up|down|status|new-project|logs)
+        not_implemented "$command"
+        ;;
+    -h|--help|"")
+        usage
+        ;;
+    *)
+        echo "foundry: unknown command '$command'" >&2
+        usage >&2
+        exit 1
+        ;;
+esac

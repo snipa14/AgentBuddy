@@ -1,0 +1,66 @@
+{
+  "_comment": "PreToolUse hooks enforce rules that CLAUDE.md cannot guarantee. CLAUDE.md gives ~70% compliance. These hooks give 100%. Add a hook here for any rule where a violation is unacceptable, not just undesirable.",
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/block_host_docker.py",
+            "_comment": "Blocks any bash command that directly references /var/run/docker.sock or calls 'docker' CLI in ways that bypass the proxy. Agents should use Executor tool calls, not raw docker commands."
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/block_main_push.py",
+            "_comment": "Blocks any 'git push' targeting main or 'git merge' into main. The merge gate in the LangGraph graph handles this with a Telegram interrupt; this hook is the fallback if Claude tries to do it via bash."
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/block_host_installs.py",
+            "_comment": "Blocks pip install, apt install, brew install, npm install -g, and similar commands run outside of a container context. All package installs happen inside workspace containers via Executor.run_command()."
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/block_secret_writes.py",
+            "_comment": "Runs gitleaks on the file content before it is written. Blocks the write if a credential pattern is detected. Catches accidental secret writes before they reach disk."
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/guard_executor_imports.py",
+            "_comment": "Blocks writes to any file outside services/executor/ that would introduce an import of the Docker SDK (docker, docker.from_env, DockerClient). Enforces the 'only Executor touches Docker' rule at the file-write level."
+          }
+        ]
+      }
+    ]
+  },
+
+  "permissions": {
+    "allow": [
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push origin feature/*:*)",
+      "Bash(git push origin fix/*:*)",
+      "Bash(git push origin phase/*:*)",
+      "Bash(git push origin chore/*:*)",
+      "Bash(docker build:*)",
+      "Bash(docker compose:*)",
+      "Bash(./scripts/*)"
+    ],
+    "deny": [
+      "Bash(git push origin main:*)",
+      "Bash(git push --force:*)",
+      "Bash(pip install:*)",
+      "Bash(apt install:*)",
+      "Bash(npm install -g:*)"
+    ]
+  }
+}

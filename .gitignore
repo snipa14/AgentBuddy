@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+.coverage
+htmlcov/
+
+# Environment / secrets
+*.env
+secrets/*
+!secrets/*.example
+.claude/settings.local.json
+
+# Docker
+ollama_models/
+
+# Project workspaces (bind-mounted; only memory/*.md is git-tracked)
+projects/*
+!projects/*/
+projects/*/*
+!projects/*/memory/
+projects/*/memory/*
+!projects/*/memory/*.md
