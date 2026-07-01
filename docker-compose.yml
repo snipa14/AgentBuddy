@@ -1,0 +1,91 @@
+services:
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.2
+    container_name: foundry-docker-socket-proxy
+    environment:
+      CONTAINERS: 1
+      EXEC: 1
+      IMAGES: 1
+      POST: 1
+      BUILD: 0
+      NETWORKS: 0
+      VOLUMES: 0
+      SWARM: 0
+      SYSTEM: 0
+      SERVICES: 0
+      TASKS: 0
+      CONFIGS: 0
+      SECRETS: 0
+      PLUGINS: 0
+      DISTRIBUTION: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - foundry_internal
+    restart: unless-stopped
+
+  executor:
+    # TODO(Phase 3): replace with images/executor built from a real Dockerfile.
+    image: python:3.12-slim
+    container_name: foundry-executor
+    command: ["sleep", "infinity"]
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    depends_on:
+      - docker-socket-proxy
+    networks:
+      - foundry_internal
+    restart: unless-stopped
+
+  orchestrator:
+    # TODO(Phase 5): replace with services/orchestrator built from a real Dockerfile.
+    image: python:3.12-slim
+    container_name: foundry-orchestrator
+    command: ["sleep", "infinity"]
+    environment:
+      OLLAMA_ENABLED: "false"
+      EXECUTOR_URL: http://executor:8000
+    secrets:
+      - claude_api_key
+      - github_token
+    volumes:
+      - ./projects:/data/projects
+      - foundry_memory:/data/memory
+    depends_on:
+      - executor
+    networks:
+      - foundry_internal
+    restart: unless-stopped
+
+  telegram-gateway:
+    # TODO(Phase 4): replace with services/telegram_gateway built from a real Dockerfile.
+    image: python:3.12-slim
+    container_name: foundry-telegram-gateway
+    command: ["sleep", "infinity"]
+    environment:
+      ORCHESTRATOR_URL: http://orchestrator:8000
+    secrets:
+      - telegram_bot_token
+      - telegram_allowed_user_id
+    depends_on:
+      - orchestrator
+    networks:
+      - foundry_internal
+    restart: unless-stopped
+
+networks:
+  foundry_internal:
+    driver: bridge
+
+volumes:
+  foundry_memory:
+
+secrets:
+  telegram_bot_token:
+    file: ./secrets/telegram_bot_token
+  telegram_allowed_user_id:
+    file: ./secrets/telegram_allowed_user_id
+  claude_api_key:
+    file: ./secrets/claude_api_key
+  github_token:
+    file: ./secrets/github_token

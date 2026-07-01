@@ -17,8 +17,8 @@ secrets/*
 !secrets/*.example
 .claude/settings.local.json
 
-# Docker
-ollama_models/
+# Compose env overrides (secrets live under secrets/, not here)
+.env
 
 # Project workspaces (bind-mounted; only memory/*.md is git-tracked)
 projects/*

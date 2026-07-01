@@ -35,13 +35,13 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 **Goal:** `docker compose config` resolves cleanly; the secrets wizard works end to end.
 **Decisions:** ADR-004, ADR-005, ADR-010
 
-- [ ] `docker-compose.yml` with services: `telegram-gateway`, `orchestrator`, `executor`, `docker-socket-proxy` (placeholder image `python:3.12-slim` is fine until real Dockerfiles exist)
-- [ ] `secrets:` blocks for `telegram_bot_token`, `claude_api_key`, `github_token`, `telegram_allowed_user_id`
-- [ ] `secrets/*.example` placeholders committed; real files gitignored
-- [ ] `scripts/setup.sh`: interactive wizard — prompts for each missing secret, writes it to `secrets/`, sets file mode `600`
-- [ ] `scripts/start.sh` (runs `setup.sh` if any secret is missing, then `docker compose up -d`) and `scripts/stop.sh` (`docker compose down`)
-- [ ] `docker-compose.local-llm.yml` overlay: `ollama` service with GPU reservation for the RTX 3090 and a named volume for downloaded models
-- [ ] `docker-socket-proxy` configured per ARCHITECTURE.md §4.3 (`CONTAINERS=1 EXEC=1 IMAGES=1 POST=1`, everything else `0`), with the real host socket mounted into **this container only**
+- [x] `docker-compose.yml` with services: `telegram-gateway`, `orchestrator`, `executor`, `docker-socket-proxy` (placeholder image `python:3.12-slim` is fine until real Dockerfiles exist)
+- [x] `secrets:` blocks for `telegram_bot_token`, `claude_api_key`, `github_token`, `telegram_allowed_user_id`
+- [x] `secrets/*.example` placeholders committed; real files gitignored
+- [x] `scripts/setup.sh`: interactive wizard — prompts for each missing secret, writes it to `secrets/`, sets file mode `600`
+- [x] `scripts/start.sh` (runs `setup.sh` if any secret is missing, then `docker compose up -d`) and `scripts/stop.sh` (`docker compose down`)
+- [x] `docker-compose.local-llm.yml` overlay: `ollama` service with GPU reservation for the RTX 3090 and a named volume for downloaded models
+- [x] `docker-socket-proxy` configured per ARCHITECTURE.md §4.3 (`CONTAINERS=1 EXEC=1 IMAGES=1 POST=1`, everything else `0`), with the real host socket mounted into **this container only**
 
 **Definition of Done:** fresh clone → `./scripts/start.sh` prompts for secrets once → `docker compose ps` shows all core services `Up`. Running it a second time does not re-prompt.
 
