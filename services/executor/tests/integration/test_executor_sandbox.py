@@ -31,8 +31,8 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(scope="session")
 def docker_client():
-    client = build_docker_client()
     try:
+        client = build_docker_client()
         client.ping()
     except docker.errors.DockerException as exc:
         pytest.skip(f"no reachable Docker daemon: {exc}")

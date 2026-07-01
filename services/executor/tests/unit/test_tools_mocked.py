@@ -14,11 +14,13 @@ from docker.errors import NotFound
 from docker.models.containers import Container
 
 from services.executor.config import ExecutorConfig
-from services.executor.errors import PathTraversalError
+from services.executor.errors import ContainerExecutionError, PathTraversalError
 from services.executor.tools import (
+    _build_single_file_tar,
     tool_list_files,
     tool_read_file,
     tool_run_command,
+    tool_run_tests,
     tool_write_file,
 )
 
@@ -130,3 +132,46 @@ def test_tool_write_file_creates_parent_directory_and_puts_archive(
     mock_container.exec_run.assert_called_once_with(["mkdir", "-p", "/workspace/src"])
     put_args, _ = mock_container.put_archive.call_args
     assert put_args[0] == "/workspace/src"
+
+
+def test_tool_read_file_returns_content_from_get_archive_tar_stream(
+    mock_client, mock_container, config
+):
+    tar_bytes = _build_single_file_tar("existing.txt", "already here")
+    mock_container.get_archive.return_value = ([tar_bytes], {"name": "existing.txt"})
+
+    content = tool_read_file(mock_client, config, "proj-1", "existing.txt")
+
+    assert content == "already here"
+
+
+def test_tool_list_files_raises_container_execution_error_on_nonzero_exit(
+    mock_client, mock_container, config
+):
+    mock_container.exec_run.return_value = (1, (b"", b"permission denied"))
+
+    with pytest.raises(ContainerExecutionError):
+        tool_list_files(mock_client, config, "proj-1", ".")
+
+
+def test_tool_run_tests_rejects_unsupported_framework(mock_client, config):
+    with pytest.raises(ValueError):
+        tool_run_tests(mock_client, config, "proj-1", framework="unittest")
+
+    mock_client.containers.run.assert_not_called()
+
+
+def test_tool_run_tests_parses_passed_failed_and_coverage(mock_client, mock_container, config):
+    pytest_output = (
+        "Name       Stmts   Miss  Cover\n"
+        "TOTAL          10      1    90%\n"
+        "3 passed, 1 failed in 0.30s\n"
+    )
+    mock_container.exec_run.return_value = (1, (pytest_output.encode(), b""))
+
+    result = tool_run_tests(mock_client, config, "proj-1")
+
+    assert result.passed == 3
+    assert result.failed == 1
+    assert result.coverage_pct == 90.0
+    assert pytest_output in result.report

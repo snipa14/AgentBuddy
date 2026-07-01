@@ -15,6 +15,10 @@ def test_parse_pytest_summary_with_errors_counts_as_failed():
     assert _parse_pytest_summary("1 passed, 1 error in 0.05s") == (1, 1)
 
 
+def test_parse_pytest_summary_failed_before_passed_still_sums_both():
+    assert _parse_pytest_summary("2 failed, 3 passed in 1.0s") == (3, 2)
+
+
 def test_parse_pytest_summary_no_match_returns_zero_zero():
     assert _parse_pytest_summary("no tests ran") == (0, 0)
 
