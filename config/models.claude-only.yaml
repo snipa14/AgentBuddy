@@ -1,0 +1,35 @@
+# Claude-only deployment preset (ADR-015): every role resolves to a Claude
+# provider, no "local" entry anywhere. Drop this in unchanged as
+# config/models.yaml for a GPU-less deployment. OLLAMA_ENABLED doesn't need
+# to be set at all -- no "ollama"-type provider is declared, so the router
+# never constructs an OllamaProvider or attempts an Ollama connection.
+roles:
+  planner:
+    requires: [tool_calling, long_context]
+    prefer: [claude_opus]
+  coder:
+    requires: [tool_calling]
+    prefer: [claude_sonnet]
+  reviewer:
+    requires: [tool_calling]
+    prefer: [claude_sonnet]
+  frontend_reviewer:
+    requires: [tool_calling, vision]
+    prefer: [claude_sonnet]
+  memory_curator:
+    requires: []
+    prefer: [claude_haiku]
+
+providers:
+  claude_opus:
+    type: anthropic
+    model: claude-opus-4-8
+    capabilities: [tool_calling, long_context, vision]
+  claude_sonnet:
+    type: anthropic
+    model: claude-sonnet-5
+    capabilities: [tool_calling, long_context, vision]
+  claude_haiku:
+    type: anthropic
+    model: claude-haiku-4-5
+    capabilities: [tool_calling]

@@ -50,15 +50,15 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 ## Phase 2 — Model Router
 
 **Goal:** a tested library that resolves agent role → provider, where swapping local ↔ Claude is a config change, not a code change, and an all-Claude deployment is a first-class, well-tested path — not just a theoretical config edit.
-**Decisions:** ADR-001, ADR-015
+**Decisions:** ADR-001, ADR-015, ADR-016
 
-- [ ] `services/orchestrator/model_router/`: a `Provider` protocol (`complete()`, `supports(capability)`), plus `OllamaProvider` and `AnthropicProvider` implementations
-- [ ] `config/models.yaml` loader with Pydantic schema validation, supporting multiple named provider entries of the same `type` (e.g. `claude_opus`, `claude_sonnet`, `claude_haiku`), each independently referenceable in a role's `prefer` list (ADR-015)
-- [ ] `resolve(role: str) -> Provider`, implementing the `prefer` fallback chain
-- [ ] `local` provider availability is determined once at process startup from the active Compose profile (e.g. an `OLLAMA_ENABLED` env var), not via a per-call network probe/timeout to Ollama (ADR-015)
-- [ ] Ship `config/models.claude-only.yaml`: a documented preset with every role's `prefer` list containing only `claude_*` providers and no `local` entry
-- [ ] Unit tests: resolves to the first available preferred provider; falls back correctly when the preferred one is unreachable (mock the HTTP client); raises a clear, typed error if no configured provider satisfies the role's required capabilities; with the Claude-only preset loaded and `OLLAMA_ENABLED` unset, `resolve()` never constructs or calls `OllamaProvider` for any role
-- [ ] Short doc (README section or `docs/model-router.md`) on adding a new provider or role, and on the Claude-only preset
+- [x] `services/orchestrator/model_router/`: a `Provider` protocol (`complete()`, `supports(capability)`), plus `OllamaProvider` and `AnthropicProvider` implementations
+- [x] `config/models.yaml` loader with Pydantic schema validation, supporting multiple named provider entries of the same `type` (e.g. `claude_opus`, `claude_sonnet`, `claude_haiku`), each independently referenceable in a role's `prefer` list (ADR-015)
+- [x] `resolve(role: str) -> Provider`, implementing the `prefer` fallback chain
+- [x] `local` provider availability is determined once at process startup from the active Compose profile (e.g. an `OLLAMA_ENABLED` env var), not via a per-call network probe/timeout to Ollama (ADR-015)
+- [x] Ship `config/models.claude-only.yaml`: a documented preset with every role's `prefer` list containing only `claude_*` providers and no `local` entry
+- [x] Unit tests: resolves to the first available preferred provider; falls back correctly when the preferred one is unreachable (mock the HTTP client); raises a clear, typed error if no configured provider satisfies the role's required capabilities; with the Claude-only preset loaded and `OLLAMA_ENABLED` unset, `resolve()` never constructs or calls `OllamaProvider` for any role
+- [x] Short doc (README section or `docs/model-router.md`) on adding a new provider or role, and on the Claude-only preset
 
 **Definition of Done:** `pytest services/orchestrator/model_router` is green at the project's configured coverage threshold; setting every role's `prefer` to a `claude_*` provider in `models.yaml` requires zero code changes; loading `config/models.claude-only.yaml` resolves every role to a Claude provider with zero attempted Ollama connections.
 

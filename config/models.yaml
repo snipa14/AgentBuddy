@@ -1,0 +1,38 @@
+# Default model routing config: local-first for cost, Claude API as the
+# fallback/escalation tier. See docs/model-router.md for how to add a new
+# provider or role, and config/models.claude-only.yaml for the GPU-less preset.
+roles:
+  planner:
+    requires: [tool_calling, long_context]
+    prefer: [claude_opus, local]
+  coder:
+    requires: [tool_calling]
+    prefer: [local, claude_sonnet]
+  reviewer:
+    requires: [tool_calling]
+    prefer: [local, claude_sonnet]
+  frontend_reviewer:
+    requires: [tool_calling, vision]
+    prefer: [claude_sonnet] # local models lack reliable vision; documented, not hidden
+  memory_curator:
+    requires: []
+    prefer: [local, claude_haiku]
+
+providers:
+  local:
+    type: ollama
+    base_url: http://ollama:11434
+    model: qwen3-coder:30b-a3b
+    capabilities: [tool_calling]
+  claude_opus:
+    type: anthropic
+    model: claude-opus-4-8
+    capabilities: [tool_calling, long_context, vision]
+  claude_sonnet:
+    type: anthropic
+    model: claude-sonnet-5
+    capabilities: [tool_calling, long_context, vision]
+  claude_haiku:
+    type: anthropic
+    model: claude-haiku-4-5
+    capabilities: [tool_calling]

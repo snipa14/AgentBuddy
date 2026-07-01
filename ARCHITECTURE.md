@@ -184,16 +184,22 @@ providers:
     type: ollama
     base_url: http://ollama:11434
     model: qwen3-coder:30b-a3b
+    capabilities: [tool_calling]
   claude_opus:
     type: anthropic
     model: claude-opus-4-8
+    capabilities: [tool_calling, long_context, vision]
   claude_sonnet:
     type: anthropic
     model: claude-sonnet-5
+    capabilities: [tool_calling, long_context, vision]
   claude_haiku:
     type: anthropic
     model: claude-haiku-4-5
+    capabilities: [tool_calling]
 ```
+
+Each provider declares its own `capabilities:` list explicitly (ADR-016) rather than the router inferring capabilities from `type`. This keeps capability-based routing fully config-driven: if a future Claude tier gains or lacks a capability, that's a `models.yaml` edit, not a code change.
 
 The router resolves `role -> provider` at call time using `prefer` order and falls back to the next provider if the preferred one is unavailable. Availability of `local` is resolved **once at process startup** — from whether the `local-llm` Compose profile is active (e.g. an `OLLAMA_ENABLED` env var set by `start.sh` vs. `start.sh --local-llm`) — not by probing `http://ollama:11434` on every call. This matters because several roles above list `local` first: without a startup-time check, a Claude-only deployment (no `local-llm` profile started) would pay a connection-timeout tax on every single `coder`/`reviewer`/`memory_curator` invocation just because `local` happens to be preferred.
 
@@ -507,6 +513,7 @@ Lightweight ADR-style record of every decision made during planning, so the reas
 | 013 | Coverage threshold and PR mode configurable per project | Not every project needs the same bar; registry (§4.6) carries per-project overrides |
 | 014 | Skills authored as portable `SKILL.md` | Open standard, works across local/Claude API/Claude Code without rewriting |
 | 015 | Claude-only is a first-class model-router deployment mode; Claude providers are declared per-tier (`claude_opus`/`claude_sonnet`/`claude_haiku`), and `local` availability is a startup-time check, not a per-call probe | An all-Claude deployment (no GPU, or an operator who just wants Claude everywhere) must not pay Ollama connection-timeout latency on every call to a `local`-preferring role, and should be able to route different roles to different Claude cost/capability tiers instead of one pinned model for every role |
+| 016 | Provider capabilities (`tool_calling`, `long_context`, `vision`, ...) are declared explicitly per provider entry in `models.yaml` via a `capabilities:` field, not inferred from `type` | Keeps capability-based routing (§4.4) fully config-driven — a provider's real capability profile can change (e.g. a future Claude tier gaining or lacking vision) without a code change; inferring capabilities from `type` would hardcode an assumption that every provider of a given type shares identical capabilities |
 
 ---
 
