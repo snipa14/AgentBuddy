@@ -77,7 +77,7 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 - [x] `services/executor/SECURITY.md`: explicit threat model — what's prevented, what's accepted residual risk
 
 **Definition of Done:** the integration suite proves containment (every escape attempt fails); a `write_file` → host-visible round trip works against a live container.
-**Verification status:** code and both test suites are written; the integration suite has **not yet been run against a live Docker daemon** in this session (no Docker available in the sandbox that built it). Run `pytest -m integration services/executor/tests/integration` on a Docker-enabled machine before treating this phase's Definition of Done as actually met.
+**Verification status:** `pydantic`/`httpx`/`pyyaml`/`pytest`/`docker` are installed as of this session — `services/executor`'s unit suite is green for real (34 tests, 84% coverage; 95% across the whole repo). The real-Docker integration suite (`pytest -m integration services/executor/tests/integration`) is written and skips cleanly here (no Docker daemon in this sandbox) but has **not yet run against a live daemon** — that's the one thing still needed before this phase's Definition of Done is actually met. Run it on a Docker-enabled machine and report back.
 
 ---
 
