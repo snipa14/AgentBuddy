@@ -31,6 +31,10 @@ services:
     command: ["sleep", "infinity"]
     environment:
       DOCKER_HOST: tcp://docker-socket-proxy:2375
+      # Absolute *host* path of ./projects -- see services/executor/SECURITY.md
+      # ("The Docker-outside-of-Docker (DooD) detail") for why this can't be
+      # derived from the container's own filesystem.
+      PROJECTS_HOST_PATH: ${PROJECTS_HOST_PATH:?set PROJECTS_HOST_PATH to the absolute host path of ./projects, see .env.example}
     depends_on:
       - docker-socket-proxy
     networks:
@@ -75,6 +79,15 @@ services:
 
 networks:
   foundry_internal:
+    driver: bridge
+  # Not attached to any service below -- ephemeral workspace containers are
+  # spawned dynamically by the Executor (ARCHITECTURE.md §6/§7), not declared
+  # here. This network exists so `docker compose up` provisions it ahead of
+  # time; docker-socket-proxy's NETWORKS=0 means the Executor itself can
+  # never create or modify a network at runtime, only reference this one by
+  # name. Isolated from foundry_internal: a workspace container can't reach
+  # the proxy, the Orchestrator, or the Telegram Gateway.
+  foundry_workspace:
     driver: bridge
 
 volumes:

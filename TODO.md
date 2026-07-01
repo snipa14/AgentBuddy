@@ -69,14 +69,15 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 **Goal:** a narrow, tested tool API, and proof the security boundary actually holds.
 **Decisions:** ADR-005
 
-- [ ] `images/workspace-python/Dockerfile`: non-root user, Python 3.12, common build deps, no unnecessary setuid binaries
-- [ ] `services/executor/`: implements `run_command`, `read_file`, `write_file`, `list_files`, `run_tests` against the Docker SDK for Python — talking only to `docker-socket-proxy`'s HTTP endpoint, never the raw socket
-- [ ] Per-call enforcement: project-scoped bind mount only, `cap_drop=["ALL"]`, `security_opt=["no-new-privileges"]`, explicit `mem_limit`/`nano_cpus`, isolated network with an explicit egress allowlist
-- [ ] Lifecycle: create → exec → capture stdout/stderr/exit_code → remove, wrapped in try/finally so a timeout or crash never leaves an orphaned container
-- [ ] Integration test (real Docker): spawn a workspace container, `write_file` into it, confirm the change lands in the bind-mounted host directory, confirm a command inside the container cannot read any path outside the mount, confirm an attempt to reach `docker.sock` directly from inside the container fails
-- [ ] `services/executor/SECURITY.md`: explicit threat model — what's prevented, what's accepted residual risk
+- [x] `images/workspace-python/Dockerfile`: non-root user, Python 3.12, common build deps, no unnecessary setuid binaries
+- [x] `services/executor/`: implements `run_command`, `read_file`, `write_file`, `list_files`, `run_tests` against the Docker SDK for Python — talking only to `docker-socket-proxy`'s HTTP endpoint, never the raw socket
+- [x] Per-call enforcement: project-scoped bind mount only, `cap_drop=["ALL"]`, `security_opt=["no-new-privileges"]`, explicit `mem_limit`/`nano_cpus`, isolated network (egress allowlist itself deferred — see SECURITY.md's accepted residual risk)
+- [x] Lifecycle: create → exec → capture stdout/stderr/exit_code → remove, wrapped in try/finally so a timeout or crash never leaves an orphaned container
+- [x] Integration test (real Docker): spawn a workspace container, `write_file` into it, confirm the change lands in the bind-mounted host directory, confirm a command inside the container cannot read any path outside the mount, confirm an attempt to reach `docker.sock` directly from inside the container fails
+- [x] `services/executor/SECURITY.md`: explicit threat model — what's prevented, what's accepted residual risk
 
 **Definition of Done:** the integration suite proves containment (every escape attempt fails); a `write_file` → host-visible round trip works against a live container.
+**Verification status:** code and both test suites are written; the integration suite has **not yet been run against a live Docker daemon** in this session (no Docker available in the sandbox that built it). Run `pytest -m integration services/executor/tests/integration` on a Docker-enabled machine before treating this phase's Definition of Done as actually met.
 
 ---
 

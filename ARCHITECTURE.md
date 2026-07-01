@@ -157,6 +157,8 @@ Each task gets a fresh **workspace container**:
 - CPU/memory limits set per project (sane defaults, overridable in `projects.yaml`).
 - Torn down after the task completes; nothing persists in the container itself — anything that should persist goes through `write_file` into the bind-mounted project directory.
 
+Because bind-mount sources are resolved by the Docker daemon against the *host* filesystem regardless of which container asked for the mount, the Executor (which does not have `projects/` mounted into its own container — only the Orchestrator does) needs the host's absolute path to `projects/` to construct correct mounts. This is `PROJECTS_HOST_PATH`, an operator-set environment variable read once at Executor startup — see `services/executor/SECURITY.md` for the full Docker-outside-of-Docker explanation.
+
 ### 4.4 Model Router
 
 A library (not a network service — no reason to pay a network hop on a single-host system) imported by every agent node. Configuration lives in `config/models.yaml`. Providers are named *instances*, not provider *types* — a single `type: anthropic` provider can be declared multiple times under different names to expose distinct Claude model tiers (e.g. Opus for planning/critique, Sonnet for coding, Haiku for cheap curation), so per-role cost/capability tuning doesn't force every role onto the same pinned model string:
