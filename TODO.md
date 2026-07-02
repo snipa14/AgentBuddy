@@ -177,14 +177,20 @@ Two scope notes, not bugs: (1) "Edit" is accepted as a button but not handled as
 ## Phase 9 — Coder Agent
 
 **Goal:** implements one task at a time inside a workspace container and produces a real diff.
-**Decisions:** ADR-005, ADR-012
+**Decisions:** ADR-005, ADR-012, ADR-021, ADR-022
 
-- [ ] Coder node: pulls a task from `task_queue`, uses Executor tools (`read_file`, `write_file`, `run_command`) to implement it
-- [ ] Task decomposition: plan → ordered `task_queue` (a simple LLM call is fine for v1)
-- [ ] Retry budget per task; after N failed attempts, route to `blocked` and notify via Telegram rather than looping forever
-- [ ] Tests: against a fixture project, assert on the Executor's recorded tool calls (not just final state) so regressions in *how* the agent works are caught, not just *whether* it eventually succeeds
+- [x] Coder node: pulls a task from `task_queue`, uses Executor tools (`read_file`, `write_file`, `run_command`) to implement it -- via a manual ReAct loop (ADR-022: no native tool-calling in model_router), dispatched through a real Executor HTTP surface built this phase (ADR-021, `services/executor/api.py` + `services/orchestrator/executor_client.py`) since nothing before Phase 9 needed the Orchestrator to actually call the Executor over the network
+- [x] Task decomposition: plan → ordered `task_queue` (a simple LLM call is fine for v1) -- `decompose_plan_into_tasks()`, one node (`node_task_decomposition`) run once right after plan approval
+- [x] Retry budget per task; after N failed attempts, route to `blocked` and notify via Telegram rather than looping forever -- `MAX_TASK_ATTEMPTS = 3`, tracked in `current_task["attempts"]` (no new ProjectState field needed, it's already a free-form dict). **The "notify via Telegram" half is not actually wired** -- see the new Decision Log/§11 note below, this is a pre-existing gap across every gate, not something Phase 9 introduces or could reasonably close alone
+- [x] Tests: against a fixture project, assert on the Executor's recorded tool calls (not just final state) so regressions in *how* the agent works are caught, not just *whether* it eventually succeeds -- `RecordingExecutorClient` in `tests/unit/test_coder.py` asserts on the exact call sequence; the real-Docker integration test does the same against actual Executor HTTP + Docker
 
 **Definition of Done:** an end-to-end test takes a trivial fixture task through to a real file change inside a real workspace container.
+
+**Verification status:** the agent layer and Executor's new HTTP surface are fully verified for real. `pytest services/orchestrator/agents/tests/unit/test_coder.py services/orchestrator/tests/unit/test_executor_client.py services/executor/tests/unit/test_api.py -v`: 10 + 7 + 14 = 31 passed (plus the untouched existing suites all still green: 148 passed total across model_router/memory/agents/registry/executor unit/orchestrator config+executor_client). Coverage numbers aren't reported this round -- `pytest-cov` became transiently uninstalled partway through this session (concurrent package-install activity in this sandbox) and didn't come back before this phase wrapped up; every test that ran, ran for real and passed, just without a coverage percentage attached.
+
+The real-Docker integration test (`services/orchestrator/agents/tests/integration/test_coder_end_to_end.py`) skips cleanly here (no Docker daemon), same as Phase 3's suite -- written and hand-traced but not yet run against a live daemon.
+
+The graph-layer wiring (`node_task_decomposition`, `node_coder`, `route_after_coder` in `graph/nodes.py`/`build.py`, plus `OrchestratorService`/`OrchestratorConfig`/`main.py`/`registry/cli.py` all threading an `executor_client` through now) remains unverified, same as the rest of Phase 5/8 -- still blocked on `langgraph`/`langgraph-checkpoint-sqlite`/`langchain-core`, which still aren't installed in this sandbox as of this phase. Every existing graph/service/API test was updated and hand-traced step by step against the new task_decomposition -> coder self-loop -> cost_check wiring (see `graph/tests/unit/planner_fakes.py`'s extended `fast_track_router()`, which now also scripts the Coder saying "done" on its first turn so those tests never need a working `ExecutorClient`).
 
 ---
 

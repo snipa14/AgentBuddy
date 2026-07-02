@@ -16,6 +16,7 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
+from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.build import build_project_graph
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.model_router.router import ModelRouter
@@ -28,16 +29,23 @@ class UnknownProjectError(Exception):
 class OrchestratorService:
     """Owns the compiled project subgraph and maps requests onto project threads."""
 
-    def __init__(self, checkpointer: BaseCheckpointSaver, router: ModelRouter) -> None:
+    def __init__(
+        self,
+        checkpointer: BaseCheckpointSaver,
+        router: ModelRouter,
+        executor_client: ExecutorClient,
+    ) -> None:
         """Builds the service.
 
         Args:
             checkpointer: The checkpoint saver backing every project thread.
-            router: The ModelRouter every LLM-backed node (Planner, and
-                later Coder/Reviewer/Tester) resolves its role from.
+            router: The ModelRouter every LLM-backed node (Planner, Coder,
+                and later Reviewer/Tester) resolves its role from.
+            executor_client: The Executor client the Coder dispatches
+                read_file/write_file/run_command actions through.
         """
         self._checkpointer = checkpointer
-        self._graph = build_project_graph(checkpointer, router)
+        self._graph = build_project_graph(checkpointer, router, executor_client)
 
     def handle_webhook(self, project_id: str | None, text: str) -> dict[str, Any]:
         """Starts a new project thread, or echoes status for an existing one.

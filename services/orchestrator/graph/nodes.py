@@ -1,9 +1,10 @@
 """Nodes for the per-project subgraph (ARCHITECTURE.md §4.7, §6.1-6.2).
 
-Coder/Reviewer/Tester agents (later phases) still replace the
-`node_implementing` stub; the Planner (Phase 8) already replaces what used
-to be a single stub "planning" node with a real interview -> draft ->
-critique -> approval flow.
+Reviewer/Tester agents (later phases) still replace the `node_testing`
+stub; the Planner (Phase 8) and Coder (Phase 9) already replace what used
+to be single stub "planning"/"implementing" nodes with real interview ->
+draft -> critique -> approval and task-decomposition -> implement -> retry
+flows.
 
 Every human-in-the-loop gate is split into two nodes -- a "check"/producer
 node that decides what to show the human and commits the `phase`/
@@ -28,11 +29,17 @@ sends control back to `node_planner_ask` for the next round -- each round
 is its own separately-checkpointed node execution, so no LLM call is ever
 replayed.
 
-LLM calls happen inside `services.orchestrator.agents.planner`, which is
-plain `async def` and independently testable without LangGraph. These node
-functions stay synchronous (matching every other node in this module) and
-bridge to that async layer with `asyncio.run()`, rather than making the
-whole graph async just for the nodes that need an LLM.
+`node_coder` is different: it never calls `interrupt()` at all (the Coder
+is fully autonomous within its own retry budget -- see MAX_TASK_ATTEMPTS),
+so it's a single self-looping node with no "wait" counterpart, looping back
+to itself via `route_after_coder` for either the next task or a retry of
+the current one.
+
+LLM calls happen inside `services.orchestrator.agents.planner`/`coder`,
+which are plain `async def` and independently testable without LangGraph.
+These node functions stay synchronous (matching every other node in this
+module) and bridge to that async layer with `asyncio.run()`, rather than
+making the whole graph async just for the nodes that need an LLM (ADR-019).
 """
 
 import asyncio
@@ -43,6 +50,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END
 from langgraph.types import interrupt
 
+from services.orchestrator.agents.coder import decompose_plan_into_tasks, run_coder_task
 from services.orchestrator.agents.planner import (
     DraftPlan,
     apply_critique,
@@ -50,12 +58,14 @@ from services.orchestrator.agents.planner import (
     critique_plan,
     draft_plan,
 )
+from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.state import ProjectState
 from services.orchestrator.model_router.router import ModelRouter
 
 logger = logging.getLogger(__name__)
 
 COST_THRESHOLD_USD_STUB = 50.0
+MAX_TASK_ATTEMPTS = 3
 
 
 def node_intake(state: ProjectState) -> dict[str, Any]:
@@ -157,16 +167,67 @@ def node_plan_wait(state: ProjectState) -> dict[str, Any]:
 
 
 def route_after_plan_wait(state: ProjectState) -> str:
-    """Routes onward to implementing, or halts the run if the plan was rejected."""
+    """Routes onward to task decomposition, or halts the run if the plan was rejected."""
     if state["phase"] == "blocked":
         return END
-    return "implementing"
+    return "task_decomposition"
 
 
-def node_implementing(state: ProjectState) -> dict[str, Any]:
-    """Logs entry into implementing and advances to testing."""
-    logger.info("project %s: implementing", state["project_id"])
-    return {"phase": "testing"}
+def node_task_decomposition(state: ProjectState, router: ModelRouter) -> dict[str, Any]:
+    """Breaks the approved plan into task_queue, once, right after plan approval."""
+    tasks = asyncio.run(decompose_plan_into_tasks(router, state["plan"]))
+    logger.info("project %s: decomposed into %d task(s)", state["project_id"], len(tasks))
+    return {"task_queue": [task.model_dump() for task in tasks], "phase": "implementing"}
+
+
+def node_coder(
+    state: ProjectState, router: ModelRouter, executor_client: ExecutorClient
+) -> dict[str, Any]:
+    """Implements one task-or-retry-attempt per execution.
+
+    No `interrupt()` call happens anywhere in this node (the Coder is fully
+    autonomous within its retry budget), so -- unlike the Planner/cost/merge
+    gates -- there's no LangGraph replay concern here: this node can safely
+    make LLM and Executor calls directly. Retry count is tracked in
+    `current_task["attempts"]` rather than a new ProjectState field, since
+    `current_task` is already a free-form dict.
+    """
+    task_queue = state["task_queue"]
+    if not task_queue:
+        return {"phase": "testing"}
+
+    current_task = state["current_task"] or {**task_queue[0], "attempts": 0}
+    result = asyncio.run(
+        run_coder_task(router, executor_client, state["project_id"], current_task["description"])
+    )
+    if result.success:
+        remaining = task_queue[1:]
+        logger.info(
+            "project %s: task succeeded, %d remaining", state["project_id"], len(remaining)
+        )
+        return {
+            "task_queue": remaining,
+            "current_task": None,
+            "phase": "implementing" if remaining else "testing",
+        }
+
+    attempts = current_task.get("attempts", 0) + 1
+    if attempts >= MAX_TASK_ATTEMPTS:
+        logger.warning(
+            "project %s: task exhausted %d attempts, blocking", state["project_id"], attempts
+        )
+        return {"phase": "blocked", "current_task": {**current_task, "attempts": attempts}}
+    logger.info("project %s: task attempt %d failed, retrying", state["project_id"], attempts)
+    return {"current_task": {**current_task, "attempts": attempts}, "phase": "implementing"}
+
+
+def route_after_coder(state: ProjectState) -> str:
+    """Loops back for the next task/retry, halts if blocked, or moves on to testing."""
+    if state["phase"] == "blocked":
+        return END
+    if state["phase"] == "testing":
+        return "cost_check"
+    return "coder"
 
 
 def node_cost_check(state: ProjectState) -> dict[str, Any]:

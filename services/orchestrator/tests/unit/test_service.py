@@ -10,7 +10,8 @@ from services.orchestrator.service import OrchestratorService, UnknownProjectErr
 @pytest.fixture
 def service(tmp_path):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    return OrchestratorService(checkpointer, fast_track_router(rounds=2))
+    unused_executor_client = object()
+    return OrchestratorService(checkpointer, fast_track_router(rounds=2), unused_executor_client)
 
 
 def test_handle_webhook_without_project_id_starts_a_new_project(service):

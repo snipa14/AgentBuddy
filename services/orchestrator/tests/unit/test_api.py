@@ -12,7 +12,10 @@ from services.orchestrator.service import OrchestratorService
 @pytest.fixture
 def client(tmp_path):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    service = OrchestratorService(checkpointer, fast_track_router(rounds=2))
+    unused_executor_client = object()
+    service = OrchestratorService(
+        checkpointer, fast_track_router(rounds=2), unused_executor_client
+    )
     return TestClient(build_app(service))
 
 

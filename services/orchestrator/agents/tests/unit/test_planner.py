@@ -1,9 +1,8 @@
 """Unit tests for the Planner / Intake agent.
 
 Per .claude/rules/testing.md, LLM-backed agent tests mock the provider at
-the model_router.resolve() boundary -- a _ScriptedProvider returns one
-canned response per call, in order, standing in for a real multi-turn
-conversation with a model.
+the model_router.resolve() boundary -- see router_fakes.py's FakeRouter/
+ScriptedProvider, shared with test_coder.py.
 """
 
 import asyncio
@@ -18,7 +17,7 @@ from services.orchestrator.agents.planner import (
     draft_plan,
     run_intake_to_final_plan,
 )
-from services.orchestrator.model_router.schemas import CompletionResult
+from services.orchestrator.agents.tests.unit.router_fakes import FakeRouter
 
 INTERVIEW_QUESTIONS_RESPONSE = (
     "## Status\nquestions\n\n## Questions\n- What language?\n- Who are the users?\n"
@@ -64,32 +63,8 @@ CRITIQUE_RESPONSE_NO_FINDINGS = """## Findings
 """
 
 
-class _ScriptedProvider:
-    """Returns one canned response per call, in order."""
-
-    name = "fake"
-
-    def __init__(self, responses: list[str]):
-        self._responses = list(responses)
-
-    def supports(self, capability):
-        return True
-
-    async def complete(self, request):
-        content = self._responses.pop(0)
-        return CompletionResult(content=content, model="fake-model", provider_name="fake")
-
-
-class _FakeRouter:
-    def __init__(self, responses: list[str]):
-        self._provider = _ScriptedProvider(responses)
-
-    def resolve(self, role):
-        return self._provider
-
-
 def test_ask_clarifying_questions_parses_a_batch_of_questions():
-    router = _FakeRouter([INTERVIEW_QUESTIONS_RESPONSE])
+    router = FakeRouter([INTERVIEW_QUESTIONS_RESPONSE])
 
     turn = asyncio.run(ask_clarifying_questions(router, "build an on-call tool", []))
 
@@ -98,7 +73,7 @@ def test_ask_clarifying_questions_parses_a_batch_of_questions():
 
 
 def test_ask_clarifying_questions_parses_ready_signal():
-    router = _FakeRouter([INTERVIEW_READY_RESPONSE])
+    router = FakeRouter([INTERVIEW_READY_RESPONSE])
 
     turn = asyncio.run(ask_clarifying_questions(router, "build an on-call tool", ["prior Q&A"]))
 
@@ -107,14 +82,14 @@ def test_ask_clarifying_questions_parses_ready_signal():
 
 
 def test_ask_clarifying_questions_raises_on_malformed_status():
-    router = _FakeRouter(["## Status\nmaybe\n"])
+    router = FakeRouter(["## Status\nmaybe\n"])
 
     with pytest.raises(ValueError, match="malformed interview status"):
         asyncio.run(ask_clarifying_questions(router, "x", []))
 
 
 def test_draft_plan_parses_all_five_sections():
-    router = _FakeRouter([DRAFT_RESPONSE])
+    router = FakeRouter([DRAFT_RESPONSE])
 
     plan = asyncio.run(draft_plan(router, "build an on-call tool", ["some", "history"]))
 
@@ -126,14 +101,14 @@ def test_draft_plan_parses_all_five_sections():
 
 
 def test_draft_plan_raises_when_summary_section_missing():
-    router = _FakeRouter(["## Goals\n- a\n"])
+    router = FakeRouter(["## Goals\n- a\n"])
 
     with pytest.raises(ValueError, match="missing Summary section"):
         asyncio.run(draft_plan(router, "x", []))
 
 
 def test_critique_plan_parses_findings_and_revisions():
-    router = _FakeRouter([CRITIQUE_RESPONSE_WITH_FINDINGS])
+    router = FakeRouter([CRITIQUE_RESPONSE_WITH_FINDINGS])
     plan = DraftPlan(summary="s", risks=["existing risk"], assumptions=["existing assumption"])
 
     critique = asyncio.run(critique_plan(router, plan))
@@ -150,7 +125,7 @@ def test_critique_plan_parses_findings_and_revisions():
 
 
 def test_critique_plan_raises_on_malformed_finding_line():
-    router = _FakeRouter(["## Findings\n- not the right format\n"])
+    router = FakeRouter(["## Findings\n- not the right format\n"])
     plan = DraftPlan(summary="s")
 
     with pytest.raises(ValueError, match="malformed critique finding line"):
@@ -163,7 +138,7 @@ def test_apply_critique_merges_new_risks_and_assumptions_into_the_plan():
         risks=["Migration from the existing spreadsheet could lose history"],
         assumptions=["Ops team has fewer than 20 members"],
     )
-    router = _FakeRouter([CRITIQUE_RESPONSE_WITH_FINDINGS])
+    router = FakeRouter([CRITIQUE_RESPONSE_WITH_FINDINGS])
     critique = asyncio.run(critique_plan(router, draft))
 
     final_plan = apply_critique(draft, critique)
@@ -180,7 +155,7 @@ def test_apply_critique_merges_new_risks_and_assumptions_into_the_plan():
 
 def test_apply_critique_is_a_no_op_when_critique_finds_nothing():
     draft = DraftPlan(summary="A small internal tool.", risks=["r1"], assumptions=["a1"])
-    router = _FakeRouter([CRITIQUE_RESPONSE_NO_FINDINGS])
+    router = FakeRouter([CRITIQUE_RESPONSE_NO_FINDINGS])
     critique = asyncio.run(critique_plan(router, draft))
 
     final_plan = apply_critique(draft, critique)
@@ -204,7 +179,7 @@ def test_run_intake_to_final_plan_reaches_a_complete_plan_via_scripted_answers()
     answers drives the interview to completion, producing a plan whose risks
     and assumptions were actually changed by the critique pass -- proving
     the critique isn't a no-op end to end."""
-    router = _FakeRouter(
+    router = FakeRouter(
         [
             INTERVIEW_QUESTIONS_RESPONSE,
             INTERVIEW_READY_RESPONSE,
@@ -232,7 +207,7 @@ def test_run_intake_to_final_plan_reaches_a_complete_plan_via_scripted_answers()
 
 
 def test_run_intake_to_final_plan_stops_at_max_rounds():
-    router = _FakeRouter(
+    router = FakeRouter(
         [
             INTERVIEW_QUESTIONS_RESPONSE,
             INTERVIEW_QUESTIONS_RESPONSE,

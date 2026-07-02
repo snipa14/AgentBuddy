@@ -20,6 +20,7 @@ from typing import Callable, Literal
 
 from pydantic import BaseModel
 
+from services.orchestrator.agents.parsing import bullet_lines, nonempty_lines, split_sections
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.model_router.schemas import CompletionMessage, CompletionRequest
 
@@ -275,11 +276,11 @@ def _parse_interview_turn(content: str) -> InterviewTurn:
     Raises:
         ValueError: If the status line is missing or isn't "questions"/"ready".
     """
-    sections = _split_sections(content)
+    sections = split_sections(content)
     status = sections.get("Status", "").strip()
     if status not in ("questions", "ready"):
         raise ValueError(f"malformed interview status: {content!r}")
-    questions = _bullet_lines(sections.get("Questions", "")) if status == "questions" else []
+    questions = bullet_lines(sections.get("Questions", "")) if status == "questions" else []
     return InterviewTurn(status=status, questions=questions)
 
 
@@ -289,16 +290,16 @@ def _parse_draft_plan(content: str) -> DraftPlan:
     Raises:
         ValueError: If the '## Summary' section is missing.
     """
-    sections = _split_sections(content)
+    sections = split_sections(content)
     summary = sections.get("Summary", "").strip()
     if not summary:
         raise ValueError(f"malformed draft plan, missing Summary section: {content!r}")
     return DraftPlan(
         summary=summary,
-        goals=_bullet_lines(sections.get("Goals", "")),
-        milestones=_bullet_lines(sections.get("Milestones", "")),
-        risks=_bullet_lines(sections.get("Risks", "")),
-        assumptions=_bullet_lines(sections.get("Assumptions", "")),
+        goals=bullet_lines(sections.get("Goals", "")),
+        milestones=bullet_lines(sections.get("Milestones", "")),
+        risks=bullet_lines(sections.get("Risks", "")),
+        assumptions=bullet_lines(sections.get("Assumptions", "")),
     )
 
 
@@ -308,14 +309,14 @@ def _parse_critique_result(content: str) -> CritiqueResult:
     Raises:
         ValueError: If a findings line doesn't match the expected pipe-delimited format.
     """
-    sections = _split_sections(content)
+    sections = split_sections(content)
     findings = [
-        _parse_finding_line(line) for line in _nonempty_lines(sections.get("Findings", ""))
+        _parse_finding_line(line) for line in nonempty_lines(sections.get("Findings", ""))
     ]
     return CritiqueResult(
         findings=findings,
-        additional_risks=_bullet_lines(sections.get("Additional Risks", "")),
-        additional_assumptions=_bullet_lines(sections.get("Additional Assumptions", "")),
+        additional_risks=bullet_lines(sections.get("Additional Risks", "")),
+        additional_assumptions=bullet_lines(sections.get("Additional Assumptions", "")),
     )
 
 
@@ -337,37 +338,3 @@ def _parse_finding_line(line: str) -> CritiqueFinding:
         severity=parts[1].removeprefix("severity:").strip(),
         description=parts[2].strip(),
     )
-
-
-def _split_sections(content: str) -> dict[str, str]:
-    """Splits a '## Heading' delimited response into {heading: body} pairs."""
-    sections: dict[str, str] = {}
-    current_heading: str | None = None
-    current_lines: list[str] = []
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            if current_heading is not None:
-                sections[current_heading] = "\n".join(current_lines)
-            current_heading = stripped.removeprefix("## ").strip()
-            current_lines = []
-        elif current_heading is not None:
-            current_lines.append(line)
-    if current_heading is not None:
-        sections[current_heading] = "\n".join(current_lines)
-    return sections
-
-
-def _bullet_lines(section_body: str) -> list[str]:
-    """Extracts '- ' bullet list items from a section's raw text body."""
-    items = []
-    for line in section_body.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("- "):
-            items.append(stripped.removeprefix("- ").strip())
-    return items
-
-
-def _nonempty_lines(section_body: str) -> list[str]:
-    """Extracts non-empty, non-bulleted lines from a section's raw text body."""
-    return [line.strip() for line in section_body.splitlines() if line.strip()]

@@ -3,8 +3,8 @@
 A ScriptedProvider/FakeRouter pair mocking the LLM at the
 model_router.resolve() boundary, per .claude/rules/testing.md -- these
 tests exercise the graph's structure and interrupt/resume mechanics, not
-Planner prompt quality (see services/orchestrator/agents/tests/unit/
-test_planner.py for that).
+Planner/Coder prompt quality (see services/orchestrator/agents/tests/unit/
+for that).
 """
 
 from services.orchestrator.model_router.schemas import CompletionResult
@@ -17,6 +17,10 @@ EMPTY_DRAFT_RESPONSE = (
 )
 
 NO_FINDINGS_CRITIQUE_RESPONSE = "## Findings\n\n## Additional Risks\n\n## Additional Assumptions\n"
+
+ONE_TASK_RESPONSE = "## Tasks\nDo the trivial thing\n"
+
+CODER_DONE_RESPONSE = "## Action\ndone\n"
 
 
 class ScriptedProvider:
@@ -36,7 +40,7 @@ class ScriptedProvider:
 
 
 class FakeRouter:
-    """Always resolves the "planner" role to the same ScriptedProvider."""
+    """Always resolves any role to the same ScriptedProvider."""
 
     def __init__(self, responses: list[str]):
         self._provider = ScriptedProvider(responses)
@@ -46,13 +50,22 @@ class FakeRouter:
 
 
 def fast_track_router(rounds: int = 1) -> FakeRouter:
-    """A router that sails the Planner straight through: ready immediately,
-    an empty-but-valid draft, and a critique with no findings.
+    """A router that sails a project straight through Planner and Coder:
+    ready immediately, an empty-but-valid draft, a critique with no
+    findings, exactly one decomposed task, and that task immediately
+    reporting "done" -- so the Coder's ExecutorClient is never actually
+    called (safe to pass a placeholder for tests that don't care about it).
 
     Args:
-        rounds: How many full Planner passes (one per project started
+        rounds: How many full Planner+Coder passes (one per project started
             through this router) to script -- each pass consumes exactly
-            the three responses above, in order.
+            the five responses above, in order.
     """
-    responses = [READY_RESPONSE, EMPTY_DRAFT_RESPONSE, NO_FINDINGS_CRITIQUE_RESPONSE] * rounds
+    responses = [
+        READY_RESPONSE,
+        EMPTY_DRAFT_RESPONSE,
+        NO_FINDINGS_CRITIQUE_RESPONSE,
+        ONE_TASK_RESPONSE,
+        CODER_DONE_RESPONSE,
+    ] * rounds
     return FakeRouter(responses)

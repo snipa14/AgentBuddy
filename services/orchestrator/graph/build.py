@@ -6,11 +6,12 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.nodes import (
+    node_coder,
     node_cost_check,
     node_cost_wait,
     node_done,
-    node_implementing,
     node_intake,
     node_merge_wait,
     node_plan_wait,
@@ -18,7 +19,9 @@ from services.orchestrator.graph.nodes import (
     node_planner_critique,
     node_planner_draft,
     node_planner_wait,
+    node_task_decomposition,
     node_testing,
+    route_after_coder,
     route_after_cost_check,
     route_after_cost_wait,
     route_after_merge_wait,
@@ -30,21 +33,25 @@ from services.orchestrator.model_router.router import ModelRouter
 
 
 def build_project_graph(
-    checkpointer: BaseCheckpointSaver, router: ModelRouter
+    checkpointer: BaseCheckpointSaver, router: ModelRouter, executor_client: ExecutorClient
 ) -> CompiledStateGraph:
     """Builds and compiles the per-project subgraph.
 
     Node chain: intake -> planner_ask <-> [planner_wait self-loop] ->
-    planner_draft -> planner_critique -> plan_wait -> implementing ->
-    cost_check -> [cost_wait] -> testing -> merge_wait -> done, with every
-    human-in-the-loop gate implemented as a real `interrupt()` call
-    (ADR-009 for cost/merge; the Planner's interview and final approval gate
-    are Phase 8).
+    planner_draft -> planner_critique -> plan_wait -> task_decomposition ->
+    coder [self-loop: next task or retry] -> cost_check -> [cost_wait] ->
+    testing -> merge_wait -> done, with every human-in-the-loop gate
+    implemented as a real `interrupt()` call (ADR-009 for cost/merge; the
+    Planner's interview and final approval gate are Phase 8; the Coder's
+    retry budget, Phase 9, never interrupts at all -- see graph/nodes.py's
+    module docstring).
 
     Args:
         checkpointer: The checkpoint saver backing thread persistence.
-        router: The ModelRouter every LLM-backed node (currently only the
-            Planner) resolves its role from.
+        router: The ModelRouter every LLM-backed node (Planner, Coder)
+            resolves its role from.
+        executor_client: The Executor client the Coder dispatches
+            read_file/write_file/run_command actions through.
 
     Returns:
         A compiled graph ready for `.invoke()`/`.get_state()` calls keyed by
@@ -57,7 +64,12 @@ def build_project_graph(
     builder.add_node("planner_draft", functools.partial(node_planner_draft, router=router))
     builder.add_node("planner_critique", functools.partial(node_planner_critique, router=router))
     builder.add_node("plan_wait", node_plan_wait)
-    builder.add_node("implementing", node_implementing)
+    builder.add_node(
+        "task_decomposition", functools.partial(node_task_decomposition, router=router)
+    )
+    builder.add_node(
+        "coder", functools.partial(node_coder, router=router, executor_client=executor_client)
+    )
     builder.add_node("cost_check", node_cost_check)
     builder.add_node("cost_wait", node_cost_wait)
     builder.add_node("testing", node_testing)
@@ -75,9 +87,12 @@ def build_project_graph(
     builder.add_edge("planner_draft", "planner_critique")
     builder.add_edge("planner_critique", "plan_wait")
     builder.add_conditional_edges(
-        "plan_wait", route_after_plan_wait, {"implementing": "implementing", END: END}
+        "plan_wait", route_after_plan_wait, {"task_decomposition": "task_decomposition", END: END}
     )
-    builder.add_edge("implementing", "cost_check")
+    builder.add_edge("task_decomposition", "coder")
+    builder.add_conditional_edges(
+        "coder", route_after_coder, {"coder": "coder", "cost_check": "cost_check", END: END}
+    )
     builder.add_conditional_edges(
         "cost_check", route_after_cost_check, {"cost_wait": "cost_wait", "testing": "testing"}
     )
