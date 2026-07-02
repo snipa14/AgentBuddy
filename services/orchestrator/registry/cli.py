@@ -49,19 +49,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _start_intake(project_id: str) -> None:
-    """Starts the intake graph for a newly registered project.
+def _start_intake(project_id: str, description: str) -> None:
+    """Starts the Planner's intake interview for a newly registered project.
 
     Args:
         project_id: The project whose intake thread should be started.
+        description: Seeds the Planner's intake interview (ARCHITECTURE.md
+            §6.1) -- `new-project` has no free-text request the way a
+            Telegram `/new` message would, so this is built from the
+            registration's own --name/--stack arguments.
     """
+    import httpx
+
     from services.orchestrator.config import OrchestratorConfig
     from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
+    from services.orchestrator.model_router.config import load_models_config
+    from services.orchestrator.model_router.router import ModelRouter
     from services.orchestrator.service import OrchestratorService
 
+    models_config = load_models_config(Path("config/models.yaml"))
+    anthropic_api_key = Path("/run/secrets/claude_api_key").read_text().strip()
+    router = ModelRouter(models_config, httpx.AsyncClient(), anthropic_api_key=anthropic_api_key)
     config = OrchestratorConfig.from_env()
     checkpointer = build_sqlite_checkpointer(config.memory_db_path)
-    OrchestratorService(checkpointer).handle_webhook(project_id, "")
+    OrchestratorService(checkpointer, router).handle_webhook(project_id, description)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,6 +86,11 @@ def main(argv: list[str] | None = None) -> int:
         0 on success, 1 if registration failed.
     """
     args = build_parser().parse_args(argv)
+    description = f"{args.name}: a {args.stack} project"
+
+    def on_registered(project_id: str) -> None:
+        _start_intake(project_id, description)
+
     try:
         if args.from_path is not None:
             register_brownfield_from_local_path(
@@ -87,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.coverage_threshold,
                 args.pr_mode,
                 args.cost_ceiling_usd_weekly,
-                on_registered=_start_intake,
+                on_registered=on_registered,
             )
         elif args.git_remote is not None:
             register_brownfield_from_git(
@@ -100,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.coverage_threshold,
                 args.pr_mode,
                 args.cost_ceiling_usd_weekly,
-                on_registered=_start_intake,
+                on_registered=on_registered,
             )
         else:
             register_greenfield(
@@ -112,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.coverage_threshold,
                 args.pr_mode,
                 args.cost_ceiling_usd_weekly,
-                on_registered=_start_intake,
+                on_registered=on_registered,
             )
     except RegistryError as exc:
         print(f"new-project: {exc}", file=sys.stderr)

@@ -377,11 +377,18 @@ sequenceDiagram
     end
     Note over O: cost_usd_session crosses configured threshold
     O->>O: interrupt(payload=cost_alert)
-    O->>TG: "Crossed $50/week - continue? [Yes] [Pause]"
+    O->>TG: "Crossed $50/week - continue?" [Approve] [Reject] [Edit]
     TG->>U: render approval
-    U->>TG: Yes
-    TG->>O: Command(resume="continue")
+    U->>TG: Approve
+    TG->>O: Command(resume="approve")
 ```
+
+Every interrupt gate in the per-project subgraph -- cost, merge-to-main, and
+the Planner's plan-approval gate (§6.1) -- shares the same "approve"/
+"reject"/"edit" decision vocabulary and the same generic Telegram renderer
+(one Approve/Reject/Edit inline keyboard), rather than each gate defining
+its own button labels/values. "Edit" isn't handled as a distinct revision
+path yet in any gate; today it's treated the same as "reject".
 
 ### 6.3 Merge-to-Main Gate
 
@@ -518,6 +525,8 @@ Lightweight ADR-style record of every decision made during planning, so the reas
 | 016 | Provider capabilities (`tool_calling`, `long_context`, `vision`, ...) are declared explicitly per provider entry in `models.yaml` via a `capabilities:` field, not inferred from `type` | Keeps capability-based routing (§4.4) fully config-driven — a provider's real capability profile can change (e.g. a future Claude tier gaining or lacking vision) without a code change; inferring capabilities from `type` would hardcode an assumption that every provider of a given type shares identical capabilities |
 | 017 | The "global graph" (§4.2) is implemented as a plain Python routing layer (`services/orchestrator/service.py`) over the compiled per-project subgraph, not as a second nested `StateGraph` | Its Phase 5 responsibilities — routing a webhook to a thread by `project_id`, reading status, listing known projects — are single-step dict/thread-id lookups with no branching or `interrupt()`/resume needs of their own; only the per-project subgraph needs LangGraph's state-machine machinery. Revisit if Phase 7's registry or cross-project cost aggregation later needs multi-step graph semantics at this level — the FastAPI contract and `ProjectState` schema wouldn't need to change either way |
 | 018 | `projects.yaml` (§4.6) lives at `/data/projects/projects.yaml`, on the same bind-mounted volume as the project workspaces themselves, not under `config/` | §4.6 didn't pin down a path. `.gitignore` already carved out exactly this shape before Phase 7 existed (`projects/*` ignored, `projects/*/` and `projects/*/memory/*.md` un-ignored) — a file directly under `projects/` is runtime/generated state, consistent with treating it as part of the same volume rather than hand-edited, git-committed config like `config/models.yaml` |
+| 019 | LLM-backed graph nodes (the Planner; future Coder/Reviewer/Tester) stay synchronous `def` functions that bridge to `async` agent-layer calls via `asyncio.run()`, rather than making the whole per-project subgraph `async` | Mixing one `async def` node into a graph forces every caller to switch from `.invoke()`/`.get_state()` to `.ainvoke()`/`.aget_state()` — which would have meant reworking `OrchestratorService` and the FastAPI layer (Phase 5) just to accommodate the Planner. A sync node that internally awaits its own event loop via `asyncio.run()` keeps every other node, `OrchestratorService`, and the FastAPI layer unchanged; the tradeoff is one node running one LLM call at a time instead of concurrently, which is a non-issue at this system's single-operator, single-active-thread-per-project scale. Revisit if a future phase genuinely needs concurrent LLM calls within one node |
+| 020 | Every human-in-the-loop gate (cost, merge-to-main, plan-questions, plan-approval) shares one decision vocabulary -- "approve"/"reject"/"edit" -- and one generic Telegram render path, instead of gate-specific button text | Phase 5's original cost-gate stub used "continue"/"pause" (matching §6.2's original sequence diagram text) while the merge gate used "approve"/"reject"; Phase 4's Telegram Gateway, built independently, only ever renders one generic Approve/Reject/Edit keyboard (`services/telegram_gateway/rendering.py`) regardless of the interrupt's `kind`. That mismatch meant a real cost-gate approval tap would have been silently misread as a rejection. Standardizing on the vocabulary Telegram's renderer actually sends was the fix, applied everywhere rather than teaching the renderer per-kind button sets |
 
 ---
 

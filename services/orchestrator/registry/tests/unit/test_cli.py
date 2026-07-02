@@ -50,7 +50,9 @@ def test_main_registers_greenfield_project_and_starts_intake(tmp_path, monkeypat
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path)
     monkeypatch.setattr(cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
     started = []
-    monkeypatch.setattr(cli, "_start_intake", started.append)
+    monkeypatch.setattr(
+        cli, "_start_intake", lambda project_id, description: started.append(project_id)
+    )
 
     exit_code = cli.main(["my-project", "--name", "My Project", "--stack", "python"])
 
@@ -65,7 +67,9 @@ def test_main_registers_brownfield_project_from_local_path(tmp_path, monkeypatch
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path / "projects")
     monkeypatch.setattr(cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
     started = []
-    monkeypatch.setattr(cli, "_start_intake", started.append)
+    monkeypatch.setattr(
+        cli, "_start_intake", lambda project_id, description: started.append(project_id)
+    )
 
     exit_code = cli.main(
         [
@@ -97,7 +101,9 @@ def test_main_registers_brownfield_project_from_git_remote(tmp_path, monkeypatch
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path / "projects")
     monkeypatch.setattr(cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
     started = []
-    monkeypatch.setattr(cli, "_start_intake", started.append)
+    monkeypatch.setattr(
+        cli, "_start_intake", lambda project_id, description: started.append(project_id)
+    )
 
     exit_code = cli.main(
         [
@@ -118,7 +124,7 @@ def test_main_registers_brownfield_project_from_git_remote(tmp_path, monkeypatch
 def test_main_returns_error_code_and_message_on_duplicate(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path)
     monkeypatch.setattr(cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
-    monkeypatch.setattr(cli, "_start_intake", lambda project_id: None)
+    monkeypatch.setattr(cli, "_start_intake", lambda project_id, description: None)
     cli.main(["my-project", "--name", "My Project", "--stack", "python"])
 
     exit_code = cli.main(["my-project", "--name", "My Project", "--stack", "python"])

@@ -3,27 +3,28 @@
 import pytest
 
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
+from services.orchestrator.graph.tests.unit.planner_fakes import fast_track_router
 from services.orchestrator.service import OrchestratorService, UnknownProjectError
 
 
 @pytest.fixture
 def service(tmp_path):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    return OrchestratorService(checkpointer)
+    return OrchestratorService(checkpointer, fast_track_router(rounds=2))
 
 
 def test_handle_webhook_without_project_id_starts_a_new_project(service):
     result = service.handle_webhook(None, "build me a thing")
 
     assert result["project_id"]
-    assert result["phase"] == "awaiting_merge_approval"
+    assert result["phase"] == "awaiting_plan_approval"
 
 
 def test_handle_webhook_with_explicit_project_id_starts_that_project(service):
     result = service.handle_webhook("my-project", "build me a thing")
 
     assert result["project_id"] == "my-project"
-    assert result["phase"] == "awaiting_merge_approval"
+    assert result["phase"] == "awaiting_plan_approval"
 
 
 def test_handle_webhook_is_idempotent_status_echo_for_known_project(service):
@@ -38,13 +39,15 @@ def test_resume_unknown_project_raises(service):
         service.resume("does-not-exist", "approve")
 
 
-def test_resume_known_project_progresses_to_done(service):
+def test_resume_known_project_progresses_through_merge_gate_to_done(service):
     service.handle_webhook("my-project", "hello")
 
-    result = service.resume("my-project", "approve")
+    after_plan_approval = service.resume("my-project", "approve")
+    assert after_plan_approval["phase"] == "awaiting_merge_approval"
 
-    assert result["phase"] == "done"
-    assert result["pending_approval"] is None
+    after_merge_approval = service.resume("my-project", "approve")
+    assert after_merge_approval["phase"] == "done"
+    assert after_merge_approval["pending_approval"] is None
 
 
 def test_status_unknown_project_raises(service):

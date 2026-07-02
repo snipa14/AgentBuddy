@@ -156,15 +156,21 @@ Along the way, fixed a cross-phase regression this phase's tests exposed: `servi
 ## Phase 8 — Planner / Intake Agent ("Roast the Plan")
 
 **Goal:** structured interview → draft plan → adversarial self-critique → human approval — the same shape as the planning conversation that produced this document.
-**Decisions:** ADR-001, ADR-014
+**Decisions:** ADR-001, ADR-014, ADR-019, ADR-020
 
-- [ ] `skills/roast-the-plan/SKILL.md`: instructs the critique pass to explicitly hunt for unstated assumptions, missing edge cases, security gaps, scope creep, and untested claims
-- [ ] Planner node: asks clarifying questions in small batches, incorporates answers into a running `plan` dict
-- [ ] Critique pass: a second LLM call reviews the draft plan against the skill's checklist and appends findings before the human ever sees it
-- [ ] Final plan rendered as a single Telegram message (or short sequence) with Approve/Edit/Reject
-- [ ] Tests: a scripted sequence of user answers reaches `awaiting_plan_approval` with a complete, internally consistent plan; an intentionally-broken fixture plan is actually flagged by the critique pass (proves it isn't a no-op)
+- [x] `skills/roast-the-plan/SKILL.md`: instructs the critique pass to explicitly hunt for unstated assumptions, missing edge cases, security gaps, scope creep, and untested claims
+- [x] Planner node: asks clarifying questions in small batches, incorporates answers into a running `plan` dict -- `services/orchestrator/agents/planner.py` holds the testable LLM logic (ask/draft/critique/merge, each a single call); `services/orchestrator/graph/nodes.py` wires it into the subgraph as a self-looping `planner_ask`/`planner_wait` pair (one interview round per checkpointed node execution, so no LLM call is ever replayed by an `interrupt()` resume -- see that module's docstring)
+- [x] Critique pass: a second LLM call reviews the draft plan against the skill's checklist and appends findings before the human ever sees it -- `critique_plan()` + `apply_critique()`; findings and the merged plan both land in the `plan_approval` interrupt payload
+- [x] Final plan rendered as a single Telegram message (or short sequence) with Approve/Edit/Reject -- reuses the Gateway's one generic Approve/Reject/Edit renderer; see ADR-020 for standardizing every gate's decision vocabulary to match what that renderer actually sends (this also fixed a real bug in Phase 5's cost gate, which used "continue"/"pause" and would have silently misread a Telegram approval tap as a rejection)
+- [x] Tests: a scripted sequence of user answers reaches `awaiting_plan_approval` with a complete, internally consistent plan; an intentionally-broken fixture plan is actually flagged by the critique pass (proves it isn't a no-op)
 
 **Definition of Done:** a fixture-driven test covers the full intake-to-approval flow, including at least one critique finding that changes the final plan.
+
+**Verification status:** the agent layer (`services/orchestrator/agents/planner.py`) is fully verified for real -- `pytest services/orchestrator/agents/tests/unit/test_planner.py -v`: 12 passed, 98% coverage, including `test_run_intake_to_final_plan_reaches_a_complete_plan_via_scripted_answers` (the Definition-of-Done scenario: scripted answers -> complete plan, with a risk *and* an assumption present only because the critique pass added them -- proving it isn't a no-op) and a caught-and-fixed real bug (a parsing mismatch between the critique response format and its parser, `_bullet_lines` vs. plain lines, that would have silently produced zero findings from every non-empty critique).
+
+The graph layer (`node_planner_ask`/`node_planner_wait`/`node_planner_draft`/`node_planner_critique`/`node_plan_wait` in `graph/nodes.py`, wired in `graph/build.py`) is unverified, same as the rest of Phase 5 -- still blocked on `langgraph`/`langgraph-checkpoint-sqlite`/`langchain-core` not being installed in this sandbox. Every existing Phase 5 graph/service/API test was updated for the new flow (the Planner's interview now sits between `intake` and `implementing`, and `OrchestratorService`/`build_project_graph` both now take a `ModelRouter`) and hand-traced step by step against the new node wiring to check LangGraph's documented `interrupt()`/replay semantics, but none of it has actually executed. Install the three packages and run `pytest services/orchestrator -v`.
+
+Two scope notes, not bugs: (1) "Edit" is accepted as a button but not handled as a distinct revision path in any gate yet -- treated the same as "Reject" everywhere; a real edit-and-re-plan loop is future work. (2) §6.1's sequence diagram shows project registration happening *after* plan approval, but Phase 7's registry actually runs *before* intake starts (via `new-project`, which seeds the Planner's first message from `--name`/`--stack`) -- the diagram describes an idealized steady state that isn't quite how the phases were built incrementally; not fixed here since it's outside Phase 8's scope.
 
 ---
 

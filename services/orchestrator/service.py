@@ -18,6 +18,7 @@ from langgraph.types import Command
 
 from services.orchestrator.graph.build import build_project_graph
 from services.orchestrator.graph.state import new_project_state
+from services.orchestrator.model_router.router import ModelRouter
 
 
 class UnknownProjectError(Exception):
@@ -27,36 +28,43 @@ class UnknownProjectError(Exception):
 class OrchestratorService:
     """Owns the compiled project subgraph and maps requests onto project threads."""
 
-    def __init__(self, checkpointer: BaseCheckpointSaver) -> None:
+    def __init__(self, checkpointer: BaseCheckpointSaver, router: ModelRouter) -> None:
         """Builds the service.
 
         Args:
             checkpointer: The checkpoint saver backing every project thread.
+            router: The ModelRouter every LLM-backed node (Planner, and
+                later Coder/Reviewer/Tester) resolves its role from.
         """
         self._checkpointer = checkpointer
-        self._graph = build_project_graph(checkpointer)
+        self._graph = build_project_graph(checkpointer, router)
 
     def handle_webhook(self, project_id: str | None, text: str) -> dict[str, Any]:
         """Starts a new project thread, or echoes status for an existing one.
 
-        Phase 5 has no Planner agent yet to interpret free text against an
-        in-progress thread, so a webhook naming a known project_id just
-        returns that project's current status without feeding the text into
-        the graph -- Phase 8 (Planner/Intake Agent) is what makes free text
-        actually drive an existing thread forward.
+        The Planner's intake interview (Phase 8) is only wired to drive a
+        *brand-new* thread from its seeded initial message; a webhook naming
+        a known project_id just returns that project's current status
+        without feeding the text into the graph -- turning an in-progress
+        thread's free text into a real interrupt-resume answer needs a
+        richer webhook contract than "project_id + text" (which round it's
+        answering, for one), left for whichever phase builds the full
+        conversational Telegram loop.
 
         Args:
             project_id: The project this message belongs to, or None/unknown
                 to start a new project.
-            text: The free-text message body. Unused until Phase 8.
+            text: The free-text message body. Seeds the new project's
+                intake interview when starting a new thread; ignored for an
+                existing one.
 
         Returns:
             The resulting project's status dict (see `status()`).
         """
-        del text
         if project_id is None or not self._project_exists(project_id):
             project_id = project_id or uuid.uuid4().hex[:12]
-            self._graph.invoke(new_project_state(project_id), config=self._config(project_id))
+            initial_state = new_project_state(project_id, initial_message=text)
+            self._graph.invoke(initial_state, config=self._config(project_id))
         return self.status(project_id)
 
     def resume(self, project_id: str, decision: str) -> dict[str, Any]:
@@ -64,8 +72,10 @@ class OrchestratorService:
 
         Args:
             project_id: The project whose interrupt is being resolved.
-            decision: The decision string (e.g. "continue"/"pause" for the
-                cost gate, "approve"/"reject" for the merge gate).
+            decision: The decision string -- "approve"/"reject"/"edit" for
+                every interrupt gate in this graph (see
+                services/orchestrator/graph/nodes.py), or a stakeholder's
+                free-text answer while paused mid-interview.
 
         Returns:
             The resulting project's status dict (see `status()`).

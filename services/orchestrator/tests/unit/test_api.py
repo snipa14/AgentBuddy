@@ -5,23 +5,24 @@ from fastapi.testclient import TestClient
 
 from services.orchestrator.api import build_app
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
+from services.orchestrator.graph.tests.unit.planner_fakes import fast_track_router
 from services.orchestrator.service import OrchestratorService
 
 
 @pytest.fixture
 def client(tmp_path):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    service = OrchestratorService(checkpointer)
+    service = OrchestratorService(checkpointer, fast_track_router(rounds=2))
     return TestClient(build_app(service))
 
 
-def test_webhook_creates_a_new_project_and_pauses_at_merge_gate(client):
+def test_webhook_creates_a_new_project_and_pauses_at_plan_approval(client):
     response = client.post("/webhook", json={"user_id": 1, "text": "build me a thing"})
 
     assert response.status_code == 200
     body = response.json()
     assert body["project_id"]
-    assert body["phase"] == "awaiting_merge_approval"
+    assert body["phase"] == "awaiting_plan_approval"
 
 
 def test_webhook_with_project_id_is_idempotent(client):
@@ -41,13 +42,15 @@ def test_resume_unknown_thread_returns_404(client):
     assert response.status_code == 404
 
 
-def test_resume_known_thread_progresses_to_done(client):
+def test_resume_known_thread_progresses_through_merge_gate_to_done(client):
     client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"})
 
-    response = client.post("/resume/my-project", json={"decision": "approve"})
+    after_plan_approval = client.post("/resume/my-project", json={"decision": "approve"})
+    assert after_plan_approval.json()["phase"] == "awaiting_merge_approval"
 
-    assert response.status_code == 200
-    assert response.json()["phase"] == "done"
+    after_merge_approval = client.post("/resume/my-project", json={"decision": "approve"})
+    assert after_merge_approval.status_code == 200
+    assert after_merge_approval.json()["phase"] == "done"
 
 
 def test_status_unknown_project_returns_404(client):
@@ -62,7 +65,7 @@ def test_status_known_project_returns_current_phase(client):
     response = client.get("/status/my-project")
 
     assert response.status_code == 200
-    assert response.json()["phase"] == "awaiting_merge_approval"
+    assert response.json()["phase"] == "awaiting_plan_approval"
 
 
 def test_list_projects_returns_created_ids(client):

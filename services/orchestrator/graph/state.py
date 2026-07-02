@@ -3,7 +3,7 @@
 from operator import add
 from typing import Annotated, Literal, TypedDict
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 Phase = Literal[
     "intake",
@@ -53,6 +53,7 @@ def new_project_state(
     coverage_threshold: int = 80,
     pr_mode: PrMode = "manual",
     cost_usd_session: float = 0.0,
+    initial_message: str | None = None,
 ) -> ProjectState:
     """Builds the initial state for a brand-new project thread.
 
@@ -66,6 +67,11 @@ def new_project_state(
             merge gate.
         cost_usd_session: Starting session cost in USD. Non-zero values are
             only used to drive tests of the cost-threshold interrupt.
+        initial_message: The stakeholder's original project request (e.g.
+            the text of a Telegram `/new` message), seeded as the first
+            entry in `messages` -- this is what the Planner's intake
+            interview (Phase 8) interviews about. None leaves messages
+            empty, for tests that don't exercise the Planner.
 
     Returns:
         A fully populated ProjectState with phase "intake".
@@ -75,7 +81,7 @@ def new_project_state(
         mode=mode,
         phase="intake",
         plan={},
-        messages=[],
+        messages=[HumanMessage(content=initial_message)] if initial_message else [],
         task_queue=[],
         current_task=None,
         cost_usd_session=cost_usd_session,
