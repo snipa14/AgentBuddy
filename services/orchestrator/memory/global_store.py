@@ -1,0 +1,128 @@
+"""Global cross-project memory store: SQLite + FTS5 (ARCHITECTURE.md §4.5).
+
+`memories_fts` is an external-content FTS5 table (content='memories'), kept
+in sync via triggers rather than duplicating row content into the index
+table -- the standard SQLite pattern for full-text search over a table that
+also needs normal column access (project_id, type, created_at) that FTS5
+itself doesn't support querying on.
+"""
+
+import sqlite3
+from pathlib import Path
+
+from services.orchestrator.memory.schemas import Memory, MemoryType
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS memories (
+    id INTEGER PRIMARY KEY,
+    project_id TEXT,
+    type TEXT,
+    content TEXT,
+    tags TEXT,
+    created_at TEXT
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    content, tags, content='memories', content_rowid='id'
+);
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, content, tags)
+        VALUES ('delete', old.id, old.content, old.tags);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, content, tags)
+        VALUES ('delete', old.id, old.content, old.tags);
+    INSERT INTO memories_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags);
+END;
+"""
+
+
+def build_global_memory_connection(db_path: Path) -> sqlite3.Connection:
+    """Opens the global memory database, creating and migrating it if needed.
+
+    Args:
+        db_path: Path to the sqlite database file. Parent directories are
+            created if missing.
+
+    Returns:
+        An open sqlite3.Connection with the memories/memories_fts schema applied.
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.executescript(_SCHEMA)
+    conn.commit()
+    return conn
+
+
+def record_memory(
+    conn: sqlite3.Connection,
+    project_id: str | None,
+    type_: MemoryType,
+    content: str,
+    tags: str,
+    created_at: str,
+) -> int:
+    """Inserts a single global memory row.
+
+    Args:
+        conn: An open connection from build_global_memory_connection().
+        project_id: The project this memory originated from, or None for a
+            memory that isn't tied to any single project.
+        type_: One of "error_pattern", "fix", "preference", "skill_usage".
+        content: The memory's free-text content, matched by recall().
+        tags: Space-separated tags, also matched by recall().
+        created_at: An ISO-8601 timestamp. Caller-supplied rather than
+            computed here, so callers stay in control of clock access and
+            tests can assert on an exact, known value.
+
+    Returns:
+        The new row's id.
+    """
+    cursor = conn.execute(
+        "INSERT INTO memories (project_id, type, content, tags, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (project_id, type_, content, tags, created_at),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def recall(conn: sqlite3.Connection, query: str, project_id: str | None = None) -> list[Memory]:
+    """Full-text searches memory content and tags via FTS5 MATCH.
+
+    Args:
+        conn: An open connection from build_global_memory_connection().
+        query: An FTS5 match expression (e.g. a plain word or phrase).
+        project_id: If given, restricts results to that project's memories.
+            If None, searches across every project.
+
+    Returns:
+        Matching memories ordered by FTS5 rank (best match first).
+    """
+    sql = (
+        "SELECT memories.id, memories.project_id, memories.type, memories.content, "
+        "memories.tags, memories.created_at "
+        "FROM memories_fts "
+        "JOIN memories ON memories.id = memories_fts.rowid "
+        "WHERE memories_fts MATCH ?"
+    )
+    params: list[str] = [query]
+    if project_id is not None:
+        sql += " AND memories.project_id = ?"
+        params.append(project_id)
+    sql += " ORDER BY rank"
+
+    rows = conn.execute(sql, params).fetchall()
+    return [
+        Memory(
+            id=row[0],
+            project_id=row[1],
+            type=row[2],
+            content=row[3],
+            tags=row[4],
+            created_at=row[5],
+        )
+        for row in rows
+    ]

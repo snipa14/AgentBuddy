@@ -113,7 +113,7 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 
 **Definition of Done:** `pytest services/orchestrator/graph` is green; a manual `curl` against `/webhook` then `/resume` produces the expected phase transitions, including across a process restart.
 
-**Verification status:** `langgraph`, `langgraph-checkpoint-sqlite`, `langchain-core`, `fastapi`, and `uvicorn` are not installed in this sandbox, so none of this has been executed -- code and all three test files (`graph/tests/unit/`, `tests/unit/test_service.py`, `tests/unit/test_api.py`) are written but unverified. Install the new dependencies from `pyproject.toml` and run `pytest services/orchestrator -v` before treating this phase as done. The riskiest untested assumptions, in order of likelihood of needing a fix once real: (1) `from langgraph.graph.state import CompiledStateGraph` as a type-hint import path, (2) `SqliteSaver(conn)` direct-construction signature and its `.conn` attribute name (used by the restart test to close the connection), (3) `BaseCheckpointSaver.list(None)` returning checkpoints across *all* threads rather than requiring a thread_id filter, (4) `graph.get_state(config)` returning `values={}` for a thread with no checkpoint history yet (rather than raising), used to detect "unknown project".
+**Verification status:** `langgraph`, `langgraph-checkpoint-sqlite`, and `langchain-core` are still not installed in this sandbox (`fastapi`/`uvicorn` were added via `apk` mid-Phase-6 and confirmed importable), so the graph/service/API code is still unverified -- `graph/tests/unit/`, `tests/unit/test_service.py`, and `tests/unit/test_api.py` all fail at collection with `ModuleNotFoundError: No module named 'langgraph'`. `tests/unit/test_config.py` *is* now verified (2 passed) after a Phase 6 fix -- see that phase's notes below for why `services/orchestrator/__init__.py` stopped eagerly importing `service.py`. Install `langgraph`, `langgraph-checkpoint-sqlite`, and `langchain-core`, then run `pytest services/orchestrator -v` before treating this phase as done. The riskiest untested assumptions, in order of likelihood of needing a fix once real: (1) `from langgraph.graph.state import CompiledStateGraph` as a type-hint import path, (2) `SqliteSaver(conn)` direct-construction signature and its `.conn` attribute name (used by the restart test to close the connection), (3) `BaseCheckpointSaver.list(None)` returning checkpoints across *all* threads rather than requiring a thread_id filter, (4) `graph.get_state(config)` returning `values={}` for a thread with no checkpoint history yet (rather than raising), used to detect "unknown project".
 
 ---
 
@@ -122,13 +122,17 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 **Goal:** per-project markdown files and the global SQLite/FTS5 store both work and are tested.
 **Decisions:** ADR-007
 
-- [ ] `services/orchestrator/memory/`: read/append functions for `PROJECT_MEMORY.md`, `DECISIONS.md`, `LEARNINGS.md` per `project_id`
-- [ ] SQLite migration for the `memories` table and `memories_fts` virtual table (ARCHITECTURE.md §4.5)
-- [ ] `recall(query: str, project_id: str | None) -> list[Memory]` using FTS5 `MATCH`
-- [ ] Memory Curator agent (a stub/cheap LLM call is fine here): given a list of phase events, produce a markdown summary plus zero or more global memory rows
-- [ ] Tests: write-then-recall round trip via FTS5; markdown appends are append-only and git-diff-friendly (no full-file rewrites for small additions)
+- [x] `services/orchestrator/memory/`: read/append functions for `PROJECT_MEMORY.md`, `DECISIONS.md`, `LEARNINGS.md` per `project_id`
+- [x] SQLite migration for the `memories` table and `memories_fts` virtual table (ARCHITECTURE.md §4.5) -- an external-content FTS5 table kept in sync via `AFTER INSERT/UPDATE/DELETE` triggers
+- [x] `recall(query: str, project_id: str | None) -> list[Memory]` using FTS5 `MATCH`
+- [x] Memory Curator agent (a stub/cheap LLM call is fine here): given a list of phase events, produce a markdown summary plus zero or more global memory rows -- `services/orchestrator/agents/memory_curator.py`; mocks the provider at the `model_router.resolve()` boundary in tests per `.claude/rules/testing.md`
+- [x] Tests: write-then-recall round trip via FTS5; markdown appends are append-only and git-diff-friendly (no full-file rewrites for small additions)
 
 **Definition of Done:** a scripted "fake phase" produces both an updated `LEARNINGS.md` and a queryable global memory row.
+
+**Verification status:** fully verified for real -- `services/orchestrator/memory` and `services/orchestrator/agents` need only the standard library, pydantic, and (for the curator) `httpx`/`pyyaml` via `model_router`, all already installed. `pytest services/orchestrator/memory services/orchestrator/agents -v`: 16 passed, 99% coverage. `test_curate_and_store_phase_updates_learnings_and_records_a_queryable_memory` is the Definition-of-Done proof end to end (fake phase events -> updated `LEARNINGS.md` on disk + a `recall()`-queryable global memory row).
+
+Along the way, fixed a cross-phase regression this phase's tests exposed: `services/orchestrator/__init__.py` (written in Phase 5) eagerly imported `service.py`, which imports `langgraph` -- so *every* submodule import under `services.orchestrator`, including this phase's memory/agents code that has no LangGraph dependency at all, failed with `ModuleNotFoundError: No module named 'langgraph'` until that eager re-export was removed. `services/orchestrator/tests/unit/test_config.py` now also passes as a result (previously blocked by the same issue).
 
 ---
 
