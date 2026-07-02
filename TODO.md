@@ -103,15 +103,17 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 **Goal:** global graph + per-project subgraph compile and run end to end with stub nodes; interrupt/resume works and survives a restart.
 **Decisions:** ADR-006, ADR-008, ADR-009
 
-- [ ] `ProjectState` (ARCHITECTURE.md §5) as a `TypedDict`
-- [ ] `SqliteSaver` checkpointer pointed at the `foundry_memory.db` volume
-- [ ] Project subgraph with placeholder nodes for each phase (`intake → planning → implementing → testing → done`), each logging and advancing for now
-- [ ] The two hard `interrupt()` points implemented as real graph interrupts: cost-threshold check (stub: trip it on a hardcoded test value) and merge-to-main (stub)
-- [ ] Global graph: routes `POST /webhook` payloads to the right project thread by `project_id` (or starts a new one)
-- [ ] FastAPI app: `/webhook`, `/resume/{thread_id}`, `/projects`, `/status/{project_id}`
-- [ ] Test: full round trip — start a project, hit the stubbed cost interrupt, resume via `/resume`, confirm state reflects the decision; kill and restart the process, confirm the pending interrupt is still there (proves checkpointer persistence, not just in-memory state)
+- [x] `ProjectState` (ARCHITECTURE.md §5) as a `TypedDict`
+- [x] `SqliteSaver` checkpointer pointed at the `foundry_memory.db` volume
+- [x] Project subgraph with placeholder nodes for each phase (`intake → planning → implementing → testing → done`), each logging and advancing for now
+- [x] The two hard `interrupt()` points implemented as real graph interrupts: cost-threshold check (stub: trip it on a hardcoded test value) and merge-to-main (stub)
+- [x] Global graph: routes `POST /webhook` payloads to the right project thread by `project_id` (or starts a new one) -- implemented as a plain Python routing layer (`services/orchestrator/service.py`) over the compiled subgraph rather than a second nested StateGraph; see that module's docstring for why. The persistent project registry is Phase 7.
+- [x] FastAPI app: `/webhook`, `/resume/{thread_id}`, `/projects`, `/status/{project_id}`
+- [x] Test: full round trip — start a project, hit the stubbed cost interrupt, resume via `/resume`, confirm state reflects the decision; kill and restart the process, confirm the pending interrupt is still there (proves checkpointer persistence, not just in-memory state) -- see `test_pending_interrupt_survives_a_simulated_restart` in `services/orchestrator/graph/tests/unit/test_graph_end_to_end.py`
 
 **Definition of Done:** `pytest services/orchestrator/graph` is green; a manual `curl` against `/webhook` then `/resume` produces the expected phase transitions, including across a process restart.
+
+**Verification status:** `langgraph`, `langgraph-checkpoint-sqlite`, `langchain-core`, `fastapi`, and `uvicorn` are not installed in this sandbox, so none of this has been executed -- code and all three test files (`graph/tests/unit/`, `tests/unit/test_service.py`, `tests/unit/test_api.py`) are written but unverified. Install the new dependencies from `pyproject.toml` and run `pytest services/orchestrator -v` before treating this phase as done. The riskiest untested assumptions, in order of likelihood of needing a fix once real: (1) `from langgraph.graph.state import CompiledStateGraph` as a type-hint import path, (2) `SqliteSaver(conn)` direct-construction signature and its `.conn` attribute name (used by the restart test to close the connection), (3) `BaseCheckpointSaver.list(None)` returning checkpoints across *all* threads rather than requiring a thread_id filter, (4) `graph.get_state(config)` returning `values={}` for a thread with no checkpoint history yet (rather than raising), used to detect "unknown project".
 
 ---
 

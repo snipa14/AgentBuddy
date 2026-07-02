@@ -49,6 +49,7 @@ services:
     environment:
       OLLAMA_ENABLED: "false"
       EXECUTOR_URL: http://executor:8000
+      MEMORY_DB_PATH: /data/memory/foundry_memory.db
     secrets:
       - claude_api_key
       - github_token
