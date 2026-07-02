@@ -139,15 +139,17 @@ Along the way, fixed a cross-phase regression this phase's tests exposed: `servi
 ## Phase 7 — Project Registry & `new-project`
 
 **Goal:** registering a project (greenfield or brownfield) creates the right on-disk structure and registry entry.
-**Decisions:** ADR-013
+**Decisions:** ADR-013, ADR-018
 
-- [ ] `projects.yaml` schema (Pydantic) matching ARCHITECTURE.md §4.6, including per-project `coverage_threshold`, `pr_mode`, `cost_ceiling_usd_weekly` overrides
-- [ ] Greenfield path: creates `projects/<id>/` with empty memory files, starts the intake graph
-- [ ] Brownfield path: takes a local path or git URL, links/clones it under `projects/<id>/`, starts intake in "extend existing codebase" mode
-- [ ] Validation: reject duplicate IDs, reject paths outside the `projects/` root
-- [ ] Tests for both modes, including the validation failure paths
+- [x] `projects.yaml` schema (Pydantic) matching ARCHITECTURE.md §4.6, including per-project `coverage_threshold`, `pr_mode`, `cost_ceiling_usd_weekly` overrides -- lives at `/data/projects/projects.yaml` (ADR-018), a top-level YAML list per the architecture doc's example shape
+- [x] Greenfield path: creates `projects/<id>/` with empty memory files, starts the intake graph -- via an `on_registered(project_id)` hook, dependency-injected so `services/orchestrator/registry` never imports LangGraph directly (same reasoning as Phase 6's `__init__.py` fix); the CLI wires the real hook with a lazy import
+- [x] Brownfield path: takes a local path or git URL, links/clones it under `projects/<id>/`, starts intake in "extend existing codebase" mode -- local paths are symlinked in, git URLs are cloned via a real `git clone` subprocess call
+- [x] Validation: reject duplicate IDs, reject paths outside the `projects/` root -- `project_id` is checked against a strict lowercase-alnum-and-hyphen slug pattern (an allow-list, so escaping the root is structurally impossible rather than caught after the fact)
+- [x] Tests for both modes, including the validation failure paths
 
 **Definition of Done:** `./foundry new-project` (and the Telegram `/new` flow) produces a correctly structured project directory and registry entry for both modes.
+
+**Verification status:** fully verified for real -- `services/orchestrator/registry` needs only the standard library, pydantic, pyyaml, and a real `git` binary (used for the brownfield-from-git tests via a real local repo, no network). `pytest services/orchestrator/registry -v`: 29 passed, 97% coverage, including a real `git clone` round trip and both `git clone`/symlink failure paths. `./foundry new-project` itself is wired to `docker compose exec orchestrator python3 -m services.orchestrator.registry.cli`, but that can't actually run yet -- the orchestrator service in docker-compose.yml is still the `python:3.12-slim` / `sleep infinity` placeholder with no `services/` code or dependencies inside it, pending whichever later phase gives it a real Dockerfile. The Telegram `/new` flow mentioned in the Definition of Done isn't wired at all yet -- `services/telegram_gateway/bot.py`'s `/new` handler just forwards free text to `POST /webhook` (Phase 4), and nothing in the Orchestrator's webhook handler (Phase 5) calls into this phase's registration functions yet; that integration is left for whichever phase builds out the Planner/Intake agent's real conversational flow (Phase 8), since a real `/new` needs to gather `name`/`stack`/mode/source from conversation, not just a project_id.
 
 ---
 

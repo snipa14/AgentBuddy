@@ -24,7 +24,15 @@ not_implemented() {
 command="${1:-}"
 
 case "$command" in
-    up|down|status|new-project|logs)
+    new-project)
+        shift
+        # Requires the orchestrator container to actually contain
+        # services/ and its dependencies -- currently a python:3.12-slim /
+        # `sleep infinity` placeholder (docker-compose.yml), pending the
+        # phase that adds its real Dockerfile. See TODO.md Phase 7.
+        exec docker compose exec orchestrator python3 -m services.orchestrator.registry.cli "$@"
+        ;;
+    up|down|status|logs)
         not_implemented "$command"
         ;;
     -h|--help|"")
