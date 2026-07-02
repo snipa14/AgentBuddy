@@ -8,6 +8,7 @@ dependencies = [
     "pyyaml>=6.0",
     "httpx>=0.27",
     "docker>=7.1",
+    "aiogram>=3.15",
 ]
 
 [project.optional-dependencies]
@@ -29,7 +30,7 @@ select = ["E", "F", "I", "UP", "B"]
 testpaths = ["services"]
 pythonpath = ["."]
 markers = [
-    "integration: requires a real Docker daemon (see .claude/rules/testing.md)",
+    "integration: exercises real I/O -- Docker, filesystem, or network (see .claude/rules/testing.md)",
 ]
 
 [tool.coverage.run]

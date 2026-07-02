@@ -20,11 +20,12 @@ The `--cov-fail-under=80` flag is the enforcement mechanism — do not remove it
 services/<name>/
   tests/
     unit/           pure Python, no real Docker, no network, no filesystem (use tmp_path)
-    integration/    real Docker, real SQLite, real filesystem — marked @pytest.mark.integration
+    integration/    real I/O the unit tier forbids — Docker, SQLite, filesystem, or network,
+                     whichever the service actually needs — marked @pytest.mark.integration
 ```
 
 Run unit tests alone: `pytest services/<name>/tests/unit`
-Run integration tests (needs Docker daemon): `pytest -m integration services/<name>/tests/integration`
+Run integration tests (needs whatever real I/O that service's suite requires — a Docker daemon for the Executor, a real socket for the Telegram Gateway, etc.): `pytest -m integration services/<name>/tests/integration`
 
 CI always runs both. Locally, unit tests are fast enough to run on every save.
 

@@ -86,14 +86,15 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 **Goal:** bot responds only to the allow-listed user, forwards to the Orchestrator, renders inline-keyboard approvals.
 **Decisions:** ADR-002
 
-- [ ] `services/telegram_gateway/`: bot setup (aiogram), long-polling preferred over webhooks (simpler for an on-demand host without a stable public IP)
-- [ ] Auth middleware: silently drop (but log) any update from a user ID other than the configured `telegram_allowed_user_id`
-- [ ] Commands: `/start`, `/new`, `/status`, `/projects`
-- [ ] Free-text forwarding: message → `POST {ORCHESTRATOR_URL}/webhook`
-- [ ] Approval rendering: given a notification carrying `pending_approval`, render text + inline keyboard (`Approve` / `Reject` / `Edit`); button callback → `POST {ORCHESTRATOR_URL}/resume/{thread_id}`
-- [ ] Unit tests with a mocked Telegram client and a mocked Orchestrator HTTP client
+- [x] `services/telegram_gateway/`: bot setup (aiogram), long-polling preferred over webhooks (simpler for an on-demand host without a stable public IP)
+- [x] Auth middleware: silently drop (but log) any update from a user ID other than the configured `telegram_allowed_user_id`
+- [x] Commands: `/start`, `/new`, `/status`, `/projects`
+- [x] Free-text forwarding: message → `POST {ORCHESTRATOR_URL}/webhook`
+- [x] Approval rendering: given a notification carrying `pending_approval`, render text + inline keyboard (`Approve` / `Reject` / `Edit`); button callback → `POST {ORCHESTRATOR_URL}/resume/{thread_id}`
+- [x] Unit tests with a mocked Telegram client and a mocked Orchestrator HTTP client
 
 **Definition of Done:** a message from an unauthorized user ID produces no bot response (but is logged); an authorized message reaches a stub Orchestrator endpoint in an integration test.
+**Verification status:** `aiogram` is not yet installed in this sandbox, so none of this has been executed — code and both test suites are written but unverified. Install `aiogram` and run `pytest services/telegram_gateway -v` (unit) and `pytest -m integration services/telegram_gateway/tests/integration -v` (the stub-forwarding proof) before treating this phase as done.
 
 ---
 
