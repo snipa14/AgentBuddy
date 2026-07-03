@@ -8,7 +8,10 @@ DEFAULT_COVERAGE_THRESHOLD = 80
 
 ProjectMode = Literal["greenfield", "brownfield"]
 PrMode = Literal["auto", "manual", "configurable"]
+CoverageGateMode = Literal["hard", "soft", "configurable"]
 ProjectStatus = Literal["active", "archived"]
+
+DEFAULT_COVERAGE_GATE_MODE: CoverageGateMode = "hard"
 
 
 class ProjectRecord(BaseModel):
@@ -22,5 +25,6 @@ class ProjectRecord(BaseModel):
     stack: str
     coverage_threshold: int = DEFAULT_COVERAGE_THRESHOLD
     pr_mode: PrMode = "manual"
+    coverage_gate_mode: CoverageGateMode = DEFAULT_COVERAGE_GATE_MODE
     cost_ceiling_usd_weekly: float | None = None
     status: ProjectStatus = "active"

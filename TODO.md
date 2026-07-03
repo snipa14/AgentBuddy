@@ -222,15 +222,23 @@ Phase-discipline note: this working tree bundles Phase 10 (Reviewer), Phase 11 (
 ## Phase 11 — Tester Agent & Coverage Gate
 
 **Goal:** runs the real test suite inside a workspace container and enforces the project's configured coverage gate.
-**Decisions:** ADR-013
+**Decisions:** ADR-013, ADR-023
 
-- [ ] Tester node calls `Executor.run_tests` (pytest + `coverage.py`)
-- [ ] Parse the coverage report into `coverage_pct`
-- [ ] Implement all three gate modes (hard / soft / configurable per project), defaulting new projects to hard
-- [ ] On failure, route back to Coder with the specific failing tests / uncovered lines attached to state — not a generic "tests failed"
-- [ ] Tests: a fixture project with deliberately low coverage trips the gate in hard mode and is allowed through with a warning in soft mode
+- [x] Tester node calls `Executor.run_tests` (pytest + `coverage.py`)
+- [x] Parse the coverage report into `coverage_pct`
+- [x] Implement all three gate modes (hard / soft / configurable per project), defaulting new projects to hard
+- [x] On failure, route back to Coder with the specific failing tests / uncovered lines attached to state — not a generic "tests failed"
+- [x] Tests: a fixture project with deliberately low coverage trips the gate in hard mode and is allowed through with a warning in soft mode
 
 **Definition of Done:** all three modes are covered by tests; a real `pytest --cov` run inside a workspace container produces a parsed result the gate acts on.
+
+**Verification status:** agent layer fully verified for real -- `pytest services/orchestrator/agents/tests/unit/test_tester.py -v`: 17 passed (grew from 11 after the validation pass below), covering all three gate modes (hard blocks low coverage, soft warns and passes, configurable blocks), test failure parsing, uncovered-line parsing, and end-to-end with mocked executor client. The full non-graph test suite (128 tests across agents/memory/registry/model_router + 34 passed/6 skipped in executor, the 6 skips being the real-Docker integration tests with no daemon here) is also green. Graph-layer wiring (`node_testing` in `graph/nodes.py`, wired in `graph/build.py`) and node unit tests remain unverified by actually running them, same as the rest of Phase 5 -- still blocked on `langgraph`/`langgraph-checkpoint-sqlite`/`langchain-core` not being installed in this sandbox; every touched graph test was hand-traced instead, same practice as every prior phase's graph layer.
+
+A validation pass on this phase found and fixed four real defects, all now fixed and covered by tests:
+1. **The headline bug**: `node_testing` derived the coverage gate mode from `pr_mode` (`auto`→hard, `manual`→soft, `configurable`→configurable) instead of having its own setting. `pr_mode` is ARCHITECTURE.md's field for GitHub PR automation (§4.7, Phase 13) — completely unrelated to coverage strictness — and this mapping meant a new project (default `pr_mode="manual"`) silently got a **soft** coverage gate, directly violating this phase's own Definition of Done ("defaulting new projects to hard"). Fixed by adding a proper `coverage_gate_mode` field to `ProjectState` and the project registry (`registry/schemas.py`, `registry/registration.py`, `registry/cli.py`, `graph/state.py`), defaulting to `"hard"`, independent of `pr_mode` — see ADR-023. The two `graph/tests/unit/test_nodes.py` tests that had encoded the old conflation as expected behavior (selecting hard/soft mode via `pr_mode=` instead of a real gate-mode field) were rewritten to use `coverage_gate_mode=` directly, plus a new test proving a project can have `pr_mode="auto"` and `coverage_gate_mode="soft"` at once (ADR-023's whole point).
+2. `_evaluate_gate`'s two log statements formatted `"project %s: ..."` but the function has no `project_id` parameter, so they always logged the literal string `"project 0"` — dead/misleading log data on every coverage-shortfall run. Fixed by dropping the fabricated prefix (the caller, `run_tests()`, already logs the real project_id).
+3. `_parse_failing_tests` unconditionally set `TestFailure.line=0` even though no line number is ever actually parsed from pytest's `FAILED path::test - message` summary format — a fabricated value indistinguishable from a real line 0, worse than the field's own `None` default. Fixed to leave it `None` when genuinely unknown.
+4. The DoD's "uncovered lines attached to state" requirement was only partially met — a coverage-shortfall failure told the Coder the aggregate percentage but never which lines were actually uncovered, even though `--cov-report=term-missing` (already the flag Executor's `tool_run_tests` uses) puts exactly that in the report. Added `_parse_uncovered_lines()` (parses coverage.py's per-file `Missing` column) and wired it into `node_testing`'s Coder feedback alongside the failing-tests case.
 
 ---
 

@@ -22,6 +22,7 @@ Phase = Literal[
 
 Mode = Literal["greenfield", "brownfield"]
 PrMode = Literal["auto", "manual", "configurable"]
+CoverageGateMode = Literal["hard", "soft", "configurable"]
 
 
 class ProjectState(TypedDict):
@@ -44,6 +45,7 @@ class ProjectState(TypedDict):
     coverage_pct: float | None
     coverage_threshold: int
     pr_mode: PrMode
+    coverage_gate_mode: CoverageGateMode
     pending_approval: dict | None
 
 
@@ -52,6 +54,7 @@ def new_project_state(
     mode: Mode = "greenfield",
     coverage_threshold: int = 80,
     pr_mode: PrMode = "manual",
+    coverage_gate_mode: CoverageGateMode = "hard",
     cost_usd_session: float = 0.0,
     initial_message: str | None = None,
 ) -> ProjectState:
@@ -65,6 +68,10 @@ def new_project_state(
             the testing phase (per-project override, ARCHITECTURE.md §4.6).
         pr_mode: How pull requests are handled once a project reaches the
             merge gate.
+        coverage_gate_mode: How the Tester enforces the coverage gate --
+            'hard' blocks below threshold, 'soft' warns but passes,
+            'configurable' is reserved for a future per-project policy.
+            Defaults to 'hard' (TODO.md Phase 11).
         cost_usd_session: Starting session cost in USD. Non-zero values are
             only used to drive tests of the cost-threshold interrupt.
         initial_message: The stakeholder's original project request (e.g.
@@ -89,5 +96,6 @@ def new_project_state(
         coverage_pct=None,
         coverage_threshold=coverage_threshold,
         pr_mode=pr_mode,
+        coverage_gate_mode=coverage_gate_mode,
         pending_approval=None,
     )

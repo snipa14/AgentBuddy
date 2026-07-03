@@ -40,6 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pr-mode", choices=["auto", "manual", "configurable"], default="manual"
     )
+    parser.add_argument(
+        "--coverage-gate-mode", choices=["hard", "soft", "configurable"], default="hard"
+    )
     parser.add_argument("--cost-ceiling-usd-weekly", type=float, default=None)
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
@@ -106,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.stack,
                 args.coverage_threshold,
                 args.pr_mode,
+                args.coverage_gate_mode,
                 args.cost_ceiling_usd_weekly,
                 on_registered=on_registered,
             )
@@ -119,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.stack,
                 args.coverage_threshold,
                 args.pr_mode,
+                args.coverage_gate_mode,
                 args.cost_ceiling_usd_weekly,
                 on_registered=on_registered,
             )
@@ -131,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.stack,
                 args.coverage_threshold,
                 args.pr_mode,
+                args.coverage_gate_mode,
                 args.cost_ceiling_usd_weekly,
                 on_registered=on_registered,
             )

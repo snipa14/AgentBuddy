@@ -23,6 +23,7 @@ def test_build_parser_parses_minimal_greenfield_args():
     assert args.stack == "python"
     assert args.coverage_threshold == 80
     assert args.pr_mode == "manual"
+    assert args.coverage_gate_mode == "hard"
     assert args.from_path is None
     assert args.git_remote is None
 

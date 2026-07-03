@@ -14,7 +14,12 @@ from typing import Callable
 
 from services.orchestrator.memory.project_memory import MEMORY_FILENAMES, project_memory_dir
 from services.orchestrator.registry.errors import BrownfieldSourceError, DuplicateProjectIdError
-from services.orchestrator.registry.schemas import PrMode, ProjectRecord
+from services.orchestrator.registry.schemas import (
+    DEFAULT_COVERAGE_GATE_MODE,
+    CoverageGateMode,
+    PrMode,
+    ProjectRecord,
+)
 from services.orchestrator.registry.store import load_registry, save_registry
 from services.orchestrator.registry.validation import validate_project_id
 
@@ -29,6 +34,7 @@ def register_greenfield(
     stack: str,
     coverage_threshold: int = 80,
     pr_mode: PrMode = "manual",
+    coverage_gate_mode: CoverageGateMode = DEFAULT_COVERAGE_GATE_MODE,
     cost_ceiling_usd_weekly: float | None = None,
     on_registered: OnRegistered | None = None,
 ) -> ProjectRecord:
@@ -44,6 +50,9 @@ def register_greenfield(
         stack: The project's primary language/stack (e.g. "python").
         coverage_threshold: Minimum coverage percentage required to pass testing.
         pr_mode: How pull requests are handled for this project.
+        coverage_gate_mode: How the Tester enforces the coverage gate --
+            'hard' blocks below threshold, 'soft' warns but passes,
+            'configurable' is reserved for a future per-project policy.
         cost_ceiling_usd_weekly: Per-project cost ceiling override, or None
             to use the global default.
         on_registered: Optional hook invoked with project_id once
@@ -71,6 +80,7 @@ def register_greenfield(
         stack=stack,
         coverage_threshold=coverage_threshold,
         pr_mode=pr_mode,
+        coverage_gate_mode=coverage_gate_mode,
         cost_ceiling_usd_weekly=cost_ceiling_usd_weekly,
     )
     return _finalize_registration(registry_path, records, record, on_registered)
@@ -85,6 +95,7 @@ def register_brownfield_from_local_path(
     stack: str,
     coverage_threshold: int = 80,
     pr_mode: PrMode = "manual",
+    coverage_gate_mode: CoverageGateMode = DEFAULT_COVERAGE_GATE_MODE,
     cost_ceiling_usd_weekly: float | None = None,
     on_registered: OnRegistered | None = None,
 ) -> ProjectRecord:
@@ -100,6 +111,9 @@ def register_brownfield_from_local_path(
         stack: The project's primary language/stack (e.g. "python").
         coverage_threshold: Minimum coverage percentage required to pass testing.
         pr_mode: How pull requests are handled for this project.
+        coverage_gate_mode: How the Tester enforces the coverage gate --
+            'hard' blocks below threshold, 'soft' warns but passes,
+            'configurable' is reserved for a future per-project policy.
         cost_ceiling_usd_weekly: Per-project cost ceiling override, or None
             to use the global default.
         on_registered: Optional hook invoked with project_id once
@@ -135,6 +149,7 @@ def register_brownfield_from_local_path(
         stack=stack,
         coverage_threshold=coverage_threshold,
         pr_mode=pr_mode,
+        coverage_gate_mode=coverage_gate_mode,
         cost_ceiling_usd_weekly=cost_ceiling_usd_weekly,
     )
     return _finalize_registration(registry_path, records, record, on_registered)
@@ -149,6 +164,7 @@ def register_brownfield_from_git(
     stack: str,
     coverage_threshold: int = 80,
     pr_mode: PrMode = "manual",
+    coverage_gate_mode: CoverageGateMode = DEFAULT_COVERAGE_GATE_MODE,
     cost_ceiling_usd_weekly: float | None = None,
     on_registered: OnRegistered | None = None,
 ) -> ProjectRecord:
@@ -163,6 +179,9 @@ def register_brownfield_from_git(
         stack: The project's primary language/stack (e.g. "python").
         coverage_threshold: Minimum coverage percentage required to pass testing.
         pr_mode: How pull requests are handled for this project.
+        coverage_gate_mode: How the Tester enforces the coverage gate --
+            'hard' blocks below threshold, 'soft' warns but passes,
+            'configurable' is reserved for a future per-project policy.
         cost_ceiling_usd_weekly: Per-project cost ceiling override, or None
             to use the global default.
         on_registered: Optional hook invoked with project_id once
@@ -203,6 +222,7 @@ def register_brownfield_from_git(
         stack=stack,
         coverage_threshold=coverage_threshold,
         pr_mode=pr_mode,
+        coverage_gate_mode=coverage_gate_mode,
         cost_ceiling_usd_weekly=cost_ceiling_usd_weekly,
     )
     return _finalize_registration(registry_path, records, record, on_registered)

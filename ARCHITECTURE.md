@@ -249,6 +249,7 @@ Full-text recall uses SQLite FTS5 — proven at this scale (Hermes uses the same
   stack: python
   coverage_threshold: 80
   pr_mode: configurable    # auto | manual | configurable
+  coverage_gate_mode: hard # hard | soft | configurable -- Tester's enforcement strictness (ADR-023), independent of pr_mode
   cost_ceiling_usd_weekly: null   # null = use global default
   status: active
 ```
@@ -307,6 +308,7 @@ class ProjectState(TypedDict):
     coverage_pct: float | None
     coverage_threshold: int
     pr_mode: Literal["auto", "manual", "configurable"]
+    coverage_gate_mode: Literal["hard", "soft", "configurable"]
     pending_approval: dict | None
 ```
 
@@ -529,6 +531,7 @@ Lightweight ADR-style record of every decision made during planning, so the reas
 | 020 | Every human-in-the-loop gate (cost, merge-to-main, plan-questions, plan-approval) shares one decision vocabulary -- "approve"/"reject"/"edit" -- and one generic Telegram render path, instead of gate-specific button text | Phase 5's original cost-gate stub used "continue"/"pause" (matching §6.2's original sequence diagram text) while the merge gate used "approve"/"reject"; Phase 4's Telegram Gateway, built independently, only ever renders one generic Approve/Reject/Edit keyboard (`services/telegram_gateway/rendering.py`) regardless of the interrupt's `kind`. That mismatch meant a real cost-gate approval tap would have been silently misread as a rejection. Standardizing on the vocabulary Telegram's renderer actually sends was the fix, applied everywhere rather than teaching the renderer per-kind button sets |
 | 021 | The Executor gets a real FastAPI HTTP surface (`services/executor/api.py`), and `services/orchestrator/executor_client.py` defines its own response models rather than importing `services.executor.schemas` | §4.3 always described a "narrow internal API" between two separately-deployed containers, but through Phase 8 only Python-level `tool_*` functions existed -- nothing reachable over the network. Phase 9's Coder is the first thing that actually needs the Orchestrator to call the Executor, so the HTTP surface had to exist for real. Each service keeps its own Pydantic response models (matching the existing Telegram-Gateway/Orchestrator relationship) so neither service's deployment depends on the other's internal module layout, and the Orchestrator never needs the Docker SDK as a transitive dependency at all |
 | 022 | The Coder drives a manual ReAct loop (one LLM call decides one action, dispatched by hand to `read_file`/`write_file`/`run_command`, the result fed back as the next turn's context) instead of relying on a provider's native tool-calling | `model_router`'s `CompletionRequest`/`CompletionResult` (§4.4) is a plain text-completion contract with no function-calling fields -- adding one would mean teaching every provider implementation a tool-call wire format before any agent needed it. The Coder's loop reuses the same single-call, structured-text-response shape the Planner already established (ADR groundwork from Phase 8), parsed with a shared helper (`services/orchestrator/agents/parsing.py`) |
+| 023 | `ProjectState` and the project registry (§4.6) get their own `coverage_gate_mode: "hard" \| "soft" \| "configurable"` field, separate from `pr_mode`, defaulting to `"hard"` | TODO.md Phase 11 required all three Tester coverage-gate modes, defaulting new projects to hard -- but a first implementation took a shortcut and derived the gate mode from `pr_mode` (`auto`→hard, `manual`→soft, `configurable`→configurable) instead of adding a field, since `pr_mode` was the only "mode"-shaped per-project setting already in the schema. That conflated two unrelated concerns (`pr_mode` governs GitHub PR automation, §4.7's Git/GitHub Integrator; coverage strictness has nothing to do with it) and silently violated the "default to hard" requirement, since new projects default `pr_mode` to `"manual"`, which mapped to `"soft"`. Caught in a Phase 11 validation pass; fixed by giving coverage strictness its own field rather than overloading an unrelated one |
 
 ---
 
