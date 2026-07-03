@@ -11,6 +11,11 @@ DEFAULT_MEM_LIMIT = "2g"
 DEFAULT_NANO_CPUS = 2_000_000_000
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 
+STACK_IMAGES: dict[str, str] = {
+    "python": DEFAULT_WORKSPACE_IMAGE,
+    "node": "foundry/workspace-node:20",
+}
+
 
 class ExecutorConfig(BaseModel):
     """Runtime configuration for the Executor, validated once at process startup.
@@ -61,3 +66,19 @@ class ExecutorConfig(BaseModel):
                 )
             ),
         )
+
+
+def image_for_stack(stack: str, config: "ExecutorConfig") -> str:
+    """Resolves the workspace image for a project's stack (ADR-028, TODO.md Phase 17).
+
+    Args:
+        stack: The project's declared stack (e.g. "python", "node").
+        config: The Executor's runtime configuration.
+
+    Returns:
+        The dedicated image for *stack* if one is registered in
+        STACK_IMAGES, otherwise config.workspace_image -- so a stack with no
+        dedicated image yet still gets a working (if not ideal) container
+        instead of a hard failure.
+    """
+    return STACK_IMAGES.get(stack, config.workspace_image)

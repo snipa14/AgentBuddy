@@ -23,6 +23,7 @@ Phase = Literal[
 Mode = Literal["greenfield", "brownfield"]
 PrMode = Literal["auto", "manual", "configurable"]
 CoverageGateMode = Literal["hard", "soft", "configurable"]
+Stack = Literal["python", "node"]
 
 
 class ProjectState(TypedDict):
@@ -35,6 +36,7 @@ class ProjectState(TypedDict):
 
     project_id: str
     mode: Mode
+    stack: Stack
     phase: Phase
     plan: dict
     messages: Annotated[list[BaseMessage], add]
@@ -55,6 +57,7 @@ class ProjectState(TypedDict):
 def new_project_state(
     project_id: str,
     mode: Mode = "greenfield",
+    stack: Stack = "python",
     coverage_threshold: int = 80,
     pr_mode: PrMode = "manual",
     coverage_gate_mode: CoverageGateMode = "hard",
@@ -67,6 +70,14 @@ def new_project_state(
         project_id: The new project's identifier; also used as its LangGraph
             thread_id.
         mode: Whether this is a greenfield or brownfield project.
+        stack: The project's declared language/stack (ADR-028) -- selects
+            the Executor's workspace image and cache volume for every tool
+            call made on this project's behalf. Defaults to "python" since
+            every project needs some value here and Python is Foundry's
+            original, always-available stack; a real deployment should
+            thread the registry's own `stack` field through instead (the
+            same pre-existing registry-to-ProjectState wiring gap ADR-029
+            already flagged for `git_remote_url`).
         coverage_threshold: Minimum test coverage percentage required to pass
             the testing phase (per-project override, ARCHITECTURE.md §4.6).
         pr_mode: How pull requests are handled once a project reaches the
@@ -89,6 +100,7 @@ def new_project_state(
     return ProjectState(
         project_id=project_id,
         mode=mode,
+        stack=stack,
         phase="intake",
         plan={},
         messages=[HumanMessage(content=initial_message)] if initial_message else [],

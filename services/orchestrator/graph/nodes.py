@@ -263,7 +263,13 @@ def node_coder(
 
     current_task = state["current_task"] or {**task_queue[0], "attempts": 0}
     result = asyncio.run(
-        run_coder_task(router, executor_client, state["project_id"], current_task["description"])
+        run_coder_task(
+            router,
+            executor_client,
+            state["project_id"],
+            current_task["description"],
+            stack=state["stack"],
+        )
     )
     if result.success:
         remaining = task_queue[1:]
@@ -362,12 +368,12 @@ def node_frontend_review(
     any findings to messages. On success (approve), advances to cost_check.
     On failure (changes-requested), routes back to Coder with specific UI feedback.
     """
-    if not _has_frontend_files(state["project_id"], executor_client):
+    if not _has_frontend_files(state["project_id"], executor_client, stack=state["stack"]):
         logger.info("project %s: no frontend files, skipping visual review", state["project_id"])
         return {"phase": "testing"}
 
     result_verdict, findings, ai_message = asyncio.run(
-        review_frontend(router, executor_client, state["project_id"])
+        review_frontend(router, executor_client, state["project_id"], stack=state["stack"])
     )
     cost = router.cost_usd(FRONTEND_REVIEWER_ROLE, ai_message.usage_metadata) if ai_message else 0.0
 
@@ -479,7 +485,15 @@ def node_testing(state: ProjectState, executor_client: ExecutorClient) -> dict[s
 
     gate_mode = state.get("coverage_gate_mode", "hard")
 
-    outcome = asyncio.run(run_tests(executor_client, state["project_id"], threshold=state["coverage_threshold"], gate_mode=gate_mode))
+    outcome = asyncio.run(
+        run_tests(
+            executor_client,
+            state["project_id"],
+            threshold=state["coverage_threshold"],
+            gate_mode=gate_mode,
+            stack=state["stack"],
+        )
+    )
 
     if outcome.verdict == "fail":
         # Extract failing test / uncovered-line details for the Coder

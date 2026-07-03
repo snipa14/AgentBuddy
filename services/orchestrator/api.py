@@ -3,6 +3,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from services.orchestrator.progress_buffer import get_chunks_since
 from services.orchestrator.service import OrchestratorService, UnknownProjectError
 
 
@@ -34,6 +35,19 @@ class ProjectListResponse(BaseModel):
     project_ids: list[str]
 
 
+class StreamChunk(BaseModel):
+    """One buffered progress chunk, addressed by its sequence number."""
+
+    seq: int
+    text: str
+
+
+class StreamResponse(BaseModel):
+    """The set of progress chunks recorded for a project after `since_seq`."""
+
+    chunks: list[StreamChunk]
+
+
 def build_app(service: OrchestratorService) -> FastAPI:
     """Builds the Orchestrator's FastAPI app.
 
@@ -57,6 +71,13 @@ def build_app(service: OrchestratorService) -> FastAPI:
         except UnknownProjectError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return ProjectStatusResponse(**result)
+
+    @app.get("/stream/{project_id}", response_model=StreamResponse)
+    def stream(project_id: str, since_seq: int = -1) -> StreamResponse:
+        chunks = get_chunks_since(project_id, since_seq)
+        return StreamResponse(
+            chunks=[StreamChunk(seq=chunk.seq, text=chunk.text) for chunk in chunks]
+        )
 
     @app.get("/projects", response_model=ProjectListResponse)
     def list_projects() -> ProjectListResponse:

@@ -11,7 +11,7 @@ one layer further out now that `resolve()` itself returns a `BaseChatModel`.
 
 from dataclasses import dataclass
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from pydantic import BaseModel
 
 
@@ -86,8 +86,41 @@ class FakeChatModel:
             raise TypeError("scripted a ScriptedStructured response for a plain ainvoke() call")
         return response
 
+    async def astream(self, messages, **kwargs):
+        self.requests.append(messages)
+        response = self._pop()
+        if isinstance(response, ScriptedStructured):
+            raise TypeError("scripted a ScriptedStructured response for a plain astream() call")
+        for chunk in _split_into_chunks(response):
+            yield chunk
+
     def with_structured_output(self, schema: type[BaseModel], include_raw: bool = False):
         return _FakeStructuredRunnable(self, schema, include_raw)
+
+
+def _split_into_chunks(message: AIMessage) -> list[AIMessageChunk]:
+    """Splits a scripted `AIMessage` into `AIMessageChunk`s for `.astream()`.
+
+    A tool-calling turn streams as a single chunk (splitting a tool call's
+    JSON arguments token-by-token isn't meaningful for these tests). A plain
+    content turn splits on whitespace into multiple chunks, so tests can
+    assert the calling code relays partial content as it arrives and still
+    correctly reassembles the full message (via `AIMessageChunk.__add__`)
+    once streaming finishes. `usage_metadata` always rides on the final
+    chunk, matching a real provider's usage arriving with the last delta.
+    """
+    if message.tool_calls:
+        return [
+            AIMessageChunk(
+                content=message.content,
+                tool_calls=message.tool_calls,
+                usage_metadata=message.usage_metadata,
+            )
+        ]
+    words = message.content.split(" ") if message.content else [""]
+    chunks = [AIMessageChunk(content=f"{word} ") for word in words[:-1]]
+    chunks.append(AIMessageChunk(content=words[-1], usage_metadata=message.usage_metadata))
+    return chunks
 
 
 def usage(input_tokens: int = 10, output_tokens: int = 10) -> dict:

@@ -8,6 +8,7 @@ from services.orchestrator.executor_client import CommandResult, TestResult
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
 from services.orchestrator.graph.tests.unit.planner_fakes import fast_track_router
 from services.orchestrator.memory.global_store import build_global_memory_connection
+from services.orchestrator.progress_buffer import add_progress, get_chunks_since
 from services.orchestrator.service import OrchestratorService
 
 
@@ -15,10 +16,14 @@ class _StubExecutorClient:
     """Reports a clean passing test run and successful git commands for
     tests that drive the graph all the way to node_testing/node_done."""
 
-    async def run_tests(self, project_id: str, framework: str = "pytest") -> TestResult:
+    async def run_tests(
+        self, project_id: str, framework: str = "pytest", stack: str = "python"
+    ) -> TestResult:
         return TestResult(passed=1, failed=0, coverage_pct=100.0, report="1 passed")
 
-    async def run_command(self, project_id: str, command, timeout=None) -> CommandResult:
+    async def run_command(
+        self, project_id: str, command, timeout=None, stack: str = "python"
+    ) -> CommandResult:
         return CommandResult(stdout="", stderr="", exit_code=0)
 
 
@@ -92,3 +97,30 @@ def test_list_projects_returns_created_ids(client):
 
     assert response.status_code == 200
     assert response.json()["project_ids"] == ["project-a", "project-b"]
+
+
+def test_stream_returns_chunks_recorded_after_since_seq(client):
+    add_progress("stream-project", "hello ")
+    add_progress("stream-project", "world")
+
+    response = client.get("/stream/stream-project", params={"since_seq": 0})
+
+    assert response.status_code == 200
+    assert response.json()["chunks"] == [{"seq": 1, "text": "world"}]
+
+
+def test_stream_unknown_project_returns_an_empty_chunk_list(client):
+    response = client.get("/stream/no-such-project")
+
+    assert response.status_code == 200
+    assert response.json()["chunks"] == []
+
+
+def test_status_of_a_terminal_project_clears_its_progress_buffer(client):
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "terminal-project"})
+    add_progress("terminal-project", "some progress")
+
+    client.post("/resume/terminal-project", json={"decision": "approve"})
+    client.post("/resume/terminal-project", json={"decision": "approve"})
+
+    assert get_chunks_since("terminal-project") == []

@@ -27,8 +27,8 @@ class RecordingExecutorClient:
         self.test_result = test_result
         self.calls: list[tuple] = []
 
-    async def run_tests(self, project_id: str, framework: str = "pytest"):
-        self.calls.append(("run_tests", project_id, framework))
+    async def run_tests(self, project_id: str, framework: str = "pytest", stack: str = "python"):
+        self.calls.append(("run_tests", project_id, framework, stack))
         if self.test_result is not None:
             return self.test_result
         from services.orchestrator.executor_client import TestResult as ExecutorTestResult
@@ -158,7 +158,15 @@ def test_run_tests_calls_executor_and_returns_outcome():
     outcome = asyncio.run(run_tests(executor, "proj-1", threshold=80))
     assert outcome.verdict == "pass"
     assert outcome.coverage_pct == 92.5
-    assert ("run_tests", "proj-1", "pytest") in executor.calls
+    assert ("run_tests", "proj-1", "pytest", "python") in executor.calls
+
+
+def test_run_tests_uses_npm_framework_for_a_node_stack_project():
+    executor = RecordingExecutorClient()
+
+    asyncio.run(run_tests(executor, "proj-1", threshold=80, stack="node"))
+
+    assert ("run_tests", "proj-1", "npm", "node") in executor.calls
 
 
 def test_run_tests_returns_fail_when_coverage_below_threshold():

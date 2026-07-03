@@ -46,6 +46,7 @@ pytest --cov=services --cov-report=term-missing
 
 # build workspace base images (run before first project)
 docker build -t foundry/workspace-python:3.12 images/workspace-python/
+docker build -t foundry/workspace-node:20 images/workspace-node/
 ```
 
 ## Architecture map

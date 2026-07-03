@@ -32,3 +32,13 @@ class OrchestratorClient:
         return await self._client.post(
             f"{self._base_url}/resume/{thread_id}", json={"decision": decision}
         )
+
+    async def stream(self, project_id: str, since_seq: int = -1) -> httpx.Response:
+        """Polls GET /stream/{project_id} for progress chunks recorded after since_seq."""
+        return await self._client.get(
+            f"{self._base_url}/stream/{project_id}", params={"since_seq": since_seq}
+        )
+
+    async def get_status(self, project_id: str) -> httpx.Response:
+        """Reads a project's current phase via GET /status/{project_id}."""
+        return await self._client.get(f"{self._base_url}/status/{project_id}")

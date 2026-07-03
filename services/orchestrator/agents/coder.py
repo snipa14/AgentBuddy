@@ -7,6 +7,13 @@ dispatches whatever tool calls the model requests each turn. Task
 completion is signaled by the model returning a turn with no further tool
 calls, rather than a parsed "done" action string.
 
+Each turn is streamed (`astream`, ADR-027) rather than a single `ainvoke`
+call -- partial content is relayed into `progress_buffer` as it arrives, so
+the Telegram Gateway's poller has something to show before a long turn
+finishes, while the accumulated `AIMessageChunk`s are summed back into one
+`AIMessage` for tool-dispatch and cost accounting exactly as `ainvoke` would
+have returned.
+
 `decompose_plan_into_tasks` and `run_coder_task` are both plain, testable
 async functions with no LangGraph or real-Docker dependency -- they're
 exercised against a FakeRouter and a RecordingExecutorClient in
@@ -14,13 +21,21 @@ tests/unit/test_coder.py. The real end-to-end proof against a live
 workspace container lives in tests/integration/test_coder_end_to_end.py.
 """
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel
 
 from services.orchestrator.agents.llm import invoke_structured
 from services.orchestrator.executor_client import ExecutorClient, ExecutorClientError
 from services.orchestrator.model_router.router import ModelRouter
+from services.orchestrator.progress_buffer import add_progress
 
 CODER_ROLE = "coder"
 
@@ -59,20 +74,26 @@ _CODER_SYSTEM_PROMPT = (
 )
 
 
-def _build_tools(executor_client: ExecutorClient, project_id: str) -> list[BaseTool]:
+def _build_tools(executor_client: ExecutorClient, project_id: str, stack: str) -> list[BaseTool]:
     """Builds the Coder's three tools, bound to one project's workspace.
 
     Executor errors are caught and turned into a tool observation rather
     than raised, so the model's own next turn can see what went wrong and
     try a different approach within the same task attempt, before the
     graph node's outer retry budget is ever spent.
+
+    Args:
+        executor_client: The Executor client every tool call dispatches through.
+        project_id: The project whose workspace these tools operate in.
+        stack: The project's declared stack (ADR-028) -- selects the
+            Executor's workspace image and cache volume for every call.
     """
 
     @tool
     async def read_file(path: str) -> str:
         """Reads a file's contents from the project workspace."""
         try:
-            return await executor_client.read_file(project_id, path)
+            return await executor_client.read_file(project_id, path, stack=stack)
         except ExecutorClientError as exc:
             return f"error: {exc}"
 
@@ -80,7 +101,7 @@ def _build_tools(executor_client: ExecutorClient, project_id: str) -> list[BaseT
     async def write_file(path: str, content: str) -> str:
         """Writes content to a file in the project workspace, creating parent directories as needed."""
         try:
-            await executor_client.write_file(project_id, path, content)
+            await executor_client.write_file(project_id, path, content, stack=stack)
             return f"wrote {path}"
         except ExecutorClientError as exc:
             return f"error: {exc}"
@@ -89,7 +110,7 @@ def _build_tools(executor_client: ExecutorClient, project_id: str) -> list[BaseT
     async def run_command(command: list[str]) -> str:
         """Runs a command inside the project workspace container, given as an argv list, e.g. ["pytest", "-q"]."""
         try:
-            result = await executor_client.run_command(project_id, command)
+            result = await executor_client.run_command(project_id, command, stack=stack)
             return f"exit_code={result.exit_code}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         except ExecutorClientError as exc:
             return f"error: {exc}"
@@ -138,6 +159,7 @@ async def run_coder_task(
     project_id: str,
     task_description: str,
     max_steps: int = 10,
+    stack: str = "python",
 ) -> CoderTaskResult:
     """Runs a single task to completion (or exhausts max_steps) via native tool-calling.
 
@@ -148,6 +170,8 @@ async def run_coder_task(
         project_id: The project whose workspace this task operates in.
         task_description: The task to implement.
         max_steps: Safety cap on model turns before giving up.
+        stack: The project's declared stack (ADR-028) -- selects the
+            Executor's workspace image and cache volume for every tool call.
 
     Returns:
         A CoderTaskResult: success=True once the model returns a turn with no
@@ -159,7 +183,7 @@ async def run_coder_task(
         ProjectState's running totals.
     """
     llm = router.resolve(CODER_ROLE)
-    tools = _build_tools(executor_client, project_id)
+    tools = _build_tools(executor_client, project_id, stack)
     llm_with_tools = llm.bind_tools(tools)
     tools_by_name = {tool_fn.name: tool_fn for tool_fn in tools}
 
@@ -171,7 +195,13 @@ async def run_coder_task(
     total_cost = 0.0
 
     for _ in range(max_steps):
-        ai_message = await llm_with_tools.ainvoke(messages)
+        ai_message_chunk: AIMessageChunk | None = None
+        async for chunk in llm_with_tools.astream(messages):
+            if chunk.content:
+                add_progress(project_id, str(chunk.content))
+            ai_message_chunk = chunk if ai_message_chunk is None else ai_message_chunk + chunk
+        ai_message: AIMessage = ai_message_chunk
+
         total_cost += router.cost_usd(CODER_ROLE, ai_message.usage_metadata)
         messages.append(ai_message)
 

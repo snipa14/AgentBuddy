@@ -19,6 +19,7 @@ from services.orchestrator.registry.schemas import (
     CoverageGateMode,
     PrMode,
     ProjectRecord,
+    Stack,
 )
 from services.orchestrator.registry.store import load_registry, save_registry
 from services.orchestrator.registry.validation import validate_project_id
@@ -31,7 +32,7 @@ def register_greenfield(
     projects_root: Path,
     project_id: str,
     name: str,
-    stack: str,
+    stack: Stack,
     coverage_threshold: int = 80,
     pr_mode: PrMode = "manual",
     coverage_gate_mode: CoverageGateMode = DEFAULT_COVERAGE_GATE_MODE,
@@ -92,7 +93,7 @@ def register_brownfield_from_local_path(
     project_id: str,
     name: str,
     source_path: Path,
-    stack: str,
+    stack: Stack,
     coverage_threshold: int = 80,
     pr_mode: PrMode = "manual",
     coverage_gate_mode: CoverageGateMode = DEFAULT_COVERAGE_GATE_MODE,
@@ -161,7 +162,7 @@ def register_brownfield_from_git(
     project_id: str,
     name: str,
     git_remote: str,
-    stack: str,
+    stack: Stack,
     coverage_threshold: int = 80,
     pr_mode: PrMode = "manual",
     coverage_gate_mode: CoverageGateMode = DEFAULT_COVERAGE_GATE_MODE,

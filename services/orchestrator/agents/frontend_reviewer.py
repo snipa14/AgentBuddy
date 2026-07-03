@@ -61,7 +61,9 @@ class FrontendReviewResult(BaseModel):
     findings: list[FrontendFinding] = Field(default_factory=list)
 
 
-def _has_frontend_files(project_id: str, executor_client: ExecutorClient) -> bool:
+def _has_frontend_files(
+    project_id: str, executor_client: ExecutorClient, stack: str = "python"
+) -> bool:
     """Checks whether project_id contains frontend source files.
 
     Called from node_frontend_review, a plain sync node function with no
@@ -71,12 +73,13 @@ def _has_frontend_files(project_id: str, executor_client: ExecutorClient) -> boo
     Args:
         project_id: The project identifier.
         executor_client: The Executor client for listing files in the workspace.
+        stack: The project's declared stack -- selects the workspace image.
 
     Returns:
         True if any file with a frontend extension exists in the project root.
     """
     try:
-        entries = asyncio.run(executor_client.list_files(project_id, "."))
+        entries = asyncio.run(executor_client.list_files(project_id, ".", stack=stack))
     except Exception as exc:
         logger.warning(
             "project %s: failed to list files while checking for frontend files: %s",
@@ -91,6 +94,7 @@ async def review_frontend(
     executor_client: ExecutorClient,
     project_id: str,
     url: str = "http://localhost:5173",
+    stack: str = "python",
 ) -> tuple[str, list[dict], AIMessage | None]:
     """Reviews UI screenshots and returns a structured verdict with findings.
 
@@ -104,6 +108,9 @@ async def review_frontend(
             the workspace container.
         project_id: The project identifier (used in logging).
         url: The URL of the running dev server to capture.
+        stack: The project's declared stack -- selects the workspace image
+            and cache volume (ADR-028), and runs that stack's dependency
+            manifest install before the dev server is auto-started.
 
     Returns:
         A tuple of (verdict, findings, raw AIMessage) where verdict is
@@ -129,7 +136,7 @@ async def review_frontend(
     screenshots: list[tuple[str, str]] = []
     for label, width in breakpoints:
         result = await executor_client.take_screenshot(
-            project_id, url=url, auto_start_server=True, breakpoint_width=width
+            project_id, url=url, auto_start_server=True, breakpoint_width=width, stack=stack
         )
         if result.error:
             logger.warning(

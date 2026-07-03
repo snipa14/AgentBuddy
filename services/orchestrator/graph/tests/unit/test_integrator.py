@@ -31,24 +31,26 @@ class _RecordingExecutorClient:
         self.calls: list[tuple] = []
         self._diff_has_changes = diff_has_changes
 
-    async def read_file(self, project_id, path):
+    async def read_file(self, project_id, path, stack: str = "python"):
         self.calls.append(("read_file", project_id, path))
         if path not in self.files:
             raise ExecutorClientError(f"404: '{path}' not found")
         return self.files[path]
 
-    async def write_file(self, project_id, path, content):
+    async def write_file(self, project_id, path, content, stack: str = "python"):
         self.calls.append(("write_file", project_id, path, content))
         self.files[path] = content
         return True
 
-    async def run_command(self, project_id: str, command: list[str], timeout=None) -> CommandResult:
+    async def run_command(
+        self, project_id: str, command: list[str], timeout=None, stack: str = "python"
+    ) -> CommandResult:
         self.calls.append(("run_command", project_id, tuple(command)))
         if tuple(command[:3]) == ("git", "diff", "--cached"):
             return CommandResult(stdout="", stderr="", exit_code=1 if self._diff_has_changes else 0)
         return CommandResult(stdout="", stderr="", exit_code=0)
 
-    async def run_tests(self, project_id: str, framework: str = "pytest"):
+    async def run_tests(self, project_id: str, framework: str = "pytest", stack: str = "python"):
         self.calls.append(("run_tests", project_id, framework))
         return MagicMock(passed=3, failed=0, coverage_pct=100.0)
 

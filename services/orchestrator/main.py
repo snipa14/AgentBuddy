@@ -21,9 +21,8 @@ DEFAULT_SECRETS_DIR = Path("/run/secrets")
 
 def _build_router() -> ModelRouter:
     models_config = load_models_config(DEFAULT_MODELS_CONFIG_PATH)
-    client = httpx.AsyncClient()
     anthropic_api_key = (DEFAULT_SECRETS_DIR / "claude_api_key").read_text().strip()
-    return ModelRouter(models_config, client, anthropic_api_key=anthropic_api_key)
+    return ModelRouter(models_config, anthropic_api_key=anthropic_api_key)
 
 
 def main() -> None:

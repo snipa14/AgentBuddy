@@ -20,6 +20,7 @@ from services.executor.config import ExecutorConfig
 from services.executor.containers import (
     WORKSPACE_MOUNT_TARGET,
     WORKSPACE_UID,
+    clear_project_cache_volume,
     exec_in_container,
     workspace_container,
 )
@@ -46,6 +47,7 @@ def tool_run_command(
     project_id: str,
     command: list[str],
     timeout: int | None = None,
+    stack: str = "python",
 ) -> CommandResult:
     """Runs an arbitrary command inside a fresh workspace container for project_id.
 
@@ -56,13 +58,18 @@ def tool_run_command(
         command: The command to run, as an argv list (never a shell string).
         timeout: Seconds to allow before killing the container. Defaults to
             config.command_timeout_seconds.
+        stack: The project's declared stack -- selects the workspace image
+            and cache volume (ADR-028); also runs that stack's dependency
+            manifest check/install before *command* executes.
 
     Returns:
         A CommandResult with stdout, stderr, and exit_code.
     """
     effective_timeout = timeout if timeout is not None else config.command_timeout_seconds
     project_host_path = _project_host_path(config, project_id)
-    with workspace_container(client, config, project_host_path) as container:
+    with workspace_container(
+        client, config, project_host_path, stack=stack, project_id=project_id, install_dependencies=True
+    ) as container:
         return exec_in_container(container, command, effective_timeout)
 
 
@@ -71,6 +78,7 @@ def tool_read_file(
     config: ExecutorConfig,
     project_id: str,
     path: str,
+    stack: str = "python",
 ) -> str:
     """Reads a UTF-8 text file from within project_id's directory.
 
@@ -79,6 +87,7 @@ def tool_read_file(
         config: The Executor's runtime configuration.
         project_id: The project whose directory gets bind-mounted.
         path: A path relative to the project's root.
+        stack: The project's declared stack -- selects the workspace image.
 
     Returns:
         The file's decoded content.
@@ -89,7 +98,7 @@ def tool_read_file(
     """
     container_path = _container_path(path)
     project_host_path = _project_host_path(config, project_id)
-    with workspace_container(client, config, project_host_path) as container:
+    with workspace_container(client, config, project_host_path, stack=stack, project_id=project_id) as container:
         try:
             chunks, _ = container.get_archive(container_path)
         except NotFound as exc:
@@ -103,6 +112,7 @@ def tool_write_file(
     project_id: str,
     path: str,
     content: str,
+    stack: str = "python",
 ) -> bool:
     """Writes a UTF-8 text file into project_id's directory, creating parents as needed.
 
@@ -112,6 +122,7 @@ def tool_write_file(
         project_id: The project whose directory gets bind-mounted.
         path: A path relative to the project's root.
         content: The text to write.
+        stack: The project's declared stack -- selects the workspace image.
 
     Returns:
         True once the write has landed in the bind-mounted project directory.
@@ -122,7 +133,7 @@ def tool_write_file(
     container_path = _container_path(path)
     directory = os.path.dirname(container_path)
     project_host_path = _project_host_path(config, project_id)
-    with workspace_container(client, config, project_host_path) as container:
+    with workspace_container(client, config, project_host_path, stack=stack, project_id=project_id) as container:
         container.exec_run(["mkdir", "-p", directory])
         container.put_archive(
             directory, _build_single_file_tar(os.path.basename(container_path), content)
@@ -135,6 +146,7 @@ def tool_list_files(
     config: ExecutorConfig,
     project_id: str,
     path: str = ".",
+    stack: str = "python",
 ) -> list[FileEntry]:
     """Lists the immediate entries of a directory within project_id's directory.
 
@@ -143,6 +155,7 @@ def tool_list_files(
         config: The Executor's runtime configuration.
         project_id: The project whose directory gets bind-mounted.
         path: A directory path relative to the project's root.
+        stack: The project's declared stack -- selects the workspace image.
 
     Returns:
         A FileEntry per immediate child of path.
@@ -153,7 +166,7 @@ def tool_list_files(
     """
     container_path = _container_path(path)
     project_host_path = _project_host_path(config, project_id)
-    with workspace_container(client, config, project_host_path) as container:
+    with workspace_container(client, config, project_host_path, stack=stack, project_id=project_id) as container:
         result = exec_in_container(
             container,
             ["python3", "-c", _LIST_DIR_SNIPPET, container_path],
@@ -169,6 +182,7 @@ def tool_run_tests(
     config: ExecutorConfig,
     project_id: str,
     framework: str = "pytest",
+    stack: str = "python",
 ) -> TestResult:
     """Runs a project's test suite with coverage inside a fresh workspace container.
 
@@ -176,21 +190,32 @@ def tool_run_tests(
         client: A Docker SDK client.
         config: The Executor's runtime configuration.
         project_id: The project whose directory gets bind-mounted.
-        framework: Only "pytest" is supported for v1.
+        framework: "pytest" (default, coverage-parsed) or "npm" (runs
+            `npm test`; TestResult.coverage_pct is always None, since no
+            Node coverage report format is parsed yet).
+        stack: The project's declared stack -- selects the workspace image
+            and cache volume (ADR-028); also runs that stack's dependency
+            manifest check/install before the test command executes.
 
     Returns:
         A TestResult with passed/failed counts, coverage percentage (if
-        parseable from the report), and the raw combined output.
+        parseable from the report -- pytest only), and the raw combined
+        output.
 
     Raises:
-        ValueError: If framework isn't "pytest".
+        ValueError: If framework isn't "pytest" or "npm".
     """
-    if framework != "pytest":
+    if framework == "pytest":
+        command = ["python3", "-m", "pytest", "--cov=.", "--cov-report=term-missing", "-q"]
+    elif framework == "npm":
+        command = ["npm", "test"]
+    else:
         raise ValueError(f"unsupported test framework: {framework!r}")
 
     project_host_path = _project_host_path(config, project_id)
-    command = ["python3", "-m", "pytest", "--cov=.", "--cov-report=term-missing", "-q"]
-    with workspace_container(client, config, project_host_path) as container:
+    with workspace_container(
+        client, config, project_host_path, stack=stack, project_id=project_id, install_dependencies=True
+    ) as container:
         result = exec_in_container(container, command, config.command_timeout_seconds)
 
     combined_output = f"{result.stdout}\n{result.stderr}"
@@ -198,9 +223,37 @@ def tool_run_tests(
     return TestResult(
         passed=passed,
         failed=failed,
-        coverage_pct=_parse_coverage_pct(combined_output),
+        coverage_pct=_parse_coverage_pct(combined_output) if framework == "pytest" else None,
         report=combined_output,
     )
+
+
+def tool_clear_project_cache(
+    client: docker.DockerClient,
+    config: ExecutorConfig,
+    project_id: str,
+    stack: str,
+) -> bool:
+    """Empties a project's package-manager cache volume's contents.
+
+    Intended for use once a project is archived or removed from the
+    registry -- call this *before* deleting project_id's own directory from
+    disk (see containers.clear_project_cache_volume's docstring for why the
+    Docker volume object itself isn't deleted outright).
+
+    Args:
+        client: A Docker SDK client.
+        config: The Executor's runtime configuration.
+        project_id: The project whose cache volume should be cleared.
+        stack: The project's declared stack.
+
+    Returns:
+        True once the clear has completed (or was a no-op for a stack with
+        no registered cache directory).
+    """
+    project_host_path = _project_host_path(config, project_id)
+    clear_project_cache_volume(client, config, project_host_path, project_id, stack)
+    return True
 
 
 def _project_host_path(config: ExecutorConfig, project_id: str) -> Path:
@@ -336,6 +389,7 @@ def tool_take_screenshot(
     url: str = "http://localhost:5173",
     auto_start_server: bool = False,
     breakpoint_width: int = 1280,
+    stack: str = "python",
 ) -> ScreenshotResult:
     """Captures a screenshot of a web page running inside project_id's container.
 
@@ -354,6 +408,10 @@ def tool_take_screenshot(
         auto_start_server: Whether to attempt starting a dev server if none is
             listening on *url*.
         breakpoint_width: Target viewport width for responsive sizing.
+        stack: The project's declared stack -- selects the workspace image
+            and cache volume (ADR-028); also runs that stack's dependency
+            manifest check/install before the dev server is started, so
+            auto_start_server has installed dependencies to work with.
 
     Returns:
         A ScreenshotResult with base64-encoded PNG image data, or an error
@@ -368,7 +426,9 @@ def tool_take_screenshot(
         url, str(project_host_path), auto_start_flag, str(breakpoint_width),
     ]
 
-    with workspace_container(client, config, str(project_host_path)) as container:
+    with workspace_container(
+        client, config, project_host_path, stack=stack, project_id=project_id, install_dependencies=True
+    ) as container:
         result = exec_in_container(container, command, config.command_timeout_seconds)
 
     if result.exit_code == 0 and result.stdout.strip():

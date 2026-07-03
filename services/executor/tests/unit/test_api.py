@@ -201,12 +201,13 @@ def test_take_screenshot_returns_result(client, monkeypatch):
 def test_take_screenshot_passes_request_fields_through(client, monkeypatch):
     captured = {}
 
-    def _capture(client_, config, project_id, url, auto_start_server, breakpoint_width):
+    def _capture(client_, config, project_id, url, auto_start_server, breakpoint_width, stack):
         captured.update(
             project_id=project_id,
             url=url,
             auto_start_server=auto_start_server,
             breakpoint_width=breakpoint_width,
+            stack=stack,
         )
         return ScreenshotResult(image_b64="", error=None)
 
@@ -228,6 +229,7 @@ def test_take_screenshot_passes_request_fields_through(client, monkeypatch):
         "url": "http://localhost:3000",
         "auto_start_server": True,
         "breakpoint_width": 375,
+        "stack": "python",
     }
 
 
@@ -240,3 +242,34 @@ def test_take_screenshot_returns_400_on_value_error(client, monkeypatch):
     response = client.post("/take_screenshot", json={"project_id": "proj-1"})
 
     assert response.status_code == 400
+
+
+def test_clear_project_cache_returns_ok(client, monkeypatch):
+    captured = {}
+
+    def _capture(client_, config, project_id, stack):
+        captured.update(project_id=project_id, stack=stack)
+        return True
+
+    monkeypatch.setattr(api_module, "tool_clear_project_cache", _capture)
+
+    response = client.post(
+        "/clear_project_cache", json={"project_id": "proj-1", "stack": "node"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert captured == {"project_id": "proj-1", "stack": "node"}
+
+
+def test_clear_project_cache_returns_500_on_container_error(client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise ContainerExecutionError("boom")
+
+    monkeypatch.setattr(api_module, "tool_clear_project_cache", _raise)
+
+    response = client.post(
+        "/clear_project_cache", json={"project_id": "proj-1", "stack": "python"}
+    )
+
+    assert response.status_code == 500

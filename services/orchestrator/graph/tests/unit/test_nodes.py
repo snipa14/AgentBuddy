@@ -70,28 +70,28 @@ class _RecordingExecutorClient:
         self.test_result: ExecutorTestResult | None = None
         self.screenshot_results: list[ScreenshotResult] | None = None
 
-    async def read_file(self, project_id, path):
+    async def read_file(self, project_id, path, stack: str = "python"):
         self.calls.append(("read_file", project_id, path))
         if path not in self.files:
             raise ExecutorClientError(f"404: '{path}' not found")
         return self.files[path]
 
-    async def write_file(self, project_id, path, content):
+    async def write_file(self, project_id, path, content, stack: str = "python"):
         self.calls.append(("write_file", project_id, path, content))
         self.files[path] = content
         return True
 
-    async def list_files(self, project_id, path="."):
+    async def list_files(self, project_id, path=".", stack: str = "python"):
         self.calls.append(("list_files", project_id, path))
         return [FileEntry(name=name, is_dir=False) for name in self.files]
 
-    async def run_command(self, project_id, command, timeout=None):
+    async def run_command(self, project_id, command, timeout=None, stack: str = "python"):
         self.calls.append(("run_command", project_id, tuple(command)))
         if tuple(command[:3]) == ("git", "diff", "--cached"):
             return CommandResult(stdout="", stderr="", exit_code=1)  # has changes
         return CommandResult(stdout="", stderr="", exit_code=0)
 
-    async def run_tests(self, project_id: str, framework: str = "pytest"):
+    async def run_tests(self, project_id: str, framework: str = "pytest", stack: str = "python"):
         self.calls.append(("run_tests", project_id, framework))
         if self.test_result is not None:
             return self.test_result

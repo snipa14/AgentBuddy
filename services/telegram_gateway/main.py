@@ -14,6 +14,7 @@ from services.telegram_gateway.auth import AllowedUserMiddleware
 from services.telegram_gateway.bot import router
 from services.telegram_gateway.config import GatewayConfig
 from services.telegram_gateway.orchestrator_client import OrchestratorClient
+from services.telegram_gateway.progress_poller import ProgressPoller
 
 
 async def run(config: GatewayConfig) -> None:
@@ -31,7 +32,8 @@ async def run(config: GatewayConfig) -> None:
 
     async with httpx.AsyncClient() as client:
         orchestrator = OrchestratorClient(config.orchestrator_url, client)
-        await dispatcher.start_polling(bot, orchestrator=orchestrator)
+        poller = ProgressPoller(orchestrator, bot)
+        await dispatcher.start_polling(bot, orchestrator=orchestrator, poller=poller)
 
 
 def main() -> None:

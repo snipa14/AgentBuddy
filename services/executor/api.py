@@ -15,6 +15,7 @@ from services.executor.config import ExecutorConfig
 from services.executor.errors import CommandTimeoutError, ContainerExecutionError
 from services.executor.schemas import CommandResult, FileEntry, ScreenshotResult, TestResult
 from services.executor.tools import (
+    tool_clear_project_cache,
     tool_list_files,
     tool_read_file,
     tool_run_command,
@@ -30,6 +31,7 @@ class RunCommandRequest(BaseModel):
     project_id: str
     command: list[str]
     timeout: int | None = None
+    stack: str = "python"
 
 
 class ReadFileRequest(BaseModel):
@@ -37,6 +39,7 @@ class ReadFileRequest(BaseModel):
 
     project_id: str
     path: str
+    stack: str = "python"
 
 
 class ReadFileResponse(BaseModel):
@@ -51,6 +54,7 @@ class WriteFileRequest(BaseModel):
     project_id: str
     path: str
     content: str
+    stack: str = "python"
 
 
 class WriteFileResponse(BaseModel):
@@ -64,6 +68,7 @@ class ListFilesRequest(BaseModel):
 
     project_id: str
     path: str = "."
+    stack: str = "python"
 
 
 class ListFilesResponse(BaseModel):
@@ -77,6 +82,20 @@ class RunTestsRequest(BaseModel):
 
     project_id: str
     framework: str = "pytest"
+    stack: str = "python"
+
+
+class ClearProjectCacheRequest(BaseModel):
+    """Payload for POST /clear_project_cache."""
+
+    project_id: str
+    stack: str
+
+
+class ClearProjectCacheResponse(BaseModel):
+    """Response for POST /clear_project_cache."""
+
+    ok: bool
 
 
 def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
@@ -95,7 +114,12 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
     def run_command(request: RunCommandRequest) -> CommandResult:
         try:
             return tool_run_command(
-                client, config, request.project_id, request.command, request.timeout
+                client,
+                config,
+                request.project_id,
+                request.command,
+                request.timeout,
+                stack=request.stack,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -107,7 +131,9 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
     @app.post("/read_file", response_model=ReadFileResponse)
     def read_file(request: ReadFileRequest) -> ReadFileResponse:
         try:
-            content = tool_read_file(client, config, request.project_id, request.path)
+            content = tool_read_file(
+                client, config, request.project_id, request.path, stack=request.stack
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FileNotFoundError as exc:
@@ -117,7 +143,14 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
     @app.post("/write_file", response_model=WriteFileResponse)
     def write_file(request: WriteFileRequest) -> WriteFileResponse:
         try:
-            ok = tool_write_file(client, config, request.project_id, request.path, request.content)
+            ok = tool_write_file(
+                client,
+                config,
+                request.project_id,
+                request.path,
+                request.content,
+                stack=request.stack,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return WriteFileResponse(ok=ok)
@@ -125,7 +158,9 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
     @app.post("/list_files", response_model=ListFilesResponse)
     def list_files(request: ListFilesRequest) -> ListFilesResponse:
         try:
-            entries = tool_list_files(client, config, request.project_id, request.path)
+            entries = tool_list_files(
+                client, config, request.project_id, request.path, stack=request.stack
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ContainerExecutionError as exc:
@@ -135,7 +170,9 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
     @app.post("/run_tests", response_model=TestResult)
     def run_tests(request: RunTestsRequest) -> TestResult:
         try:
-            return tool_run_tests(client, config, request.project_id, request.framework)
+            return tool_run_tests(
+                client, config, request.project_id, request.framework, stack=request.stack
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -146,6 +183,7 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
         url: str = "http://localhost:5173"
         auto_start_server: bool = False
         breakpoint_width: int = 1280
+        stack: str = "python"
 
     @app.post("/take_screenshot", response_model=ScreenshotResult)
     def take_screenshot(request: TakeScreenshotRequest) -> ScreenshotResult:
@@ -157,8 +195,19 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
                 url=request.url,
                 auto_start_server=request.auto_start_server,
                 breakpoint_width=request.breakpoint_width,
+                stack=request.stack,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/clear_project_cache", response_model=ClearProjectCacheResponse)
+    def clear_project_cache(request: ClearProjectCacheRequest) -> ClearProjectCacheResponse:
+        try:
+            ok = tool_clear_project_cache(client, config, request.project_id, request.stack)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ContainerExecutionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return ClearProjectCacheResponse(ok=ok)
 
     return app

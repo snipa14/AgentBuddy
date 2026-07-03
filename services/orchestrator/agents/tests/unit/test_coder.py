@@ -21,6 +21,7 @@ from services.orchestrator.agents.coder import (
 )
 from services.orchestrator.agents.tests.unit.router_fakes import FakeRouter, structured, usage
 from services.orchestrator.executor_client import CommandResult, ExecutorClientError
+from services.orchestrator.progress_buffer import get_chunks_since
 
 TASK_LIST = _TaskList(
     tasks=[
@@ -49,18 +50,20 @@ class RecordingExecutorClient:
         self.files = dict(files or {})
         self.calls: list[tuple] = []
 
-    async def read_file(self, project_id: str, path: str) -> str:
+    async def read_file(self, project_id: str, path: str, stack: str = "python") -> str:
         self.calls.append(("read_file", project_id, path))
         if path not in self.files:
             raise ExecutorClientError(f"404: '{path}' not found")
         return self.files[path]
 
-    async def write_file(self, project_id: str, path: str, content: str) -> bool:
+    async def write_file(
+        self, project_id: str, path: str, content: str, stack: str = "python"
+    ) -> bool:
         self.calls.append(("write_file", project_id, path, content))
         self.files[path] = content
         return True
 
-    async def run_command(self, project_id, command, timeout=None):
+    async def run_command(self, project_id, command, timeout=None, stack: str = "python"):
         self.calls.append(("run_command", project_id, tuple(command)))
         return CommandResult(stdout="3 passed", stderr="", exit_code=0)
 
@@ -151,6 +154,17 @@ def test_run_coder_task_finishes_immediately_when_model_makes_no_tool_calls():
     assert result.success is True
     assert result.transcript == []
     assert executor.calls == []
+
+
+def test_run_coder_task_streams_partial_content_into_the_progress_buffer():
+    router = FakeRouter([AIMessage(content="working on it", tool_calls=[], usage_metadata=usage())])
+    executor = RecordingExecutorClient()
+
+    result = asyncio.run(run_coder_task(router, executor, "proj-stream", "trivial task"))
+
+    assert result.success is True
+    chunks = get_chunks_since("proj-stream")
+    assert "".join(chunk.text for chunk in chunks) == "working on it"
 
 
 def test_run_coder_task_dispatches_run_command_as_an_argv_list():

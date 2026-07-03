@@ -44,10 +44,14 @@ class _StubExecutorClient:
     output -- always reports a clean passing test run and a successful git
     command."""
 
-    async def run_tests(self, project_id: str, framework: str = "pytest") -> TestResult:
+    async def run_tests(
+        self, project_id: str, framework: str = "pytest", stack: str = "python"
+    ) -> TestResult:
         return TestResult(passed=1, failed=0, coverage_pct=100.0, report="1 passed")
 
-    async def run_command(self, project_id: str, command, timeout=None) -> CommandResult:
+    async def run_command(
+        self, project_id: str, command, timeout=None, stack: str = "python"
+    ) -> CommandResult:
         return CommandResult(stdout="", stderr="", exit_code=0)
 
 

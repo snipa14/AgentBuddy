@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="new-project")
     parser.add_argument("project_id")
     parser.add_argument("--name", required=True)
-    parser.add_argument("--stack", required=True)
+    parser.add_argument("--stack", required=True, choices=["python", "node"])
     parser.add_argument("--coverage-threshold", type=int, default=80)
     parser.add_argument(
         "--pr-mode", choices=["auto", "manual", "configurable"], default="manual"
@@ -74,7 +74,7 @@ def _start_intake(project_id: str, description: str) -> None:
 
     models_config = load_models_config(Path("config/models.yaml"))
     anthropic_api_key = Path("/run/secrets/claude_api_key").read_text().strip()
-    router = ModelRouter(models_config, httpx.AsyncClient(), anthropic_api_key=anthropic_api_key)
+    router = ModelRouter(models_config, anthropic_api_key=anthropic_api_key)
     config = OrchestratorConfig.from_env()
     checkpointer = build_sqlite_checkpointer(config.memory_db_path)
     memory_conn = build_global_memory_connection(config.memory_db_path)

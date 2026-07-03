@@ -18,6 +18,8 @@ from services.orchestrator.executor_client import ExecutorClient
 
 logger = logging.getLogger(__name__)
 
+_FRAMEWORK_FOR_STACK: dict[str, str] = {"python": "pytest", "node": "npm"}
+
 _COVERAGE_ROW_RE = re.compile(
     r"^(?P<file>\S+\.py)[ \t]+\d+[ \t]+\d+[ \t]+\d+%"
     r"(?:[ \t]+(?P<missing>[\d,\- \t]+?))?[ \t]*$",
@@ -201,12 +203,14 @@ async def run_tests(
     project_id: str,
     threshold: int = 80,
     gate_mode: str = "hard",
+    stack: str = "python",
 ) -> TestOutcome:
     """Runs the test suite inside a workspace container and evaluates results.
 
-    Calls the Executor's run_tests endpoint (pytest + coverage.py), parses
-    the output into pass/fail counts and coverage percentage, then evaluates
-    against the configured threshold using the specified gate mode.
+    Calls the Executor's run_tests endpoint (pytest + coverage.py, or `npm
+    test` for a node-stack project -- ADR-028), parses the output into
+    pass/fail counts and coverage percentage, then evaluates against the
+    configured threshold using the specified gate mode.
 
     Args:
         executor_client: The Executor client for running tests in the workspace.
@@ -214,12 +218,19 @@ async def run_tests(
         threshold: Minimum required test coverage percentage (0-100).
         gate_mode: Coverage enforcement mode — 'hard' fails below threshold,
             'soft' warns but passes, 'configurable' uses project config.
+        stack: The project's declared stack -- selects the test framework
+            (pytest for python, `npm test` for node) and the Executor's
+            workspace image/cache volume. A node-stack project has no
+            coverage report parsed yet, so its coverage_pct is always None
+            (the gate treats missing coverage data as passing, regardless
+            of gate_mode -- see _evaluate_gate).
 
     Returns:
         A TestOutcome with verdict ('pass' or 'fail'), coverage_pct, and all
         result fields populated from the Executor's response.
     """
-    result = await executor_client.run_tests(project_id)
+    framework = _FRAMEWORK_FOR_STACK.get(stack, "pytest")
+    result = await executor_client.run_tests(project_id, framework=framework, stack=stack)
 
     outcome = _evaluate_gate(
         passed=result.passed,

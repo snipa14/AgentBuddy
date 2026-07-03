@@ -3,7 +3,11 @@
 Every container this module creates satisfies the full checklist in
 .claude/rules/security.md: non-root user, all capabilities dropped,
 no-new-privileges, project-scoped bind mount only, an isolated network,
-explicit CPU/memory limits, and guaranteed removal in a finally block.
+explicit CPU/memory limits, and guaranteed removal in a finally block. From
+Phase 17 onward a container may also get a second mount: a per-project,
+per-stack named cache volume for its package manager (`pip`/`npm`) --
+still zero host paths outside `projects/<id>/`, since a Docker-managed named
+volume isn't a host path, and it's only ever used for that cache directory.
 """
 
 import concurrent.futures
@@ -15,7 +19,7 @@ import docker
 from docker.errors import APIError, ImageNotFound
 from docker.models.containers import Container
 
-from services.executor.config import ExecutorConfig
+from services.executor.config import ExecutorConfig, image_for_stack
 from services.executor.errors import CommandTimeoutError, ContainerExecutionError
 from services.executor.schemas import CommandResult
 
@@ -23,12 +27,33 @@ WORKSPACE_MOUNT_TARGET = "/workspace"
 WORKSPACE_UID = 1000
 WORKSPACE_IDLE_COMMAND = ["sleep", "infinity"]
 
+CACHE_VOLUME_TARGET_FOR_STACK: dict[str, str] = {
+    "python": "/home/sandbox/.cache/pip",
+    "node": "/home/sandbox/.npm",
+}
+
+MANIFEST_INSTALL_COMMANDS_FOR_STACK: dict[str, list[tuple[str, list[str]]]] = {
+    "python": [
+        ("requirements.txt", ["pip", "install", "--user", "-r", "requirements.txt"]),
+        ("pyproject.toml", ["pip", "install", "--user", "-e", "."]),
+    ],
+    "node": [("package.json", ["npm", "install"])],
+}
+
+
+def cache_volume_name(project_id: str) -> str:
+    """Builds the per-project package-manager cache volume's name (ADR-028)."""
+    return f"foundry-cache-{project_id}"
+
 
 @contextmanager
 def workspace_container(
     client: docker.DockerClient,
     config: ExecutorConfig,
     project_host_path: Path,
+    stack: str = "python",
+    project_id: str | None = None,
+    install_dependencies: bool = False,
 ) -> Iterator[Container]:
     """Starts a locked-down, idle workspace container and guarantees its removal.
 
@@ -37,6 +62,22 @@ def workspace_container(
         config: The Executor's runtime configuration.
         project_host_path: The *host* absolute path of the project directory
             to bind-mount, read-write, as the container's only mount.
+        stack: The project's declared stack -- selects both the workspace
+            image (image_for_stack) and, if one is registered, a per-project
+            named cache volume for that stack's package manager (ADR-028).
+            A stack with no registered cache directory gets no second mount
+            at all, only the project bind mount.
+        project_id: The project this container belongs to, used to name its
+            cache volume (`foundry-cache-{project_id}`). Defaults to
+            project_host_path's final path segment, which is always the
+            project_id for a path built by services.executor.paths.
+        install_dependencies: If True, and stack has a registered manifest
+            file (`requirements.txt`, `package.json`), checks for it inside
+            the container once it starts and runs the matching install
+            command before yielding -- see _install_dependencies_if_present.
+            False for tool calls that don't execute project code
+            (read_file/write_file/list_files), so a plain file operation
+            never pays an install check's cost.
 
     Yields:
         The running Container, ready for exec_run/get_archive/put_archive calls.
@@ -45,18 +86,24 @@ def workspace_container(
         ContainerExecutionError: If the container fails to start or its
             configured image is missing.
     """
+    if project_id is None:
+        project_id = project_host_path.name
+
+    volumes = {str(project_host_path): {"bind": WORKSPACE_MOUNT_TARGET, "mode": "rw"}}
+    cache_target = CACHE_VOLUME_TARGET_FOR_STACK.get(stack)
+    if cache_target is not None:
+        volumes[cache_volume_name(project_id)] = {"bind": cache_target, "mode": "rw"}
+
     container: Container | None = None
     try:
         try:
             container = client.containers.run(
-                config.workspace_image,
+                image_for_stack(stack, config),
                 WORKSPACE_IDLE_COMMAND,
                 detach=True,
                 user=f"{WORKSPACE_UID}:{WORKSPACE_UID}",
                 working_dir=WORKSPACE_MOUNT_TARGET,
-                volumes={
-                    str(project_host_path): {"bind": WORKSPACE_MOUNT_TARGET, "mode": "rw"}
-                },
+                volumes=volumes,
                 cap_drop=["ALL"],
                 security_opt=["no-new-privileges:true"],
                 network=config.network_name,
@@ -65,6 +112,8 @@ def workspace_container(
             )
         except (APIError, ImageNotFound) as exc:
             raise ContainerExecutionError(f"failed to start workspace container: {exc}") from exc
+        if install_dependencies:
+            _install_dependencies_if_present(container, stack, config.command_timeout_seconds)
         yield container
     finally:
         if container is not None:
@@ -72,6 +121,81 @@ def workspace_container(
                 container.remove(force=True)
             except APIError:
                 pass
+
+
+def _install_dependencies_if_present(container: Container, stack: str, timeout: int) -> None:
+    """Runs stack's package-manager install command for the first manifest file found.
+
+    Both the presence check and the install itself run *inside* the
+    container, never via the Executor's own filesystem -- the Executor's own
+    process has no direct access to a project's bind-mounted host path
+    (ExecutorConfig.from_env's docstring), only the container being created
+    does. Relies on the stack's cache volume (already mounted by
+    workspace_container) for the package manager's own cache-hit behavior to
+    make repeat installs fast when the manifest hasn't changed.
+
+    A stack may have more than one recognized manifest (Python's
+    `requirements.txt` and `pyproject.toml`); the first one found, checked in
+    the order registered in MANIFEST_INSTALL_COMMANDS_FOR_STACK, wins -- a
+    project with both is expected to be the rare exception, not the norm.
+
+    Args:
+        container: An already-running workspace container.
+        stack: The project's declared stack.
+        timeout: Seconds to allow each check/install command.
+    """
+    for manifest_file, install_command in MANIFEST_INSTALL_COMMANDS_FOR_STACK.get(stack, []):
+        check = exec_in_container(container, ["test", "-f", manifest_file], timeout)
+        if check.exit_code == 0:
+            exec_in_container(container, install_command, timeout)
+            return
+
+
+def clear_project_cache_volume(
+    client: docker.DockerClient,
+    config: ExecutorConfig,
+    project_host_path: Path,
+    project_id: str,
+    stack: str,
+) -> None:
+    """Empties a project's package-manager cache volume's contents.
+
+    Intended to run alongside a project's other cleanup once it's archived
+    or removed from the registry (TODO.md Phase 17), *before* project_id's
+    directory itself is deleted from disk (this still needs project_host_path
+    to exist, since it goes through the normal workspace_container() bind
+    mount).
+
+    Docker's `/volumes/*` endpoints are deliberately unreachable through
+    docker-socket-proxy (`VOLUMES=0`, .claude/rules/security.md) -- actually
+    deleting the named volume object would need that permission widened,
+    which is exactly the kind of proxy-boundary change security.md says
+    needs an ARCHITECTURE.md Decision Log entry first, not a quiet
+    workaround here. Instead, this reclaims the disk space a stale cache
+    volume holds by mounting it (via the same locked-down
+    workspace_container() every other tool call uses) and clearing its
+    contents from the inside -- a /containers/create + exec_run round trip,
+    both already within the proxy's existing CONTAINERS=1/EXEC=1 allowance.
+    The volume object itself stays registered with Docker, empty, ready for
+    reuse if the project is ever revived.
+
+    Args:
+        client: A Docker SDK client.
+        config: The Executor's runtime configuration.
+        project_host_path: The project's *host* directory (workspace_container's
+            bind-mount source) -- must still exist on disk when this runs.
+        project_id: The project whose cache volume should be cleared.
+        stack: The project's declared stack -- selects which cache directory
+            (if any) to clear inside the volume. A stack with no registered
+            cache directory is a no-op.
+    """
+    if stack not in CACHE_VOLUME_TARGET_FOR_STACK:
+        return
+    cache_target = CACHE_VOLUME_TARGET_FOR_STACK[stack]
+    with workspace_container(client, config, project_host_path, stack=stack, project_id=project_id) as container:
+        exec_in_container(
+            container, ["find", cache_target, "-mindepth", "1", "-delete"], config.command_timeout_seconds
+        )
 
 
 def exec_in_container(container: Container, command: list[str], timeout: int) -> CommandResult:

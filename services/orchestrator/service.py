@@ -22,6 +22,9 @@ from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.build import build_project_graph
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.model_router.router import ModelRouter
+from services.orchestrator.progress_buffer import clear_progress
+
+_TERMINAL_PHASES = frozenset({"done", "blocked"})
 
 
 class UnknownProjectError(Exception):
@@ -117,9 +120,12 @@ class OrchestratorService:
         snapshot = self._graph.get_state(self._config(project_id))
         if not snapshot.values:
             raise UnknownProjectError(project_id)
+        phase = snapshot.values["phase"]
+        if phase in _TERMINAL_PHASES:
+            clear_progress(project_id)
         return {
             "project_id": project_id,
-            "phase": snapshot.values["phase"],
+            "phase": phase,
             "pending_approval": snapshot.values["pending_approval"],
         }
 

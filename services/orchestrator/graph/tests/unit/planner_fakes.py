@@ -11,7 +11,7 @@ changes.
 
 from dataclasses import dataclass
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from pydantic import BaseModel
 
 from services.orchestrator.agents.coder import CoderTask, _TaskList
@@ -25,6 +25,24 @@ class ScriptedStructured:
 
     parsed: BaseModel | None
     raw: AIMessage
+
+
+def _split_into_chunks(message: AIMessage) -> list[AIMessageChunk]:
+    """Splits a scripted `AIMessage` into `AIMessageChunk`s for `.astream()`
+    (mirrors agents/tests/unit/router_fakes.py's copy -- see that module's
+    docstring for why the two fake tiers don't share fixtures)."""
+    if message.tool_calls:
+        return [
+            AIMessageChunk(
+                content=message.content,
+                tool_calls=message.tool_calls,
+                usage_metadata=message.usage_metadata,
+            )
+        ]
+    words = message.content.split(" ") if message.content else [""]
+    chunks = [AIMessageChunk(content=f"{word} ") for word in words[:-1]]
+    chunks.append(AIMessageChunk(content=words[-1], usage_metadata=message.usage_metadata))
+    return chunks
 
 
 def _usage(input_tokens: int = 10, output_tokens: int = 10) -> dict:
@@ -86,6 +104,13 @@ class FakeChatModel:
         if isinstance(response, ScriptedStructured):
             raise TypeError("scripted a ScriptedStructured response for a plain ainvoke() call")
         return response
+
+    async def astream(self, messages, **kwargs):
+        response = self._pop()
+        if isinstance(response, ScriptedStructured):
+            raise TypeError("scripted a ScriptedStructured response for a plain astream() call")
+        for chunk in _split_into_chunks(response):
+            yield chunk
 
     def with_structured_output(self, schema, include_raw: bool = False):
         return _FakeStructuredRunnable(self, schema, include_raw)

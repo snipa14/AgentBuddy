@@ -11,6 +11,7 @@ from services.telegram_gateway.orchestrator_client import OrchestratorClient
 def _mock_httpx_client() -> MagicMock:
     client = MagicMock(spec=httpx.AsyncClient)
     client.post = AsyncMock()
+    client.get = AsyncMock()
     return client
 
 
@@ -34,3 +35,34 @@ def test_resume_posts_decision_to_thread_specific_url():
     args, kwargs = client.post.call_args
     assert args[0] == "http://orchestrator:8000/resume/thread-1"
     assert kwargs["json"] == {"decision": "approve"}
+
+
+def test_stream_gets_since_seq_as_a_query_param():
+    client = _mock_httpx_client()
+    orchestrator = OrchestratorClient("http://orchestrator:8000", client)
+
+    asyncio.run(orchestrator.stream("project-1", since_seq=3))
+
+    args, kwargs = client.get.call_args
+    assert args[0] == "http://orchestrator:8000/stream/project-1"
+    assert kwargs["params"] == {"since_seq": 3}
+
+
+def test_stream_defaults_since_seq_to_everything():
+    client = _mock_httpx_client()
+    orchestrator = OrchestratorClient("http://orchestrator:8000", client)
+
+    asyncio.run(orchestrator.stream("project-1"))
+
+    _, kwargs = client.get.call_args
+    assert kwargs["params"] == {"since_seq": -1}
+
+
+def test_get_status_gets_the_project_specific_url():
+    client = _mock_httpx_client()
+    orchestrator = OrchestratorClient("http://orchestrator:8000/", client)
+
+    asyncio.run(orchestrator.get_status("project-1"))
+
+    args, _ = client.get.call_args
+    assert args[0] == "http://orchestrator:8000/status/project-1"

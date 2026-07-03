@@ -30,7 +30,7 @@ class RecordingExecutorClient:
         self.screenshots = screenshots or [ScreenshotResult(image_b64="iVBORw0KGgo=", error=None)]
         self.calls: list[tuple] = []
 
-    async def list_files(self, project_id: str, path: str = ".") -> list[FileEntry]:
+    async def list_files(self, project_id: str, path: str = ".", stack: str = "python") -> list[FileEntry]:
         self.calls.append(("list_files", project_id, path))
         return self.files
 

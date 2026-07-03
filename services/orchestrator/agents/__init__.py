@@ -1,47 +1,12 @@
-"""Specialist agent modules, one per LangGraph node role (ARCHITECTURE.md §4.7)."""
+"""Specialist agent modules, one per LangGraph node role (ARCHITECTURE.md §4.7).
 
-from services.orchestrator.agents.coder import (
-    CoderTask,
-    CoderTaskResult,
-    decompose_plan_into_tasks,
-    run_coder_task,
-)
-from services.orchestrator.agents.memory_curator import (
-    CurationResult,
-    CuratedGlobalMemory,
-    curate_and_store_phase,
-    curate_phase,
-)
-from services.orchestrator.agents.planner import (
-    CritiqueFinding,
-    CritiqueResult,
-    DraftPlan,
-    IntakeResult,
-    InterviewTurn,
-    apply_critique,
-    ask_clarifying_questions,
-    critique_plan,
-    draft_plan,
-    run_intake_to_final_plan,
-)
-
-__all__ = [
-    "CoderTask",
-    "CoderTaskResult",
-    "CritiqueFinding",
-    "CritiqueResult",
-    "CurationResult",
-    "CuratedGlobalMemory",
-    "DraftPlan",
-    "IntakeResult",
-    "InterviewTurn",
-    "apply_critique",
-    "ask_clarifying_questions",
-    "critique_plan",
-    "curate_and_store_phase",
-    "curate_phase",
-    "decompose_plan_into_tasks",
-    "draft_plan",
-    "run_coder_task",
-    "run_intake_to_final_plan",
-]
+Deliberately re-exports nothing -- importing services.orchestrator.agents.coder
+(or any other LangChain-backed submodule) requires langchain_core to already
+be installed, and re-exporting its symbols here would make that a transitive
+requirement of importing *any* submodule of this package, including ones
+with no LangChain dependency of their own (agents.tester, most of
+agents.reviewer). This is the same class of bug Phase 6 fixed in
+services/orchestrator/__init__.py for langgraph -- import the specific
+submodule you need instead (e.g. `from services.orchestrator.agents.coder
+import CoderTask`).
+"""

@@ -24,6 +24,8 @@ from services.executor.tools import tool_read_file, tool_run_command, tool_write
 
 WORKSPACE_IMAGE = "foundry/workspace-python:3.12"
 DOCKERFILE_DIR = "images/workspace-python"
+NODE_WORKSPACE_IMAGE = "foundry/workspace-node:20"
+NODE_DOCKERFILE_DIR = "images/workspace-node"
 TEST_NETWORK_NAME = "foundry_workspace_test"
 
 pytestmark = pytest.mark.integration
@@ -72,6 +74,27 @@ def executor_config(tmp_path_factory, workspace_image, workspace_network):
 def project_id(executor_config):
     new_project_id = f"proj-{uuid.uuid4().hex[:8]}"
     (executor_config.projects_host_path / new_project_id).mkdir()
+    return new_project_id
+
+
+@pytest.fixture(scope="session")
+def node_workspace_image(docker_client):
+    try:
+        docker_client.images.get(NODE_WORKSPACE_IMAGE)
+    except docker.errors.ImageNotFound:
+        docker_client.images.build(path=NODE_DOCKERFILE_DIR, tag=NODE_WORKSPACE_IMAGE)
+    return NODE_WORKSPACE_IMAGE
+
+
+@pytest.fixture
+def node_project_id(executor_config, node_workspace_image):
+    new_project_id = f"proj-{uuid.uuid4().hex[:8]}"
+    project_dir = executor_config.projects_host_path / new_project_id
+    project_dir.mkdir()
+    (project_dir / "package.json").write_text(
+        '{"name": "sandbox-check", "version": "1.0.0",'
+        ' "dependencies": {"left-pad": "1.3.0"}}'
+    )
     return new_project_id
 
 
@@ -131,6 +154,22 @@ def test_run_command_is_capped_by_the_configured_memory_limit(
     )
 
     assert result.exit_code != 0
+
+
+def test_node_stack_run_command_installs_dependencies_from_package_json(
+    docker_client, executor_config, node_project_id
+):
+    result = tool_run_command(
+        docker_client,
+        executor_config,
+        node_project_id,
+        ["node", "-e", "console.log(require('left-pad')('7', 3, '0'))"],
+        timeout=120,
+        stack="node",
+    )
+
+    assert result.exit_code == 0
+    assert "007" in result.stdout
 
 
 def test_command_exceeding_timeout_raises_and_leaves_no_orphaned_container(

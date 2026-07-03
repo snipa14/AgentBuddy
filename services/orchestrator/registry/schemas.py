@@ -10,6 +10,7 @@ ProjectMode = Literal["greenfield", "brownfield"]
 PrMode = Literal["auto", "manual", "configurable"]
 CoverageGateMode = Literal["hard", "soft", "configurable"]
 ProjectStatus = Literal["active", "archived"]
+Stack = Literal["python", "node"]
 
 DEFAULT_COVERAGE_GATE_MODE: CoverageGateMode = "hard"
 
@@ -22,7 +23,7 @@ class ProjectRecord(BaseModel):
     mode: ProjectMode
     path: str
     git_remote: str | None = None
-    stack: str
+    stack: Stack
     coverage_threshold: int = DEFAULT_COVERAGE_THRESHOLD
     pr_mode: PrMode = "manual"
     coverage_gate_mode: CoverageGateMode = DEFAULT_COVERAGE_GATE_MODE
