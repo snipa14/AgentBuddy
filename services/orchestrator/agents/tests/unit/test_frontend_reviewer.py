@@ -37,7 +37,7 @@ class RecordingExecutorClient:
         return self.files
 
     async def take_screenshot(self, project_id, url="http://localhost:5173", **kwargs):
-        self.calls.append(("take_screenshot", project_id, url))
+        self.calls.append(("take_screenshot", project_id, url, kwargs))
         return self.screenshots.pop(0) if self.screenshots else ScreenshotResult(image_b64="", error="no screenshots")
 
 
@@ -119,7 +119,7 @@ def test_review_frontend_approves_when_no_screenshots():
     """When all screenshots fail, the agent returns approve with no findings."""
     executor = RecordingExecutorClient(
         files=["index.html"],
-        screenshots=[ScreenshotResult(image_b64="", error="no_pil")],
+        screenshots=[ScreenshotResult(image_b64="", error="no_playwright")],
     )
     router = FakeRouter([_APPROVE_SCREENSHOT_RESPONSE])
 
@@ -161,6 +161,53 @@ def test_review_frontend_calls_take_screenshot():
     asyncio.run(review_frontend(router, executor, "proj-1"))
 
     assert len(executor.calls) == 2  # take_screenshot (desktop) + take_screenshot (mobile)
+
+
+def test_review_frontend_auto_starts_the_dev_server():
+    """Every take_screenshot call runs in a fresh, ephemeral container (no
+    server is ever already listening), so auto_start_server must be True on
+    every call or screenshots can never succeed against a real project."""
+    executor = RecordingExecutorClient(
+        files=["index.html"],
+        screenshots=[
+            ScreenshotResult(image_b64="iVBORw0KGgo=", error=None),
+            ScreenshotResult(image_b64="iVBORw0KGgo=", error=None),
+        ],
+    )
+    router = FakeRouter([_APPROVE_SCREENSHOT_RESPONSE])
+
+    asyncio.run(review_frontend(router, executor, "proj-1"))
+
+    take_screenshot_calls = [c for c in executor.calls if c[0] == "take_screenshot"]
+    assert len(take_screenshot_calls) == 2
+    for call in take_screenshot_calls:
+        assert call[3]["auto_start_server"] is True
+
+
+def test_review_frontend_sends_a_system_prompt_with_the_images():
+    """The model must actually be told what to look for and what format to
+    respond in -- a request with only bare image labels and no instructions
+    can't reliably produce a parseable ## Verdict / ## Findings response."""
+    executor = RecordingExecutorClient(
+        files=["index.html"],
+        screenshots=[
+            ScreenshotResult(image_b64="iVBORw0KGgo=", error=None),
+            ScreenshotResult(image_b64="iVBORw0KGgo=", error=None),
+        ],
+    )
+    router = FakeRouter([_APPROVE_SCREENSHOT_RESPONSE])
+
+    asyncio.run(review_frontend(router, executor, "proj-1"))
+
+    sent_request = router.provider.requests[0]
+    system_messages = [m for m in sent_request.messages if m.role == "system"]
+    assert len(system_messages) == 1
+    assert "layout breakage" in system_messages[0].content.lower()
+    assert "## verdict" in system_messages[0].content.lower()
+
+    image_messages = [m for m in sent_request.messages if m.images]
+    assert len(image_messages) == 1
+    assert len(image_messages[0].images) == 2
 
 
 # -- _build_findings_text tests ----------------------------------------------------

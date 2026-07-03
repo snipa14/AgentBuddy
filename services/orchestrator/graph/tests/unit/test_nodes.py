@@ -9,13 +9,14 @@ end in `test_graph_end_to_end.py` instead. `node_coder` never calls
 
 from langgraph.graph import END
 
-from services.orchestrator.executor_client import ExecutorClientError
+from services.orchestrator.executor_client import ExecutorClientError, FileEntry, ScreenshotResult
 from services.orchestrator.executor_client import TestResult as ExecutorTestResult
 from services.orchestrator.graph.nodes import (
     COST_THRESHOLD_USD_STUB,
     MAX_TASK_ATTEMPTS,
     node_coder,
     node_done,
+    node_frontend_review,
     node_intake,
     node_planner_ask,
     node_planner_critique,
@@ -25,6 +26,7 @@ from services.orchestrator.graph.nodes import (
     node_testing,
     route_after_coder,
     route_after_cost_check,
+    route_after_frontend_review,
     route_after_plan_wait,
     route_after_planner_ask,
     route_after_reviewer,
@@ -48,6 +50,7 @@ class _RecordingExecutorClient:
         self.files = dict(files or {})
         self.calls: list[tuple] = []
         self.test_result: ExecutorTestResult | None = None
+        self.screenshot_results: list[ScreenshotResult] | None = None
 
     async def read_file(self, project_id, path):
         self.calls.append(("read_file", project_id, path))
@@ -60,12 +63,22 @@ class _RecordingExecutorClient:
         self.files[path] = content
         return True
 
+    async def list_files(self, project_id, path="."):
+        self.calls.append(("list_files", project_id, path))
+        return [FileEntry(name=name, is_dir=False) for name in self.files]
+
     async def run_tests(self, project_id: str, framework: str = "pytest"):
         self.calls.append(("run_tests", project_id, framework))
         if self.test_result is not None:
             return self.test_result
         # Default: all tests pass with 100% coverage
         return ExecutorTestResult(passed=3, failed=0, coverage_pct=100.0, report="")
+
+    async def take_screenshot(self, project_id, url="http://localhost:5173", **kwargs):
+        self.calls.append(("take_screenshot", project_id, url, kwargs))
+        if self.screenshot_results:
+            return self.screenshot_results.pop(0)
+        return ScreenshotResult(image_b64="iVBORw0KGgo=", error=None)
 
 
 def test_node_intake_advances_to_planning():
@@ -459,3 +472,61 @@ def test_route_after_reviewer_loops_back_to_coder_on_changes_requested():
     state["phase"] = "implementing"
 
     assert route_after_reviewer(state) == "coder"
+
+
+# -- Frontend Reviewer node tests -----------------------------------------------
+
+_APPROVE_FRONTEND_RESPONSE = "## Verdict\napprove\n\n## Findings\n"
+
+_FRONTEND_CHANGES_REQUESTED_RESPONSE = (
+    "## Verdict\nchanges-requested\n\n"
+    "## Findings\n"
+    "- line: 5, severity: critical, message: text unreadable on dark background\n"
+)
+
+
+def test_node_frontend_review_skips_when_no_frontend_files():
+    router = FakeRouter([])
+    executor = _RecordingExecutorClient(files={"main.py": "print('hi')"})
+    state = new_project_state("proj-1")
+
+    update = node_frontend_review(state, router, executor)
+
+    assert update == {"phase": "testing"}
+    assert not any(call[0] == "take_screenshot" for call in executor.calls)
+
+
+def test_node_frontend_review_approves_and_advances_to_testing():
+    router = FakeRouter([_APPROVE_FRONTEND_RESPONSE])
+    executor = _RecordingExecutorClient(files={"index.html": "<html></html>"})
+
+    update = node_frontend_review(new_project_state("proj-1"), router, executor)
+
+    assert update == {"phase": "testing"}
+
+
+def test_node_frontend_review_requests_changes_and_routes_back_to_coder():
+    router = FakeRouter([_FRONTEND_CHANGES_REQUESTED_RESPONSE])
+    executor = _RecordingExecutorClient(files={"index.html": "<html></html>"})
+
+    update = node_frontend_review(new_project_state("proj-1"), router, executor)
+
+    assert update["phase"] == "implementing"
+    assert len(update["messages"]) == 1
+    content = update["messages"][0].content
+    assert "text unreadable on dark background" in content
+    assert content.count("Frontend review feedback:") == 1
+
+
+def test_route_after_frontend_review_advances_to_cost_check_when_approved():
+    state = new_project_state("proj-1")
+    state["phase"] = "testing"
+
+    assert route_after_frontend_review(state) == "cost_check"
+
+
+def test_route_after_frontend_review_loops_back_to_coder_on_changes_requested():
+    state = new_project_state("proj-1")
+    state["phase"] = "implementing"
+
+    assert route_after_frontend_review(state) == "coder"

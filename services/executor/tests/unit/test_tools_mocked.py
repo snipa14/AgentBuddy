@@ -21,6 +21,7 @@ from services.executor.tools import (
     tool_read_file,
     tool_run_command,
     tool_run_tests,
+    tool_take_screenshot,
     tool_write_file,
 )
 
@@ -175,3 +176,41 @@ def test_tool_run_tests_parses_passed_failed_and_coverage(mock_client, mock_cont
     assert result.failed == 1
     assert result.coverage_pct == 90.0
     assert pytest_output in result.report
+
+
+def test_tool_take_screenshot_returns_image_b64_on_success(mock_client, mock_container, config):
+    mock_container.exec_run.return_value = (0, (b"iVBORw0KGgo=\n", b""))
+
+    result = tool_take_screenshot(mock_client, config, "proj-1")
+
+    assert result.image_b64 == "iVBORw0KGgo="
+    assert result.error is None
+
+
+def test_tool_take_screenshot_returns_error_on_nonzero_exit(mock_client, mock_container, config):
+    mock_container.exec_run.return_value = (1, (b"", b"ERROR:url_not_ready\n"))
+
+    result = tool_take_screenshot(mock_client, config, "proj-1")
+
+    assert result.image_b64 == ""
+    assert "url_not_ready" in result.error
+
+
+def test_tool_take_screenshot_returns_error_on_empty_stdout(mock_client, mock_container, config):
+    mock_container.exec_run.return_value = (0, (b"", b""))
+
+    result = tool_take_screenshot(mock_client, config, "proj-1")
+
+    assert result.image_b64 == ""
+    assert result.error == "screenshot failed"
+
+
+def test_tool_take_screenshot_passes_auto_start_flag_to_the_container_command(
+    mock_client, mock_container, config
+):
+    mock_container.exec_run.return_value = (0, (b"iVBORw0KGgo=\n", b""))
+
+    tool_take_screenshot(mock_client, config, "proj-1", auto_start_server=True)
+
+    command = mock_container.exec_run.call_args.args[0]
+    assert "true" in command

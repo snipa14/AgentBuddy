@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 import services.executor.api as api_module
 from services.executor.config import ExecutorConfig
 from services.executor.errors import CommandTimeoutError, ContainerExecutionError
-from services.executor.schemas import CommandResult, FileEntry, TestResult
+from services.executor.schemas import CommandResult, FileEntry, ScreenshotResult, TestResult
 
 
 @pytest.fixture
@@ -181,5 +181,62 @@ def test_run_tests_returns_400_on_unsupported_framework(client, monkeypatch):
     monkeypatch.setattr(api_module, "tool_run_tests", _raise)
 
     response = client.post("/run_tests", json={"project_id": "proj-1", "framework": "jest"})
+
+    assert response.status_code == 400
+
+
+def test_take_screenshot_returns_result(client, monkeypatch):
+    monkeypatch.setattr(
+        api_module,
+        "tool_take_screenshot",
+        lambda *args, **kwargs: ScreenshotResult(image_b64="iVBORw0KGgo=", error=None),
+    )
+
+    response = client.post("/take_screenshot", json={"project_id": "proj-1"})
+
+    assert response.status_code == 200
+    assert response.json() == {"image_b64": "iVBORw0KGgo=", "error": None}
+
+
+def test_take_screenshot_passes_request_fields_through(client, monkeypatch):
+    captured = {}
+
+    def _capture(client_, config, project_id, url, auto_start_server, breakpoint_width):
+        captured.update(
+            project_id=project_id,
+            url=url,
+            auto_start_server=auto_start_server,
+            breakpoint_width=breakpoint_width,
+        )
+        return ScreenshotResult(image_b64="", error=None)
+
+    monkeypatch.setattr(api_module, "tool_take_screenshot", _capture)
+
+    response = client.post(
+        "/take_screenshot",
+        json={
+            "project_id": "proj-1",
+            "url": "http://localhost:3000",
+            "auto_start_server": True,
+            "breakpoint_width": 375,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "project_id": "proj-1",
+        "url": "http://localhost:3000",
+        "auto_start_server": True,
+        "breakpoint_width": 375,
+    }
+
+
+def test_take_screenshot_returns_400_on_value_error(client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise ValueError("bad request")
+
+    monkeypatch.setattr(api_module, "tool_take_screenshot", _raise)
+
+    response = client.post("/take_screenshot", json={"project_id": "proj-1"})
 
     assert response.status_code == 400

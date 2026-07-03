@@ -300,7 +300,7 @@ def node_frontend_review(
         findings_text = _build_findings_text(findings)
         return {
             "phase": "implementing",
-            "messages": [AIMessage(content=f"Frontend review feedback:\n{findings_text}")],
+            "messages": [AIMessage(content=findings_text)],
         }
 
     logger.info("project %s: frontend reviewer approved all changes", state["project_id"])

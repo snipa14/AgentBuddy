@@ -11,12 +11,16 @@ deeper. Uses base64-encoded images in CompletionMessage for vision support.
 
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from services.orchestrator.agents.parsing import bullet_lines, split_sections
-from services.orchestrator.executor_client import ExecutorClient, ScreenshotResult
+from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.model_router.router import ModelRouter
+from services.orchestrator.model_router.schemas import (
+    CompletionMessage,
+    CompletionRequest,
+    ImageContent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +48,9 @@ _FRONTEND_EXTENSIONS = {".html", ".css", ".js", ".ts", ".jsx", ".tsx", ".vue", "
 def _has_frontend_files(project_id: str, executor_client: ExecutorClient) -> bool:
     """Checks whether project_id contains frontend source files.
 
-    Runs the async list_files call inside a ThreadPoolExecutor so it can be
-    used from sync node functions and routing predicates without conflicting
-    with an outer asyncio.run() context.
+    Called from node_frontend_review, a plain sync node function with no
+    event loop of its own already running, so a direct asyncio.run() is safe
+    here (ADR-019's synchronous-node pattern).
 
     Args:
         project_id: The project identifier.
@@ -56,35 +60,14 @@ def _has_frontend_files(project_id: str, executor_client: ExecutorClient) -> boo
         True if any file with a frontend extension exists in the project root.
     """
     try:
-        with ThreadPoolExecutor() as pool:
-            future = pool.submit(
-                _async_run,
-                lambda: executor_client.list_files(project_id, "."),
-            )
-            entries = future.result()
-    except Exception:
+        entries = asyncio.run(executor_client.list_files(project_id, "."))
+    except Exception as exc:
+        logger.warning(
+            "project %s: failed to list files while checking for frontend files: %s",
+            project_id, exc,
+        )
         return False
     return any(Path(e.name).suffix.lower() in _FRONTEND_EXTENSIONS for e in entries)
-
-
-def _async_run(coro_factory):
-    """Runs a coroutine created by coro_factory() inside a ThreadPoolExecutor thread."""
-    return asyncio.run(coro_factory())
-
-
-def _build_image_message(screenshots: list[tuple[str, str]]) -> dict:
-    """Builds a user message with text prompt and attached images.
-
-    Args:
-        screenshots: A list of (label, base64_data) tuples for each screenshot.
-
-    Returns:
-        A dict with 'text' and 'images' keys suitable for the frontend review.
-    """
-    parts = ["You are reviewing screenshots of a web application.\n\n"]
-    for label, _ in screenshots:
-        parts.append(f"[{label}]\n")
-    return {"system": _FRONTEND_SYSTEM_PROMPT, "user": "\n".join(parts)}
 
 
 async def review_frontend(
@@ -117,54 +100,44 @@ async def review_frontend(
     """
     provider = router.resolve("frontend_reviewer")
 
-    # Take screenshots at multiple breakpoints
+    # Take screenshots at multiple breakpoints. Each take_screenshot call runs
+    # inside a fresh, ephemeral workspace container (ARCHITECTURE.md §4.3), so
+    # nothing is ever already listening at *url* -- auto_start_server=True is
+    # required for a screenshot to ever succeed against a real project.
     breakpoints: list[tuple[str, int]] = [
         ("desktop", 1280),
         ("mobile", 375),
     ]
-    screenshot_results: list[ScreenshotResult] = []
+    screenshots: list[tuple[str, str]] = []
     for label, width in breakpoints:
         result = await executor_client.take_screenshot(
-            project_id, url=url, breakpoint_width=width
+            project_id, url=url, auto_start_server=True, breakpoint_width=width
         )
         if result.error:
             logger.warning(
                 "project %s: screenshot (%s) failed: %s", project_id, label, result.error
             )
         else:
-            screenshot_results.append(result)
+            screenshots.append((label, result.image_b64))
 
-    if not screenshot_results:
-        logger.warning("project %s: no screenshots captured, skipping frontend review")
+    if not screenshots:
+        logger.warning(
+            "project %s: no screenshots captured, skipping frontend review", project_id
+        )
         return "approve", []
 
-    # Build the vision request with base64-encoded images
-    images = []
-    for i, sr in enumerate(screenshot_results):
-        images.append(("Screenshot {i}".format(i=i), sr.image_b64))
-
-    messages_data = _build_image_message(images)
-
-    # Encode images into CompletionMessage format
-    from services.orchestrator.model_router.schemas import (
-        CompletionMessage,
-        ImageContent,
-        CompletionRequest,
-    )
-
-    image_msgs = []
-    for label, b64 in images:
-        image_msgs.append(
+    request = CompletionRequest(
+        messages=[
+            CompletionMessage(role="system", content=_FRONTEND_SYSTEM_PROMPT),
             CompletionMessage(
                 role="user",
-                content=label,
-                images=[ImageContent(data=b64)],
-            )
-        )
-
-    response = await provider.complete(
-        CompletionRequest(messages=image_msgs)
+                content="Screenshots attached, in order: "
+                + ", ".join(label for label, _ in screenshots),
+                images=[ImageContent(data=b64) for _, b64 in screenshots],
+            ),
+        ]
     )
+    response = await provider.complete(request)
 
     verdict, findings = _parse_frontend_result(response.content)
     logger.info(

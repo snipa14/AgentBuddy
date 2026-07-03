@@ -303,17 +303,21 @@ try:
     if not ok:
         print("ERROR:url_not_ready", file=sys.stderr)
         sys.exit(1)
-    req = urllib.request.Request(url, headers={"User-Agent": f"Mozilla/5.0 (X11; Linux x86_64) Foundry-Snapshot/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = resp.read()
-    import io, PIL.Image
-    img = PIL.Image.open(io.BytesIO(data))
-    img = img.resize((breakpoint_w, int(img.height * breakpoint_w / img.width)))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    print(base64.b64encode(buf.getvalue()).decode())
+
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+        page = browser.new_page(viewport={"width": breakpoint_w, "height": 900})
+        try:
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            png_bytes = page.screenshot(full_page=True)
+        finally:
+            browser.close()
+
+    print(base64.b64encode(png_bytes).decode())
 except ImportError:
-    print("ERROR:no_pil", file=sys.stderr)
+    print("ERROR:no_playwright", file=sys.stderr)
     sys.exit(1)
 except Exception as exc:
     print(f"ERROR:{exc}", file=sys.stderr)
@@ -335,11 +339,12 @@ def tool_take_screenshot(
 ) -> ScreenshotResult:
     """Captures a screenshot of a web page running inside project_id's container.
 
-    Uses Python's urllib + Pillow inside the workspace container to fetch the
-    page at *url*, resize it to *breakpoint_width* height, and return it as a
-    base64-encoded PNG. If *auto_start_server* is True and no server is yet
-    listening on *url*, attempts to start one from project_dir using common
-    dev-server commands (npm run dev, npx vite, etc.).
+    Launches headless Chromium via Playwright inside the workspace container
+    (ADR-024), navigates to *url* at a viewport of *breakpoint_width* pixels
+    wide, and returns a full-page screenshot as a base64-encoded PNG. If
+    *auto_start_server* is True and no server is yet listening on *url*,
+    attempts to start one from project_dir using common dev-server commands
+    (npm run dev, npx vite, etc.) first.
 
     Args:
         client: A Docker SDK client.
@@ -352,7 +357,8 @@ def tool_take_screenshot(
 
     Returns:
         A ScreenshotResult with base64-encoded PNG image data, or an error
-        message if the capture failed (e.g. no PIL/Pillow installed).
+        message if the capture failed (e.g. Playwright/Chromium not
+        installed, or the page never became reachable).
     """
     project_host_path = _project_host_path(config, project_id)
     auto_start_flag = str(auto_start_server).lower()

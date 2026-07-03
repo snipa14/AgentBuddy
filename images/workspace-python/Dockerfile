@@ -14,7 +14,18 @@ RUN apt-get update \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir pytest pytest-cov
+RUN pip install --no-cache-dir pytest pytest-cov playwright
+
+# Headless Chromium + its OS-level dependencies, for tool_take_screenshot's
+# real page-rendering step (Phase 12, ADR-024) -- fetching a URL's raw bytes
+# and decoding them as an image file (the original approach) only works if
+# the URL already serves an image; an actual HTML/CSS/JS page needs a real
+# rendering engine. Installed to a world-readable path since the browser is
+# launched at runtime by the non-root `sandbox` user created below, not by
+# whichever user this RUN step executes as.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/ms-playwright
 
 # Strip setuid/setgid bits from every binary in the image. cap_drop=["ALL"]
 # at the container level already neutralizes these, but a build-time image
