@@ -13,12 +13,13 @@ from pydantic import BaseModel
 
 from services.executor.config import ExecutorConfig
 from services.executor.errors import CommandTimeoutError, ContainerExecutionError
-from services.executor.schemas import CommandResult, FileEntry, TestResult
+from services.executor.schemas import CommandResult, FileEntry, ScreenshotResult, TestResult
 from services.executor.tools import (
     tool_list_files,
     tool_read_file,
     tool_run_command,
     tool_run_tests,
+    tool_take_screenshot,
     tool_write_file,
 )
 
@@ -135,6 +136,28 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
     def run_tests(request: RunTestsRequest) -> TestResult:
         try:
             return tool_run_tests(client, config, request.project_id, request.framework)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    class TakeScreenshotRequest(BaseModel):
+        """Payload for POST /take_screenshot."""
+
+        project_id: str
+        url: str = "http://localhost:5173"
+        auto_start_server: bool = False
+        breakpoint_width: int = 1280
+
+    @app.post("/take_screenshot", response_model=ScreenshotResult)
+    def take_screenshot(request: TakeScreenshotRequest) -> ScreenshotResult:
+        try:
+            return tool_take_screenshot(
+                client,
+                config,
+                request.project_id,
+                url=request.url,
+                auto_start_server=request.auto_start_server,
+                breakpoint_width=request.breakpoint_width,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

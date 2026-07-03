@@ -22,6 +22,8 @@ ONE_TASK_RESPONSE = "## Tasks\nDo the trivial thing\n"
 
 CODER_DONE_RESPONSE = "## Action\ndone\n"
 
+REVIEWER_APPROVE_RESPONSE = "## Verdict\napprove\n\n## Findings\n"
+
 
 class ScriptedProvider:
     """Returns one canned response per call, in order."""
@@ -56,10 +58,12 @@ def fast_track_router(rounds: int = 1) -> FakeRouter:
     reporting "done" -- so the Coder's ExecutorClient is never actually
     called (safe to pass a placeholder for tests that don't care about it).
 
+    Each round now also includes a reviewer approve response after the coder.
+
     Args:
-        rounds: How many full Planner+Coder passes (one per project started
-            through this router) to script -- each pass consumes exactly
-            the five responses above, in order.
+        rounds: How many full Planner+Coder+Reviewer passes (one per project
+            started through this router) to script -- each pass consumes exactly
+            the six responses below, in order.
     """
     responses = [
         READY_RESPONSE,
@@ -67,5 +71,6 @@ def fast_track_router(rounds: int = 1) -> FakeRouter:
         NO_FINDINGS_CRITIQUE_RESPONSE,
         ONE_TASK_RESPONSE,
         CODER_DONE_RESPONSE,
+        REVIEWER_APPROVE_RESPONSE,
     ] * rounds
     return FakeRouter(responses)

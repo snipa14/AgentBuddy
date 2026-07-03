@@ -7,6 +7,7 @@ from services.orchestrator.model_router.errors import ProviderRequestError
 from services.orchestrator.model_router.schemas import (
     CompletionRequest,
     CompletionResult,
+    ImageContent,
     TokenUsage,
 )
 
@@ -51,7 +52,7 @@ class AnthropicProvider:
         Raises:
             ProviderRequestError: If the API call fails or returns a non-2xx status.
         """
-        system, messages = _split_system_message(request)
+        system, messages = _build_messages(request)
         payload: dict[str, object] = {
             "model": self._model,
             "max_tokens": request.max_tokens,
@@ -94,19 +95,43 @@ class AnthropicProvider:
         )
 
 
-def _split_system_message(
-    request: CompletionRequest,
-) -> tuple[str | None, list[dict[str, str]]]:
-    """Splits a system message (if any) out of a completion request's messages.
+def _image_block(img: ImageContent) -> dict[str, object]:
+    """Converts an ImageContent model into Anthropic's image content block."""
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": img.media_type,
+            "data": img.data,
+        },
+    }
 
-    The Anthropic Messages API takes the system prompt as a separate top-level
-    field rather than as a message with role "system".
+
+def _build_messages(request: CompletionRequest) -> tuple[str | None, list[dict]]:
+    """Builds the Anthropic API message payload from a completion request.
+
+    Splits system messages out. A message with no images keeps its plain
+    string `content` (the Anthropic Messages API accepts either a string or
+    a content-block array); a message with images is upgraded to the
+    multi-content block array format so the image(s) can be attached.
+
+    Args:
+        request: The completion request containing messages with optional images.
+
+    Returns:
+        A tuple of (system_prompt, formatted_messages) where system_prompt is
+        None when no system message was present, and formatted_messages is a
+        list ready to be JSON-serialized for the Anthropic Messages API.
     """
     system: str | None = None
-    messages: list[dict[str, str]] = []
+    messages: list[dict] = []
     for message in request.messages:
         if message.role == "system":
             system = message.content
+        elif message.images:
+            content_parts: list[dict | str] = [message.content]
+            content_parts.extend(_image_block(img) for img in message.images)
+            messages.append({"role": message.role, "content": content_parts})
         else:
             messages.append({"role": message.role, "content": message.content})
     return system, messages

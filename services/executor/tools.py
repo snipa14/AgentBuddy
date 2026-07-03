@@ -25,7 +25,7 @@ from services.executor.containers import (
 )
 from services.executor.errors import ContainerExecutionError
 from services.executor.paths import resolve_project_path
-from services.executor.schemas import CommandResult, FileEntry, TestResult
+from services.executor.schemas import CommandResult, FileEntry, ScreenshotResult, TestResult
 
 _PYTEST_SUMMARY_RE = re.compile(r"(?P<count>\d+)\s+(?P<outcome>passed|failed|error|errors)")
 _COVERAGE_TOTAL_RE = re.compile(r"^TOTAL\s+.*\s(\d+)%\s*$", re.MULTILINE)
@@ -256,3 +256,117 @@ def _parse_coverage_pct(output: str) -> float | None:
     """Parses the TOTAL coverage percentage from a coverage.py term report, if present."""
     match = _COVERAGE_TOTAL_RE.search(output)
     return float(match.group(1)) if match else None
+
+
+_TOOL_TAKE_SCREENSHOT_PY = r"""
+import base64, subprocess, sys, time, urllib.request
+
+url = sys.argv[1]
+project_dir = sys.argv[2] if len(sys.argv) > 2 else ""
+auto_start = sys.argv[3].lower() == "true" if len(sys.argv) > 3 else False
+breakpoint_w = int(sys.argv[4]) if len(sys.argv) > 4 else 1280
+
+def wait_for_url(max_wait=30):
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        try:
+            urllib.request.urlopen(url, timeout=2)
+            return True
+        except Exception:
+            time.sleep(0.5)
+    return False
+
+server_proc = None
+if auto_start and project_dir:
+    scripts = [
+        ("npm", ["run", "dev"]),
+        ("npx", ["vite", "--port", "5173"]),
+        ("npx", ["next", "dev", "-p", "3000"]),
+        ("python3", ["-m", "http.server", "8000"]),
+    ]
+    for exe, cmd in scripts:
+        try:
+            server_proc = subprocess.Popen(
+                [exe] + cmd, cwd=project_dir,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            if wait_for_url():
+                break
+            server_proc.terminate()
+            server_proc.wait()
+            server_proc = None
+        except FileNotFoundError:
+            continue
+
+try:
+    ok = wait_for_url(15)
+    if not ok:
+        print("ERROR:url_not_ready", file=sys.stderr)
+        sys.exit(1)
+    req = urllib.request.Request(url, headers={"User-Agent": f"Mozilla/5.0 (X11; Linux x86_64) Foundry-Snapshot/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = resp.read()
+    import io, PIL.Image
+    img = PIL.Image.open(io.BytesIO(data))
+    img = img.resize((breakpoint_w, int(img.height * breakpoint_w / img.width)))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    print(base64.b64encode(buf.getvalue()).decode())
+except ImportError:
+    print("ERROR:no_pil", file=sys.stderr)
+    sys.exit(1)
+except Exception as exc:
+    print(f"ERROR:{exc}", file=sys.stderr)
+    sys.exit(1)
+finally:
+    if server_proc and server_proc.poll() is None:
+        server_proc.terminate()
+        server_proc.wait(timeout=5)
+"""
+
+
+def tool_take_screenshot(
+    client: docker.DockerClient,
+    config: ExecutorConfig,
+    project_id: str,
+    url: str = "http://localhost:5173",
+    auto_start_server: bool = False,
+    breakpoint_width: int = 1280,
+) -> ScreenshotResult:
+    """Captures a screenshot of a web page running inside project_id's container.
+
+    Uses Python's urllib + Pillow inside the workspace container to fetch the
+    page at *url*, resize it to *breakpoint_width* height, and return it as a
+    base64-encoded PNG. If *auto_start_server* is True and no server is yet
+    listening on *url*, attempts to start one from project_dir using common
+    dev-server commands (npm run dev, npx vite, etc.).
+
+    Args:
+        client: A Docker SDK client.
+        config: The Executor's runtime configuration.
+        project_id: The project whose directory gets bind-mounted.
+        url: The URL to capture (e.g. http://localhost:5173).
+        auto_start_server: Whether to attempt starting a dev server if none is
+            listening on *url*.
+        breakpoint_width: Target viewport width for responsive sizing.
+
+    Returns:
+        A ScreenshotResult with base64-encoded PNG image data, or an error
+        message if the capture failed (e.g. no PIL/Pillow installed).
+    """
+    project_host_path = _project_host_path(config, project_id)
+    auto_start_flag = str(auto_start_server).lower()
+
+    command = [
+        "python3", "-c", _TOOL_TAKE_SCREENSHOT_PY,
+        url, str(project_host_path), auto_start_flag, str(breakpoint_width),
+    ]
+
+    with workspace_container(client, config, str(project_host_path)) as container:
+        result = exec_in_container(container, command, config.command_timeout_seconds)
+
+    if result.exit_code == 0 and result.stdout.strip():
+        return ScreenshotResult(image_b64=result.stdout.strip())
+
+    error_msg = result.stderr.strip() or result.stdout.strip() or "screenshot failed"
+    return ScreenshotResult(image_b64="", error=error_msg)

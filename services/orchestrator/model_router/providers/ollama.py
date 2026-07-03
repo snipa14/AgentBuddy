@@ -4,7 +4,10 @@ import httpx
 
 from services.orchestrator.model_router.capabilities import Capability
 from services.orchestrator.model_router.errors import ProviderRequestError
-from services.orchestrator.model_router.schemas import CompletionRequest, CompletionResult
+from services.orchestrator.model_router.schemas import (
+    CompletionRequest,
+    CompletionResult,
+)
 
 
 class OllamaProvider:
@@ -44,12 +47,16 @@ class OllamaProvider:
         Raises:
             ProviderRequestError: If the API call fails or returns a non-2xx status.
         """
+        messages: list[dict] = []
+        for message in request.messages:
+            msg: dict[str, object] = {"role": message.role, "content": message.content}
+            if message.images:
+                msg["images"] = [img.data for img in message.images]
+            messages.append(msg)
+
         payload = {
             "model": self._model,
-            "messages": [
-                {"role": message.role, "content": message.content}
-                for message in request.messages
-            ],
+            "messages": messages,
             "stream": False,
             "options": {"temperature": request.temperature},
         }

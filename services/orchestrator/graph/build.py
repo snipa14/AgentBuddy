@@ -12,6 +12,7 @@ from services.orchestrator.graph.nodes import (
     node_cost_check,
     node_cost_wait,
     node_done,
+    node_frontend_review,
     node_intake,
     node_merge_wait,
     node_plan_wait,
@@ -19,14 +20,17 @@ from services.orchestrator.graph.nodes import (
     node_planner_critique,
     node_planner_draft,
     node_planner_wait,
+    node_reviewer,
     node_task_decomposition,
     node_testing,
     route_after_coder,
     route_after_cost_check,
     route_after_cost_wait,
+    route_after_frontend_review,
     route_after_merge_wait,
     route_after_plan_wait,
     route_after_planner_ask,
+    route_after_reviewer,
 )
 from services.orchestrator.graph.state import ProjectState
 from services.orchestrator.model_router.router import ModelRouter
@@ -39,19 +43,22 @@ def build_project_graph(
 
     Node chain: intake -> planner_ask <-> [planner_wait self-loop] ->
     planner_draft -> planner_critique -> plan_wait -> task_decomposition ->
-    coder [self-loop: next task or retry] -> cost_check -> [cost_wait] ->
-    testing -> merge_wait -> done, with every human-in-the-loop gate
-    implemented as a real `interrupt()` call (ADR-009 for cost/merge; the
-    Planner's interview and final approval gate are Phase 8; the Coder's
-    retry budget, Phase 9, never interrupts at all -- see graph/nodes.py's
-    module docstring).
+    coder [self-loop: next task or retry] -> reviewer [changes-requested loops
+    back to coder; approve advances] -> cost_check -> [cost_wait] -> testing
+    (runs pytest + coverage.py, enforces gate) -> merge_wait -> done, with
+    every human-in-the-loop gate implemented as a real `interrupt()` call
+    (ADR-009 for cost/merge; the Planner's interview and final approval gate
+    are Phase 8; the Coder's retry budget, Phase 9, never interrupts at all --
+    see graph/nodes.py's module docstring).
 
     Args:
         checkpointer: The checkpoint saver backing thread persistence.
-        router: The ModelRouter every LLM-backed node (Planner, Coder)
+        router: The ModelRouter every LLM-backed node (Planner, Coder, Reviewer)
             resolves its role from.
         executor_client: The Executor client the Coder dispatches
-            read_file/write_file/run_command actions through.
+            read_file/write_file/run_command actions through, the Reviewer uses
+            to read file contents for review, and the Tester uses to run pytest
+            inside a workspace container.
 
     Returns:
         A compiled graph ready for `.invoke()`/`.get_state()` calls keyed by
@@ -70,9 +77,18 @@ def build_project_graph(
     builder.add_node(
         "coder", functools.partial(node_coder, router=router, executor_client=executor_client)
     )
+    builder.add_node(
+        "reviewer", functools.partial(node_reviewer, router=router, executor_client=executor_client)
+    )
+    builder.add_node(
+        "frontend_review",
+        functools.partial(node_frontend_review, router=router, executor_client=executor_client),
+    )
     builder.add_node("cost_check", node_cost_check)
     builder.add_node("cost_wait", node_cost_wait)
-    builder.add_node("testing", node_testing)
+    builder.add_node(
+        "testing", functools.partial(node_testing, executor_client=executor_client)
+    )
     builder.add_node("merge_wait", node_merge_wait)
     builder.add_node("done", node_done)
 
@@ -91,7 +107,19 @@ def build_project_graph(
     )
     builder.add_edge("task_decomposition", "coder")
     builder.add_conditional_edges(
-        "coder", route_after_coder, {"coder": "coder", "cost_check": "cost_check", END: END}
+        "coder",
+        route_after_coder,
+        {"coder": "coder", "reviewer": "reviewer", "cost_check": "cost_check", END: END},
+    )
+    builder.add_conditional_edges(
+        "reviewer",
+        route_after_reviewer,
+        {"coder": "coder", "frontend_review": "frontend_review"},
+    )
+    builder.add_conditional_edges(
+        "frontend_review",
+        route_after_frontend_review,
+        {"coder": "coder", "cost_check": "cost_check"},
     )
     builder.add_conditional_edges(
         "cost_check", route_after_cost_check, {"cost_wait": "cost_wait", "testing": "testing"}

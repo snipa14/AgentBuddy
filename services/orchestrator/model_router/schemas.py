@@ -5,11 +5,25 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class ImageContent(BaseModel):
+    """A base64-encoded image attached to a message for vision-capable providers."""
+
+    data: str = Field(description="Base64-encoded image bytes")
+    media_type: str = Field(
+        default="image/png",
+        description="MIME type of the image (e.g. 'image/png', 'image/jpeg')",
+    )
+
+
 class CompletionMessage(BaseModel):
     """A single message in a completion request's conversation history."""
 
     role: Literal["system", "user", "assistant"]
     content: str
+    images: list[ImageContent] = Field(
+        default_factory=list,
+        description="Base64-encoded images for vision-capable providers",
+    )
 
 
 class CompletionRequest(BaseModel):

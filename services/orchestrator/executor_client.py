@@ -40,6 +40,13 @@ class TestResult(BaseModel):
     report: str
 
 
+class ScreenshotResult(BaseModel):
+    """The outcome of a take_screenshot call inside a workspace container."""
+
+    image_b64: str
+    error: str | None = None
+
+
 class ExecutorClient:
     """Wraps the Executor's five typed tool endpoints."""
 
@@ -104,6 +111,41 @@ class ExecutorClient:
         payload = {"project_id": project_id, "framework": framework}
         data = await self._post("/run_tests", payload)
         return TestResult.model_validate(data)
+
+    async def take_screenshot(
+        self,
+        project_id: str,
+        url: str = "http://localhost:5173",
+        auto_start_server: bool = False,
+        breakpoint_width: int = 1280,
+    ) -> ScreenshotResult:
+        """Calls POST /take_screenshot.
+
+        Captures a screenshot of a web page running inside the workspace
+        container and returns it as base64-encoded PNG data.
+
+        Args:
+            project_id: The project whose workspace container to use.
+            url: The URL to capture (e.g. http://localhost:5173).
+            auto_start_server: Whether to attempt starting a dev server if
+                none is listening on *url*.
+            breakpoint_width: Target viewport width for responsive sizing.
+
+        Returns:
+            A ScreenshotResult with base64-encoded PNG image data, or an
+            error message if the capture failed.
+
+        Raises:
+            ExecutorClientError: If the Executor returns a non-2xx response.
+        """
+        payload = {
+            "project_id": project_id,
+            "url": url,
+            "auto_start_server": auto_start_server,
+            "breakpoint_width": breakpoint_width,
+        }
+        data = await self._post("/take_screenshot", payload)
+        return ScreenshotResult.model_validate(data)
 
     async def _post(self, path: str, payload: dict) -> dict:
         response = await self._client.post(f"{self._base_url}{path}", json=payload)

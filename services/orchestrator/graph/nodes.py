@@ -1,10 +1,10 @@
 """Nodes for the per-project subgraph (ARCHITECTURE.md §4.7, §6.1-6.2).
 
-Reviewer/Tester agents (later phases) still replace the `node_testing`
-stub; the Planner (Phase 8) and Coder (Phase 9) already replace what used
-to be single stub "planning"/"implementing" nodes with real interview ->
-draft -> critique -> approval and task-decomposition -> implement -> retry
-flows.
+The Planner (Phase 8), Coder (Phase 9), Reviewer (Phase 10), and Tester
+(Phase 11) agents all replace what used to be single stub "planning"/
+"implementing"/"testing" nodes with real flows: interview -> draft -> critique
+-> approval, task-decomposition -> implement -> retry, review -> approve/revise,
+and pytest + coverage gate.
 
 Every human-in-the-loop gate is split into two nodes -- a "check"/producer
 node that decides what to show the human and commits the `phase`/
@@ -29,17 +29,19 @@ sends control back to `node_planner_ask` for the next round -- each round
 is its own separately-checkpointed node execution, so no LLM call is ever
 replayed.
 
-`node_coder` is different: it never calls `interrupt()` at all (the Coder
-is fully autonomous within its own retry budget -- see MAX_TASK_ATTEMPTS),
-so it's a single self-looping node with no "wait" counterpart, looping back
-to itself via `route_after_coder` for either the next task or a retry of
-the current one.
+`node_coder` and `node_reviewer` are different: they never call `interrupt()`
+at all (fully autonomous within their own retry budgets), so they're single
+self-looping nodes with no "wait" counterpart, looping back to themselves via
+`route_after_coder`/`route_after_reviewer` for either the next task or a
+revision of the current one.
 
-LLM calls happen inside `services.orchestrator.agents.planner`/`coder`,
-which are plain `async def` and independently testable without LangGraph.
-These node functions stay synchronous (matching every other node in this
-module) and bridge to that async layer with `asyncio.run()`, rather than
-making the whole graph async just for the nodes that need an LLM (ADR-019).
+LLM calls happen inside `services.orchestrator.agents.planner`/`coder`/
+`reviewer`, which are plain `async def` and independently testable without
+LangGraph. The Tester agent (`tester.py`) makes no LLM calls — it only talks
+to the Executor over HTTP. These node functions stay synchronous (matching
+every other node in this module) and bridge to that async layer with
+`asyncio.run()`, rather than making the whole graph async just for the nodes
+that need an LLM or network call (ADR-019).
 """
 
 import asyncio
@@ -57,6 +59,13 @@ from services.orchestrator.agents.planner import (
     ask_clarifying_questions,
     critique_plan,
     draft_plan,
+)
+from services.orchestrator.agents.tester import TestOutcome, _evaluate_gate, run_tests
+from services.orchestrator.agents.reviewer import review_changes
+from services.orchestrator.agents.frontend_reviewer import (
+    _has_frontend_files,
+    _build_findings_text,
+    review_frontend,
 )
 from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.state import ProjectState
@@ -194,7 +203,7 @@ def node_coder(
     """
     task_queue = state["task_queue"]
     if not task_queue:
-        return {"phase": "testing"}
+        return {"phase": "reviewing"}
 
     current_task = state["current_task"] or {**task_queue[0], "attempts": 0}
     result = asyncio.run(
@@ -208,7 +217,7 @@ def node_coder(
         return {
             "task_queue": remaining,
             "current_task": None,
-            "phase": "implementing" if remaining else "testing",
+            "phase": "implementing" if remaining else "reviewing",
         }
 
     attempts = current_task.get("attempts", 0) + 1
@@ -222,12 +231,87 @@ def node_coder(
 
 
 def route_after_coder(state: ProjectState) -> str:
-    """Loops back for the next task/retry, halts if blocked, or moves on to testing."""
+    """Loops back for the next task/retry, halts if blocked, routes to reviewer when done."""
     if state["phase"] == "blocked":
         return END
-    if state["phase"] == "testing":
-        return "cost_check"
+    if state["phase"] == "reviewing":
+        return "reviewer"
     return "coder"
+
+
+def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: ExecutorClient) -> dict[str, Any]:
+    """Reviews all project files after the Coder finishes implementing.
+
+    Reads every file in the workspace container via the Executor client,
+    sends them to an LLM with a review prompt, and parses the structured
+    verdict (approve / changes-requested). Changes-requested routes back
+    to the Coder with findings attached; approve advances to cost_check.
+    """
+    result = asyncio.run(review_changes(router, executor_client, state["project_id"]))
+
+    if result.verdict == "changes-requested":
+        logger.info(
+            "project %s: reviewer requested changes (%d finding(s))",
+            state["project_id"], len(result.findings),
+        )
+        findings_text = "\n".join(
+            f"- {f.file}:{f.line} [{f.severity}] {f.message}" for f in result.findings
+        )
+        return {
+            "phase": "implementing",
+            "messages": [AIMessage(content=f"Reviewer feedback:\n{findings_text}")],
+        }
+
+    logger.info("project %s: reviewer approved all changes", state["project_id"])
+    return {"phase": "testing"}
+
+
+def route_after_reviewer(state: ProjectState) -> str:
+    """Routes back to Coder for revisions, or onward to frontend review."""
+    if state["phase"] == "implementing":
+        return "coder"
+    return "frontend_review"
+
+
+def node_frontend_review(
+    state: ProjectState, router: ModelRouter, executor_client: ExecutorClient
+) -> dict[str, Any]:
+    """Takes screenshots of the running dev server and sends them to a vision-capable provider.
+
+    Runs after code review approves changes. Skips entirely if no frontend
+    files exist in the project. Otherwise captures screenshots at desktop and
+    mobile breakpoints, sends them to the LLM for visual review, and attaches
+    any findings to messages. On success (approve), advances to cost_check.
+    On failure (changes-requested), routes back to Coder with specific UI feedback.
+    """
+    if not _has_frontend_files(state["project_id"], executor_client):
+        logger.info("project %s: no frontend files, skipping visual review", state["project_id"])
+        return {"phase": "testing"}
+
+    result_verdict, findings = asyncio.run(
+        review_frontend(router, executor_client, state["project_id"])
+    )
+
+    if result_verdict == "changes-requested" and findings:
+        logger.info(
+            "project %s: frontend reviewer requested changes (%d finding(s))",
+            state["project_id"], len(findings),
+        )
+        findings_text = _build_findings_text(findings)
+        return {
+            "phase": "implementing",
+            "messages": [AIMessage(content=f"Frontend review feedback:\n{findings_text}")],
+        }
+
+    logger.info("project %s: frontend reviewer approved all changes", state["project_id"])
+    return {"phase": "testing"}
+
+
+def route_after_frontend_review(state: ProjectState) -> str:
+    """Routes back to Coder for UI revisions, or onward to cost_check."""
+    if state["phase"] == "implementing":
+        return "coder"
+    return "cost_check"
 
 
 def node_cost_check(state: ProjectState) -> dict[str, Any]:
@@ -284,15 +368,69 @@ def route_after_cost_wait(state: ProjectState) -> str:
     return "testing"
 
 
-def node_testing(state: ProjectState) -> dict[str, Any]:
-    """Logs entry into testing and unconditionally arms the merge-to-main gate.
+def node_testing(state: ProjectState, executor_client: ExecutorClient) -> dict[str, Any]:
+    """Runs the test suite inside a workspace container and enforces coverage gates.
 
-    Merge-to-main is a hard gate (ADR-009) -- it always requires approval,
-    unlike the cost gate, which only fires past a threshold.
+    Calls ``executor_client.run_tests()`` (pytest + coverage.py), parses results,
+    and evaluates against the project's configured ``coverage_threshold`` using
+    the project's configured ``coverage_gate_mode`` (independent of ``pr_mode``,
+    which only governs GitHub PR automation -- ADR-023):
+
+    - **hard** (default): any test failure or coverage below threshold routes back
+      to Coder with specific failing tests / uncovered lines attached.
+    - **soft**: coverage shortfall produces a warning but allows passage; test
+      failures still route back to Coder.
+    - **configurable**: treated as hard for now — project-level policy selection
+      will control this in Phase 14+.
+
+    On success, arms the merge-to-main gate (ADR-009). On failure, attaches
+    detailed feedback to ``messages`` and returns phase "implementing" so the
+    Coder can fix specific issues.
     """
-    logger.info("project %s: testing", state["project_id"])
+    logger.info("project %s: running tests", state["project_id"])
+
+    gate_mode = state.get("coverage_gate_mode", "hard")
+
+    outcome = asyncio.run(run_tests(executor_client, state["project_id"], threshold=state["coverage_threshold"], gate_mode=gate_mode))
+
+    if outcome.verdict == "fail":
+        # Extract failing test / uncovered-line details for the Coder
+        from services.orchestrator.agents.tester import (
+            _parse_failing_tests,
+            _parse_uncovered_lines,
+        )
+
+        failures = _parse_failing_tests(outcome.report)
+        if failures:
+            feedback_lines = ["Test failures:"] + [f"- {f.message}" for f in failures]
+        else:
+            # Coverage shortfall — no test failures, just low coverage
+            feedback_lines = [
+                f"Coverage {outcome.coverage_pct:.1f}% below threshold "
+                f"{state['coverage_threshold']}% (gate mode: {gate_mode})"
+            ]
+            uncovered = _parse_uncovered_lines(outcome.report)
+            if uncovered:
+                feedback_lines.append("Uncovered lines:")
+                feedback_lines.extend(f"- {entry}" for entry in uncovered)
+
+        return {
+            "phase": "implementing",
+            "messages": [AIMessage(content="\n".join(feedback_lines))],
+            "coverage_pct": outcome.coverage_pct,
+        }
+
+    # All tests passed and coverage meets threshold (or soft mode) — arm merge gate
+    logger.info(
+        "project %s: tests passed (%d/%d), coverage %.1f%%",
+        state["project_id"],
+        outcome.passed,
+        outcome.failed,
+        outcome.coverage_pct or 0.0,
+    )
     return {
         "phase": "awaiting_merge_approval",
+        "coverage_pct": outcome.coverage_pct,
         "pending_approval": {
             "kind": "merge_approval",
             "thread_id": state["project_id"],

@@ -25,3 +25,10 @@ class TestResult(BaseModel):
     failed: int
     coverage_pct: float | None
     report: str
+
+
+class ScreenshotResult(BaseModel):
+    """The outcome of a take_screenshot call inside a workspace container."""
+
+    image_b64: str
+    error: str | None = None

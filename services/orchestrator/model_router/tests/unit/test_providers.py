@@ -77,6 +77,50 @@ def test_anthropic_provider_complete_returns_completion_result(mock_client):
     assert kwargs["headers"]["x-api-key"] == "test-key"
 
 
+def test_anthropic_provider_complete_sends_image_content_blocks_when_images_present(mock_client):
+    from services.orchestrator.model_router.schemas import ImageContent
+
+    mock_client.post.return_value = _response(
+        {"content": [{"type": "text", "text": "looks fine"}], "usage": None}
+    )
+    provider = AnthropicProvider(
+        name="claude_sonnet",
+        model="claude-sonnet-5",
+        api_key="test-key",
+        capabilities=frozenset({Capability.VISION}),
+        client=mock_client,
+    )
+    request = CompletionRequest(
+        messages=[
+            CompletionMessage(
+                role="user",
+                content="does this look right?",
+                images=[ImageContent(data="ZmFrZQ==", media_type="image/png")],
+            )
+        ]
+    )
+
+    asyncio.run(provider.complete(request))
+
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["json"]["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                "does this look right?",
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "ZmFrZQ==",
+                    },
+                },
+            ],
+        }
+    ]
+
+
 def test_anthropic_provider_complete_raises_provider_request_error_on_connection_failure(
     mock_client,
 ):

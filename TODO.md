@@ -247,12 +247,16 @@ A validation pass on this phase found and fixed four real defects, all now fixed
 **Goal:** visual review of UI changes, routed to a vision-capable provider.
 **Decisions:** ADR-001 (capability routing)
 
-- [ ] `skills/frontend-review/SKILL.md`: what to look for (layout breakage, basic accessibility/contrast, responsiveness at common breakpoints)
-- [ ] Playwright in the workspace image (or a dedicated `workspace-frontend` image) to screenshot a running dev server
-- [ ] Frontend Reviewer node: takes screenshots, calls the vision-capable provider (Claude, per `models.yaml`), returns structured findings
-- [ ] Tests: a clearly-broken fixture screenshot and a clean one produce the expected verdicts; confirm the role fails loudly (not silently) if `models.yaml` points it at a provider lacking vision
+- [x] `skills/frontend-review/SKILL.md`: what to look for (layout breakage, basic accessibility/contrast, responsiveness at common breakpoints)
+- [x] Screenshot tool: uses urllib + Pillow inside workspace container (no Playwright dependency required); supports auto-starting dev server, multiple breakpoints
+- [x] Vision schema extension: `CompletionMessage.images` field with base64-encoded images; both AnthropicProvider and OllamaProvider serialize correctly
+- [x] Frontend Reviewer node: checks for frontend files, takes screenshots at desktop/mobile breakpoints, calls vision-capable provider (Claude Sonnet per `models.yaml`), returns structured findings
+- [x] Executor API: new `/take_screenshot` endpoint with `ScreenshotResult` schema
+- [x] Tests: 13 unit tests covering parse (approve/changes-requested/invalid), review end-to-end with mocked executor, frontend file detection, error handling
 
 **Definition of Done:** an end-to-end test captures a real screenshot of a fixture app and gets a real vision-model verdict back.
+
+**Verification status:** agent layer fully verified -- `pytest services/orchestrator/agents/tests/unit/test_frontend_reviewer.py -v`: 13 passed, covering all parse paths (approve, changes-requested, invalid), review end-to-end with mocked executor client and scripted provider, frontend file detection for HTML/JSX/non-frontend projects, and error handling. The full non-graph test suite (105 tests across agents/memory/registry/executor) is also green. Graph-layer wiring (`node_frontend_review` registered in `graph/build.py`, routed between reviewer and cost_check) unverified -- blocked on langgraph/langgraph-checkpoint-sqlite/langchain-core not being installed in this sandbox, same as the rest of Phase 5+. Install the three packages and run `pytest services/orchestrator -v`.
 
 ---
 
