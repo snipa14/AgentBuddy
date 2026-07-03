@@ -25,11 +25,15 @@ VALID_CONFIG = {
             "model": "qwen3-coder",
             "base_url": "http://ollama:11434",
             "capabilities": ["tool_calling"],
+            "cost_per_1m_input_tokens": 0,
+            "cost_per_1m_output_tokens": 0,
         },
         "claude_sonnet": {
             "type": "anthropic",
             "model": "claude-sonnet-5",
             "capabilities": ["tool_calling", "vision"],
+            "cost_per_1m_input_tokens": 3.0,
+            "cost_per_1m_output_tokens": 15.0,
         },
     },
 }
@@ -65,6 +69,21 @@ def test_role_config_empty_prefer_raises_validation_error():
     raw = {
         "roles": {"coder": {"requires": [], "prefer": []}},
         "providers": {},
+    }
+    with pytest.raises(ValidationError):
+        ModelsConfig.model_validate(raw)
+
+
+def test_provider_config_missing_cost_fields_raises_validation_error():
+    raw = {
+        "roles": {"coder": {"requires": [], "prefer": ["claude_sonnet"]}},
+        "providers": {
+            "claude_sonnet": {
+                "type": "anthropic",
+                "model": "claude-sonnet-5",
+                "capabilities": [],
+            }
+        },
     }
     with pytest.raises(ValidationError):
         ModelsConfig.model_validate(raw)

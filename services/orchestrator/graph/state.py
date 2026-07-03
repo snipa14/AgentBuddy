@@ -46,6 +46,9 @@ class ProjectState(TypedDict):
     coverage_threshold: int
     pr_mode: PrMode
     coverage_gate_mode: CoverageGateMode
+    git_branch: str | None
+    git_remote_url: str | None
+    curator_source: str | None
     pending_approval: dict | None
 
 
@@ -97,5 +100,8 @@ def new_project_state(
         coverage_threshold=coverage_threshold,
         pr_mode=pr_mode,
         coverage_gate_mode=coverage_gate_mode,
+        git_branch=None,
+        git_remote_url=None,
+        curator_source=None,
         pending_approval=None,
     )

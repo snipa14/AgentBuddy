@@ -16,6 +16,8 @@ class OllamaProviderConfig(BaseModel):
     model: str
     base_url: str
     capabilities: list[Capability] = Field(default_factory=list)
+    cost_per_1m_input_tokens: float = Field(ge=0)
+    cost_per_1m_output_tokens: float = Field(ge=0)
 
 
 class AnthropicProviderConfig(BaseModel):
@@ -24,6 +26,8 @@ class AnthropicProviderConfig(BaseModel):
     type: Literal["anthropic"]
     model: str
     capabilities: list[Capability] = Field(default_factory=list)
+    cost_per_1m_input_tokens: float = Field(ge=0)
+    cost_per_1m_output_tokens: float = Field(ge=0)
 
 
 ProviderConfig = Annotated[

@@ -7,6 +7,11 @@ of one of them can safely call `interrupt()` right after it without
 replaying an LLM call on resume (see services/orchestrator/graph/nodes.py's
 module docstring for why that split matters).
 
+Every LLM-backed function returns `(result, ai_message)` -- the raw message
+carries `usage_metadata` for the calling node to price via
+`ModelRouter.cost_usd()` (ADR-025/026); this module itself never reasons
+about pricing.
+
 `run_intake_to_final_plan` is a Python-loop reference implementation of the
 whole flow, used to test this module's logic end to end with a scripted
 sequence of answers. It is deliberately NOT what the real graph nodes call:
@@ -18,11 +23,11 @@ LangGraph's own interrupt() semantics -- a node that calls an LLM before
 
 from typing import Callable, Literal
 
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
-from services.orchestrator.agents.parsing import bullet_lines, nonempty_lines, split_sections
+from services.orchestrator.agents.llm import invoke_structured
 from services.orchestrator.model_router.router import ModelRouter
-from services.orchestrator.model_router.schemas import CompletionMessage, CompletionRequest
 
 PLANNER_ROLE = "planner"
 
@@ -80,29 +85,20 @@ _INTERVIEW_SYSTEM_PROMPT = (
     "You are interviewing a stakeholder to plan a new software project. Ask "
     "clarifying questions in small batches (at most 3 at a time) until you "
     "have enough to draft a plan covering goals, milestones, risks, and "
-    "assumptions. Respond with exactly one of two formats. If you need more "
-    "information: '## Status\\nquestions\\n\\n## Questions\\n' followed by "
-    "one question per line, each starting with '- '. If you have enough: "
-    "'## Status\\nready\\n'."
+    "assumptions."
 )
 
 _DRAFT_SYSTEM_PROMPT = (
     "You are drafting a software project plan from an interview transcript. "
-    "Respond with exactly these five markdown sections, in order: "
-    "'## Summary' (a short paragraph), '## Goals', '## Milestones', "
-    "'## Risks', '## Assumptions' (the last four as '- ' bullet lists, "
-    "which may be empty)."
+    "Produce a summary, goals, milestones, risks, and assumptions (the last "
+    "four may be empty lists)."
 )
 
 _CRITIQUE_SYSTEM_PROMPT = (
     "You are the roast-the-plan critique pass (see skills/roast-the-plan/"
     "SKILL.md): adversarially review the given project plan for unstated "
     "assumptions, missing edge cases, security gaps, scope creep, and "
-    "untested claims. Respond with '## Findings' followed by zero or more "
-    "lines formatted as 'category: <unstated_assumption|missing_edge_case|"
-    "security_gap|scope_creep|untested_claim> | severity: <low|medium|high> "
-    "| <description>', then '## Additional Risks' and '## Additional "
-    "Assumptions', each as '- ' bullet lists (which may be empty) of new "
+    "untested claims. Produce zero or more findings, plus any additional "
     "risks/assumptions the plan should carry as a result of your findings."
 )
 
@@ -115,21 +111,9 @@ def _format_transcript(qa_history: list[str]) -> str:
     return "\n".join(lines)
 
 
-async def _complete(router: ModelRouter, system_prompt: str, user_content: str) -> str:
-    provider = router.resolve(PLANNER_ROLE)
-    request = CompletionRequest(
-        messages=[
-            CompletionMessage(role="system", content=system_prompt),
-            CompletionMessage(role="user", content=user_content),
-        ]
-    )
-    result = await provider.complete(request)
-    return result.content
-
-
 async def ask_clarifying_questions(
     router: ModelRouter, project_description: str, qa_history: list[str]
-) -> InterviewTurn:
+) -> tuple[InterviewTurn, AIMessage]:
     """Runs one round of the clarifying-question interview.
 
     Args:
@@ -140,26 +124,28 @@ async def ask_clarifying_questions(
             indices).
 
     Returns:
-        An InterviewTurn: either a fresh batch of questions, or a signal
-        that enough information has been gathered to draft a plan.
+        A tuple of (InterviewTurn, raw AIMessage) -- either a fresh batch of
+        questions or a signal that enough information has been gathered to
+        draft a plan, plus the raw message for cost tracking.
 
     Raises:
         NoCapableProviderError: If no provider is configured for "planner".
-        ProviderRequestError: If the underlying model call fails.
-        ValueError: If the model's response doesn't match the expected format.
+        ValueError: If the model's response doesn't match InterviewTurn.
     """
-    content = await _complete(
-        router,
-        _INTERVIEW_SYSTEM_PROMPT,
-        f"Project request: {project_description}\n\nTranscript so far:\n"
-        f"{_format_transcript(qa_history)}",
-    )
-    return _parse_interview_turn(content)
+    llm = router.resolve(PLANNER_ROLE)
+    messages = [
+        SystemMessage(content=_INTERVIEW_SYSTEM_PROMPT),
+        HumanMessage(
+            content=f"Project request: {project_description}\n\nTranscript so far:\n"
+            f"{_format_transcript(qa_history)}"
+        ),
+    ]
+    return await invoke_structured(llm, InterviewTurn, messages)
 
 
 async def draft_plan(
     router: ModelRouter, project_description: str, qa_history: list[str]
-) -> DraftPlan:
+) -> tuple[DraftPlan, AIMessage]:
     """Drafts a project plan from a completed interview transcript.
 
     Args:
@@ -168,23 +154,24 @@ async def draft_plan(
         qa_history: The full interview transcript.
 
     Returns:
-        A DraftPlan, before critique.
+        A tuple of (DraftPlan, raw AIMessage), before critique.
 
     Raises:
         NoCapableProviderError: If no provider is configured for "planner".
-        ProviderRequestError: If the underlying model call fails.
-        ValueError: If the model's response doesn't match the expected format.
+        ValueError: If the model's response doesn't match DraftPlan.
     """
-    content = await _complete(
-        router,
-        _DRAFT_SYSTEM_PROMPT,
-        f"Project request: {project_description}\n\nInterview transcript:\n"
-        f"{_format_transcript(qa_history)}",
-    )
-    return _parse_draft_plan(content)
+    llm = router.resolve(PLANNER_ROLE)
+    messages = [
+        SystemMessage(content=_DRAFT_SYSTEM_PROMPT),
+        HumanMessage(
+            content=f"Project request: {project_description}\n\nInterview transcript:\n"
+            f"{_format_transcript(qa_history)}"
+        ),
+    ]
+    return await invoke_structured(llm, DraftPlan, messages)
 
 
-async def critique_plan(router: ModelRouter, plan: DraftPlan) -> CritiqueResult:
+async def critique_plan(router: ModelRouter, plan: DraftPlan) -> tuple[CritiqueResult, AIMessage]:
     """Runs the roast-the-plan adversarial critique pass over a draft plan.
 
     Args:
@@ -192,13 +179,14 @@ async def critique_plan(router: ModelRouter, plan: DraftPlan) -> CritiqueResult:
         plan: The draft plan to critique.
 
     Returns:
-        A CritiqueResult with findings and any concrete plan revisions.
+        A tuple of (CritiqueResult, raw AIMessage) with findings and any
+        concrete plan revisions.
 
     Raises:
         NoCapableProviderError: If no provider is configured for "planner".
-        ProviderRequestError: If the underlying model call fails.
-        ValueError: If the model's response doesn't match the expected format.
+        ValueError: If the model's response doesn't match CritiqueResult.
     """
+    llm = router.resolve(PLANNER_ROLE)
     plan_text = (
         f"Summary: {plan.summary}\n"
         f"Goals: {plan.goals}\n"
@@ -206,8 +194,11 @@ async def critique_plan(router: ModelRouter, plan: DraftPlan) -> CritiqueResult:
         f"Risks: {plan.risks}\n"
         f"Assumptions: {plan.assumptions}"
     )
-    content = await _complete(router, _CRITIQUE_SYSTEM_PROMPT, plan_text)
-    return _parse_critique_result(content)
+    messages = [
+        SystemMessage(content=_CRITIQUE_SYSTEM_PROMPT),
+        HumanMessage(content=plan_text),
+    ]
+    return await invoke_structured(llm, CritiqueResult, messages)
 
 
 def apply_critique(plan: DraftPlan, critique: CritiqueResult) -> DraftPlan:
@@ -258,83 +249,13 @@ async def run_intake_to_final_plan(
     """
     qa_history: list[str] = []
     for _ in range(max_rounds):
-        turn = await ask_clarifying_questions(router, project_description, qa_history)
+        turn, _ = await ask_clarifying_questions(router, project_description, qa_history)
         if turn.status == "ready":
             break
         qa_history.append("\n".join(turn.questions))
         qa_history.append(answer_fn(turn.questions))
 
-    draft = await draft_plan(router, project_description, qa_history)
-    critique = await critique_plan(router, draft)
+    draft, _ = await draft_plan(router, project_description, qa_history)
+    critique, _ = await critique_plan(router, draft)
     final_plan = apply_critique(draft, critique)
     return IntakeResult(plan=final_plan, critique_findings=critique.findings)
-
-
-def _parse_interview_turn(content: str) -> InterviewTurn:
-    """Parses an InterviewTurn from a '## Status' / '## Questions' response.
-
-    Raises:
-        ValueError: If the status line is missing or isn't "questions"/"ready".
-    """
-    sections = split_sections(content)
-    status = sections.get("Status", "").strip()
-    if status not in ("questions", "ready"):
-        raise ValueError(f"malformed interview status: {content!r}")
-    questions = bullet_lines(sections.get("Questions", "")) if status == "questions" else []
-    return InterviewTurn(status=status, questions=questions)
-
-
-def _parse_draft_plan(content: str) -> DraftPlan:
-    """Parses a DraftPlan from the five expected markdown sections.
-
-    Raises:
-        ValueError: If the '## Summary' section is missing.
-    """
-    sections = split_sections(content)
-    summary = sections.get("Summary", "").strip()
-    if not summary:
-        raise ValueError(f"malformed draft plan, missing Summary section: {content!r}")
-    return DraftPlan(
-        summary=summary,
-        goals=bullet_lines(sections.get("Goals", "")),
-        milestones=bullet_lines(sections.get("Milestones", "")),
-        risks=bullet_lines(sections.get("Risks", "")),
-        assumptions=bullet_lines(sections.get("Assumptions", "")),
-    )
-
-
-def _parse_critique_result(content: str) -> CritiqueResult:
-    """Parses a CritiqueResult from '## Findings'/'## Additional Risks'/'## Additional Assumptions'.
-
-    Raises:
-        ValueError: If a findings line doesn't match the expected pipe-delimited format.
-    """
-    sections = split_sections(content)
-    findings = [
-        _parse_finding_line(line) for line in nonempty_lines(sections.get("Findings", ""))
-    ]
-    return CritiqueResult(
-        findings=findings,
-        additional_risks=bullet_lines(sections.get("Additional Risks", "")),
-        additional_assumptions=bullet_lines(sections.get("Additional Assumptions", "")),
-    )
-
-
-def _parse_finding_line(line: str) -> CritiqueFinding:
-    """Parses one 'category: X | severity: Y | description' line.
-
-    Raises:
-        ValueError: If the line doesn't match the expected pipe-delimited format.
-    """
-    parts = [part.strip() for part in line.split("|", maxsplit=2)]
-    if (
-        len(parts) != 3
-        or not parts[0].startswith("category:")
-        or not parts[1].startswith("severity:")
-    ):
-        raise ValueError(f"malformed critique finding line: {line!r}")
-    return CritiqueFinding(
-        category=parts[0].removeprefix("category:").strip(),
-        severity=parts[1].removeprefix("severity:").strip(),
-        description=parts[2].strip(),
-    )

@@ -1,27 +1,25 @@
 """Unit tests for the Frontend Reviewer agent.
 
 Per .claude/rules/testing.md, mocks at model_router.resolve() boundary; uses
-ScriptedProvider for LLM responses and a fake ExecutorClient for screenshots.
-Tests cover:
-- _parse_frontend_result with approve / changes-requested / invalid verdicts
-- review_frontend end-to-end with mocked executor client and provider
+FakeRouter/FakeChatModel for LLM responses and a fake ExecutorClient for
+screenshots. Tests cover:
 - _has_frontend_files detection of frontend extensions
+- review_frontend end-to-end with mocked executor client and provider
+- _build_findings_text formatting
 """
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from services.orchestrator.agents.frontend_reviewer import (
+    FrontendFinding,
+    FrontendReviewResult,
     _build_findings_text,
     _has_frontend_files,
-    _parse_frontend_result,
     review_frontend,
 )
-from services.orchestrator.agents.tests.unit.router_fakes import FakeRouter, ScriptedProvider
-from services.orchestrator.executor_client import ExecutorClient, FileEntry, ScreenshotResult
+from services.orchestrator.agents.tests.unit.router_fakes import FakeRouter, structured
+from services.orchestrator.executor_client import FileEntry, ScreenshotResult
 
 
 class RecordingExecutorClient:
@@ -39,46 +37,6 @@ class RecordingExecutorClient:
     async def take_screenshot(self, project_id, url="http://localhost:5173", **kwargs):
         self.calls.append(("take_screenshot", project_id, url, kwargs))
         return self.screenshots.pop(0) if self.screenshots else ScreenshotResult(image_b64="", error="no screenshots")
-
-
-# -- _parse_frontend_result tests ------------------------------------------------
-
-def test_parse_frontend_result_approve():
-    content = "## Verdict\napprove\n\n## Findings\n"
-    verdict, findings = _parse_frontend_result(content)
-    assert verdict == "approve"
-    assert findings == []
-
-
-def test_parse_frontend_result_changes_requested():
-    content = (
-        "## Verdict\nchanges-requested\n\n"
-        "## Findings\n"
-        "- line: 10, severity: critical, message: overlapping buttons\n"
-        "- line: 25, severity: warning, message: low contrast text\n"
-    )
-    verdict, findings = _parse_frontend_result(content)
-    assert verdict == "changes-requested"
-    assert len(findings) == 2
-    assert findings[0]["severity"] == "critical"
-    assert "overlapping buttons" in findings[0]["message"]
-    assert findings[1]["severity"] == "warning"
-
-
-def test_parse_frontend_result_invalid_verdict():
-    content = "## Verdict\nmaybe\n\n## Findings\n"
-    from pydantic import ValidationError
-
-    with pytest.raises(ValueError, match="invalid frontend reviewer verdict"):
-        _parse_frontend_result(content)
-
-
-def test_parse_frontend_result_empty_findings_with_changes_requested():
-    """changes-requested with no findings is unusual but not rejected by the parser."""
-    content = "## Verdict\nchanges-requested\n\n## Findings\n"
-    verdict, findings = _parse_frontend_result(content)
-    assert verdict == "changes-requested"
-    assert findings == []
 
 
 # -- _has_frontend_files tests ---------------------------------------------------
@@ -106,29 +64,29 @@ def test_has_frontend_files_handles_list_error():
 
 # -- review_frontend end-to-end tests ----------------------------------------------
 
-_APPROVE_SCREENSHOT_RESPONSE = "## Verdict\napprove\n\n## Findings\n"
+APPROVE_RESULT = FrontendReviewResult(verdict="approve", findings=[])
 
-_CHANGES_REQUESTED_SCREENSHOT_RESPONSE = (
-    "## Verdict\nchanges-requested\n\n"
-    "## Findings\n"
-    "- line: 5, severity: critical, message: text unreadable on dark background\n"
+CHANGES_REQUESTED_RESULT = FrontendReviewResult(
+    verdict="changes-requested",
+    findings=[
+        FrontendFinding(line=5, severity="critical", message="text unreadable on dark background")
+    ],
 )
 
 
 def test_review_frontend_approves_when_no_screenshots():
-    """When all screenshots fail, the agent returns approve with no findings."""
+    """When all screenshots fail, the agent returns approve with no findings and no LLM call."""
     executor = RecordingExecutorClient(
         files=["index.html"],
         screenshots=[ScreenshotResult(image_b64="", error="no_playwright")],
     )
-    router = FakeRouter([_APPROVE_SCREENSHOT_RESPONSE])
+    router = FakeRouter([])
 
-    result_verdict, result_findings = asyncio.run(
-        review_frontend(router, executor, "proj-1")
-    )
+    verdict, findings, message = asyncio.run(review_frontend(router, executor, "proj-1"))
 
-    assert result_verdict == "approve"
-    assert result_findings == []
+    assert verdict == "approve"
+    assert findings == []
+    assert message is None
 
 
 def test_review_frontend_returns_changes_requested_on_finding():
@@ -136,19 +94,17 @@ def test_review_frontend_returns_changes_requested_on_finding():
         files=["index.html"],
         screenshots=[ScreenshotResult(image_b64="iVBORw0KGgo=", error=None)],
     )
-    router = FakeRouter([_CHANGES_REQUESTED_SCREENSHOT_RESPONSE])
+    router = FakeRouter([structured(CHANGES_REQUESTED_RESULT)])
 
-    result_verdict, result_findings = asyncio.run(
-        review_frontend(router, executor, "proj-1")
-    )
+    verdict, findings, message = asyncio.run(review_frontend(router, executor, "proj-1"))
 
-    assert result_verdict == "changes-requested"
-    assert len(result_findings) == 1
-    assert "unreadable" in result_findings[0]["message"]
+    assert verdict == "changes-requested"
+    assert len(findings) == 1
+    assert "unreadable" in findings[0]["message"]
+    assert message.usage_metadata is not None
 
 
-def test_review_frontend_calls_take_screenshot():
-    """review_frontend takes screenshots at two breakpoints; _has_frontend_files is checked in the node."""
+def test_review_frontend_calls_take_screenshot_at_two_breakpoints():
     executor = RecordingExecutorClient(
         files=["index.html"],
         screenshots=[
@@ -156,7 +112,7 @@ def test_review_frontend_calls_take_screenshot():
             ScreenshotResult(image_b64="iVBORw0KGgo=", error=None),
         ],
     )
-    router = FakeRouter([_APPROVE_SCREENSHOT_RESPONSE])
+    router = FakeRouter([structured(APPROVE_RESULT)])
 
     asyncio.run(review_frontend(router, executor, "proj-1"))
 
@@ -174,7 +130,7 @@ def test_review_frontend_auto_starts_the_dev_server():
             ScreenshotResult(image_b64="iVBORw0KGgo=", error=None),
         ],
     )
-    router = FakeRouter([_APPROVE_SCREENSHOT_RESPONSE])
+    router = FakeRouter([structured(APPROVE_RESULT)])
 
     asyncio.run(review_frontend(router, executor, "proj-1"))
 
@@ -185,9 +141,7 @@ def test_review_frontend_auto_starts_the_dev_server():
 
 
 def test_review_frontend_sends_a_system_prompt_with_the_images():
-    """The model must actually be told what to look for and what format to
-    respond in -- a request with only bare image labels and no instructions
-    can't reliably produce a parseable ## Verdict / ## Findings response."""
+    """The model must actually be told what to look for and be sent both images."""
     executor = RecordingExecutorClient(
         files=["index.html"],
         screenshots=[
@@ -195,19 +149,17 @@ def test_review_frontend_sends_a_system_prompt_with_the_images():
             ScreenshotResult(image_b64="iVBORw0KGgo=", error=None),
         ],
     )
-    router = FakeRouter([_APPROVE_SCREENSHOT_RESPONSE])
+    router = FakeRouter([structured(APPROVE_RESULT)])
 
     asyncio.run(review_frontend(router, executor, "proj-1"))
 
-    sent_request = router.provider.requests[0]
-    system_messages = [m for m in sent_request.messages if m.role == "system"]
-    assert len(system_messages) == 1
-    assert "layout breakage" in system_messages[0].content.lower()
-    assert "## verdict" in system_messages[0].content.lower()
+    sent_messages = router.model.requests[0]
+    system_message = sent_messages[0]
+    assert "layout breakage" in system_message.content.lower()
 
-    image_messages = [m for m in sent_request.messages if m.images]
-    assert len(image_messages) == 1
-    assert len(image_messages[0].images) == 2
+    user_message = sent_messages[1]
+    image_blocks = [block for block in user_message.content if block.get("type") == "image"]
+    assert len(image_blocks) == 2
 
 
 # -- _build_findings_text tests ----------------------------------------------------

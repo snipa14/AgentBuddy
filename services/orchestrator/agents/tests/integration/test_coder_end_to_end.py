@@ -22,13 +22,13 @@ import asyncio
 import docker
 import httpx
 import pytest
+from langchain_core.messages import AIMessage
 
 from services.executor.api import build_app
 from services.executor.config import ExecutorConfig
 from services.executor.docker_client import build_docker_client
 from services.orchestrator.agents.coder import run_coder_task
 from services.orchestrator.executor_client import ExecutorClient
-from services.orchestrator.model_router.schemas import CompletionResult
 
 WORKSPACE_IMAGE = "foundry/workspace-python:3.12"
 DOCKERFILE_DIR = "images/workspace-python"
@@ -37,24 +37,35 @@ TEST_NETWORK_NAME = "foundry_workspace_test"
 pytestmark = pytest.mark.integration
 
 
-class _ScriptedCoderRouter:
-    """Scripts a fixed sequence of Coder actions -- no real LLM involved.
+class _ScriptedCoderModel:
+    """Scripts a fixed sequence of tool-calling turns -- no real LLM involved.
 
-    Stands in for ModelRouter: `.resolve(role)` returns self, and `.complete()`
-    ignores the request and returns the next scripted action's raw text.
+    Stands in for the BaseChatModel `ModelRouter.resolve()` would normally
+    return: `.bind_tools()` is a no-op (returns self), and `.ainvoke()`
+    ignores the messages and returns the next scripted AIMessage.
     """
 
-    def __init__(self, actions: list[str]):
-        self._actions = list(actions)
+    def __init__(self, turns: list[AIMessage]):
+        self._turns = list(turns)
 
-    def resolve(self, role):
+    def bind_tools(self, tools):
         return self
 
-    def supports(self, capability):
-        return True
+    async def ainvoke(self, messages, **kwargs):
+        return self._turns.pop(0)
 
-    async def complete(self, request):
-        return CompletionResult(content=self._actions.pop(0), model="fake", provider_name="fake")
+
+class _ScriptedCoderRouter:
+    """Stands in for ModelRouter: `.resolve(role)` returns a scripted model."""
+
+    def __init__(self, turns: list[AIMessage]):
+        self._model = _ScriptedCoderModel(turns)
+
+    def resolve(self, role):
+        return self._model
+
+    def cost_usd(self, role, usage):
+        return 0.0
 
 
 @pytest.fixture(scope="session")
@@ -115,8 +126,17 @@ def test_coder_writes_a_real_file_inside_a_real_workspace_container(
 ):
     router = _ScriptedCoderRouter(
         [
-            "## Action\nwrite_file\n\n## Path\nhello.txt\n\n## Content\nhello from the coder\n",
-            "## Action\ndone\n",
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "args": {"path": "hello.txt", "content": "hello from the coder"},
+                        "id": "call_1",
+                    }
+                ],
+            ),
+            AIMessage(content="done", tool_calls=[]),
         ]
     )
 
@@ -136,9 +156,21 @@ def test_coder_reads_an_existing_file_before_overwriting_it(
     host_file.write_text("original content")
     router = _ScriptedCoderRouter(
         [
-            "## Action\nread_file\n\n## Path\nnotes.txt\n",
-            "## Action\nwrite_file\n\n## Path\nnotes.txt\n\n## Content\nupdated content\n",
-            "## Action\ndone\n",
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "read_file", "args": {"path": "notes.txt"}, "id": "call_1"}],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "args": {"path": "notes.txt", "content": "updated content"},
+                        "id": "call_2",
+                    }
+                ],
+            ),
+            AIMessage(content="done", tool_calls=[]),
         ]
     )
 

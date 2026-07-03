@@ -7,27 +7,24 @@ fakes the Executor side and records every call made to it.
 
 import asyncio
 
-import pytest
+from services.orchestrator.agents.reviewer import ReviewFinding, ReviewResult, review_changes
+from services.orchestrator.agents.tests.unit.router_fakes import FakeRouter, structured
 
-from services.orchestrator.agents.reviewer import (
-    ReviewFinding,
-    ReviewResult,
-    _parse_review_result,
-    review_changes,
+APPROVE_RESULT = ReviewResult(verdict="approve", findings=[])
+
+CHANGES_REQUESTED_RESULT = ReviewResult(
+    verdict="changes-requested",
+    findings=[
+        ReviewFinding(
+            file="models.py", line=15, severity="critical",
+            message="hardcoded password in source code",
+        ),
+        ReviewFinding(
+            file="views.py", line=42, severity="warning",
+            message="missing null check on user lookup",
+        ),
+    ],
 )
-from services.orchestrator.agents.tests.unit.router_fakes import FakeRouter
-
-
-APPROVE_RESPONSE = "## Verdict\napprove\n\n## Findings\n"
-
-CHANGES_REQUESTED_RESPONSE = (
-    "## Verdict\nchanges-requested\n\n"
-    "## Findings\n"
-    "- file: models.py, line: 15, severity: critical, message: hardcoded password in source code\n"
-    "- file: views.py, line: 42, severity: warning, message: missing null check on user lookup\n"
-)
-
-INVALID_VERDICT_RESPONSE = "## Verdict\nmaybe_later\n\n## Findings\n"
 
 
 class RecordingExecutorClient:
@@ -50,75 +47,19 @@ class RecordingExecutorClient:
         return [FileEntry(name=name, is_dir=False) for name in self.files]
 
 
-def test_parse_review_result_approve():
-    result = _parse_review_result(APPROVE_RESPONSE)
-
-    assert result.verdict == "approve"
-    assert result.findings == []
-
-
-def test_parse_review_result_changes_requested_with_findings():
-    result = _parse_review_result(CHANGES_REQUESTED_RESPONSE)
-
-    assert result.verdict == "changes-requested"
-    assert len(result.findings) == 2
-    assert result.findings[0] == ReviewFinding(
-        file="models.py", line=15, severity="critical", message="hardcoded password in source code"
-    )
-    assert result.findings[1] == ReviewFinding(
-        file="views.py", line=42, severity="warning", message="missing null check on user lookup"
-    )
-
-
-def test_parse_review_result_raises_on_invalid_verdict():
-    with pytest.raises(ValueError, match="invalid reviewer verdict"):
-        _parse_review_result(INVALID_VERDICT_RESPONSE)
-
-
-def test_parse_review_result_drops_bullet_with_invalid_severity(caplog):
-    response = (
-        "## Verdict\nchanges-requested\n\n"
-        "## Findings\n"
-        "- file: models.py, line: 15, severity: nitpick, message: not a real severity\n"
-        "- file: views.py, line: 42, severity: warning, message: this one is fine\n"
-    )
-
-    with caplog.at_level("WARNING"):
-        result = _parse_review_result(response)
-
-    assert result.verdict == "changes-requested"
-    assert len(result.findings) == 1
-    assert result.findings[0].file == "views.py"
-    assert "malformed" in caplog.text.lower()
-
-
-def test_parse_review_result_drops_bullet_missing_file(caplog):
-    response = (
-        "## Verdict\nchanges-requested\n\n"
-        "## Findings\n"
-        "- line: 15, severity: critical, message: no file given\n"
-    )
-
-    with caplog.at_level("WARNING"):
-        result = _parse_review_result(response)
-
-    assert result.verdict == "changes-requested"
-    assert result.findings == []
-    assert "malformed" in caplog.text.lower()
-
-
 def test_review_changes_approves_clean_files():
-    router = FakeRouter([APPROVE_RESPONSE])
+    router = FakeRouter([structured(APPROVE_RESULT)])
     executor = RecordingExecutorClient(files={"models.py": "class User: pass\n"})
 
-    result = asyncio.run(review_changes(router, executor, "proj-1"))
+    result, message = asyncio.run(review_changes(router, executor, "proj-1"))
 
     assert result.verdict == "approve"
     assert result.findings == []
+    assert message.usage_metadata is not None
 
 
 def test_review_changes_flags_hardcoded_secret():
-    router = FakeRouter([CHANGES_REQUESTED_RESPONSE])
+    router = FakeRouter([structured(CHANGES_REQUESTED_RESULT)])
     executor = RecordingExecutorClient(
         files={
             "models.py": "class User:\n    password = 'admin123'\n",
@@ -126,14 +67,17 @@ def test_review_changes_flags_hardcoded_secret():
         }
     )
 
-    result = asyncio.run(review_changes(router, executor, "proj-1"))
+    result, _ = asyncio.run(review_changes(router, executor, "proj-1"))
 
     assert result.verdict == "changes-requested"
     assert len(result.findings) == 2
+    assert result.findings[0] == ReviewFinding(
+        file="models.py", line=15, severity="critical", message="hardcoded password in source code"
+    )
 
 
 def test_review_changes_reads_only_changed_files_when_listed():
-    router = FakeRouter([APPROVE_RESPONSE])
+    router = FakeRouter([structured(APPROVE_RESULT)])
     executor = RecordingExecutorClient(
         files={
             "models.py": "class User: pass\n",
@@ -141,7 +85,9 @@ def test_review_changes_reads_only_changed_files_when_listed():
         }
     )
 
-    result = asyncio.run(review_changes(router, executor, "proj-1", changed_files=["models.py"]))
+    result, _ = asyncio.run(
+        review_changes(router, executor, "proj-1", changed_files=["models.py"])
+    )
 
     assert result.verdict == "approve"
     # When changed_files is provided, skip list_files and read only those files
@@ -149,7 +95,7 @@ def test_review_changes_reads_only_changed_files_when_listed():
 
 
 def test_review_changes_skips_unreadable_files_gracefully():
-    router = FakeRouter([APPROVE_RESPONSE])
+    router = FakeRouter([structured(APPROVE_RESULT)])
 
     class FailingExecutorClient:
         async def list_files(self, project_id, path="."):
@@ -162,6 +108,17 @@ def test_review_changes_skips_unreadable_files_gracefully():
                 raise FileNotFoundError("nope")
             return "class User: pass\n"
 
-    result = asyncio.run(review_changes(router, FailingExecutorClient(), "proj-1"))
+    result, _ = asyncio.run(review_changes(router, FailingExecutorClient(), "proj-1"))
 
     assert result.verdict == "approve"
+
+
+def test_review_changes_sends_system_and_user_messages():
+    router = FakeRouter([structured(APPROVE_RESULT)])
+    executor = RecordingExecutorClient(files={"models.py": "class User: pass\n"})
+
+    asyncio.run(review_changes(router, executor, "proj-1"))
+
+    sent_messages = router.model.requests[0]
+    assert sent_messages[0].content.lower().count("security") >= 1
+    assert "models.py" in sent_messages[1].content

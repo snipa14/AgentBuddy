@@ -7,9 +7,15 @@ end in `test_graph_end_to_end.py` instead. `node_coder` never calls
 `interrupt()` at all, so it's fully testable directly like any other node.
 """
 
-from langgraph.graph import END
-
-from services.orchestrator.executor_client import ExecutorClientError, FileEntry, ScreenshotResult
+from services.orchestrator.agents.frontend_reviewer import FrontendFinding, FrontendReviewResult
+from services.orchestrator.agents.planner import InterviewTurn
+from services.orchestrator.agents.reviewer import ReviewFinding, ReviewResult
+from services.orchestrator.executor_client import (
+    CommandResult,
+    ExecutorClientError,
+    FileEntry,
+    ScreenshotResult,
+)
 from services.orchestrator.executor_client import TestResult as ExecutorTestResult
 from services.orchestrator.graph.nodes import (
     COST_THRESHOLD_USD_STUB,
@@ -18,6 +24,7 @@ from services.orchestrator.graph.nodes import (
     node_done,
     node_frontend_review,
     node_intake,
+    node_memory_curator,
     node_planner_ask,
     node_planner_critique,
     node_planner_draft,
@@ -34,13 +41,24 @@ from services.orchestrator.graph.nodes import (
 from services.orchestrator.graph.nodes import node_cost_check as cost_check
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.graph.tests.unit.planner_fakes import (
-    CODER_DONE_RESPONSE,
-    EMPTY_DRAFT_RESPONSE,
-    NO_FINDINGS_CRITIQUE_RESPONSE,
-    ONE_TASK_RESPONSE,
-    READY_RESPONSE,
+    CODER_DONE,
+    EMPTY_DRAFT,
+    NO_FINDINGS_CRITIQUE,
+    ONE_TASK,
+    READY_TURN,
     FakeRouter,
+    structured,
 )
+
+
+def _tool_call(name: str, args: dict, call_id: str = "call_1"):
+    from langchain_core.messages import AIMessage
+
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": name, "args": args, "id": call_id}],
+        usage_metadata={"input_tokens": 10, "output_tokens": 10, "total_tokens": 20},
+    )
 
 
 class _RecordingExecutorClient:
@@ -67,6 +85,12 @@ class _RecordingExecutorClient:
         self.calls.append(("list_files", project_id, path))
         return [FileEntry(name=name, is_dir=False) for name in self.files]
 
+    async def run_command(self, project_id, command, timeout=None):
+        self.calls.append(("run_command", project_id, tuple(command)))
+        if tuple(command[:3]) == ("git", "diff", "--cached"):
+            return CommandResult(stdout="", stderr="", exit_code=1)  # has changes
+        return CommandResult(stdout="", stderr="", exit_code=0)
+
     async def run_tests(self, project_id: str, framework: str = "pytest"):
         self.calls.append(("run_tests", project_id, framework))
         if self.test_result is not None:
@@ -88,8 +112,7 @@ def test_node_intake_advances_to_planning():
 
 
 def test_node_planner_ask_arms_the_question_gate_when_more_info_needed():
-    questions_response = "## Status\nquestions\n\n## Questions\n- What language?\n"
-    router = FakeRouter([questions_response])
+    router = FakeRouter([structured(InterviewTurn(status="questions", questions=["What language?"]))])
     state = new_project_state("proj-1", initial_message="build a thing")
 
     update = node_planner_ask(state, router)
@@ -103,15 +126,18 @@ def test_node_planner_ask_arms_the_question_gate_when_more_info_needed():
         "summary": "- What language?",
     }
     assert update["messages"][0].content == "- What language?"
+    assert update["cost_usd_session"] > 0
 
 
 def test_node_planner_ask_advances_to_roasting_when_ready():
-    router = FakeRouter([READY_RESPONSE])
+    router = FakeRouter([READY_TURN])
     state = new_project_state("proj-1", initial_message="build a thing")
 
     update = node_planner_ask(state, router)
 
-    assert update == {"phase": "roasting", "pending_approval": None}
+    assert update["phase"] == "roasting"
+    assert update["pending_approval"] is None
+    assert update["cost_usd_session"] > 0
 
 
 def test_route_after_planner_ask_waits_when_questioning():
@@ -129,7 +155,7 @@ def test_route_after_planner_ask_drafts_when_ready():
 
 
 def test_node_planner_draft_produces_a_plan():
-    router = FakeRouter([EMPTY_DRAFT_RESPONSE])
+    router = FakeRouter([EMPTY_DRAFT])
     state = new_project_state("proj-1", initial_message="build a thing")
 
     update = node_planner_draft(state, router)
@@ -139,7 +165,7 @@ def test_node_planner_draft_produces_a_plan():
 
 
 def test_node_planner_critique_arms_the_plan_approval_gate():
-    router = FakeRouter([NO_FINDINGS_CRITIQUE_RESPONSE])
+    router = FakeRouter([NO_FINDINGS_CRITIQUE])
     state = new_project_state("proj-1")
     state["plan"] = {"summary": "A minimal test project.", "risks": [], "assumptions": []}
 
@@ -151,22 +177,24 @@ def test_node_planner_critique_arms_the_plan_approval_gate():
     assert update["plan"]["summary"] == "A minimal test project."
 
 
-def test_route_after_plan_wait_halts_when_blocked():
+def test_route_after_plan_wait_always_advances_to_memory_curator_even_when_blocked():
+    """Blocked is a curation-worthy transition too (Phase 14) -- route_after_memory_curator,
+    not this function, is the one that actually halts with END."""
     state = new_project_state("proj-1")
     state["phase"] = "blocked"
 
-    assert route_after_plan_wait(state) == END
+    assert route_after_plan_wait(state) == "memory_curator"
 
 
-def test_route_after_plan_wait_advances_to_task_decomposition():
+def test_route_after_plan_wait_advances_to_memory_curator_when_approved():
     state = new_project_state("proj-1")
     state["phase"] = "implementing"
 
-    assert route_after_plan_wait(state) == "task_decomposition"
+    assert route_after_plan_wait(state) == "memory_curator"
 
 
 def test_node_task_decomposition_populates_task_queue():
-    router = FakeRouter([ONE_TASK_RESPONSE])
+    router = FakeRouter([ONE_TASK])
     state = new_project_state("proj-1")
     state["plan"] = {"summary": "A minimal test project."}
 
@@ -186,17 +214,19 @@ def test_node_coder_returns_reviewing_phase_when_queue_already_empty():
 
 
 def test_node_coder_succeeds_and_advances_to_reviewing_when_last_task_done():
-    router = FakeRouter([CODER_DONE_RESPONSE])
+    router = FakeRouter([CODER_DONE])
     state = new_project_state("proj-1")
     state["task_queue"] = [{"description": "Do the trivial thing"}]
 
     update = node_coder(state, router, executor_client=_RecordingExecutorClient())
 
-    assert update == {"task_queue": [], "current_task": None, "phase": "reviewing"}
+    assert update["task_queue"] == []
+    assert update["current_task"] is None
+    assert update["phase"] == "reviewing"
 
 
 def test_node_coder_keeps_implementing_when_more_tasks_remain():
-    router = FakeRouter([CODER_DONE_RESPONSE])
+    router = FakeRouter([CODER_DONE])
     state = new_project_state("proj-1")
     state["task_queue"] = [{"description": "First task"}, {"description": "Second task"}]
 
@@ -208,8 +238,7 @@ def test_node_coder_keeps_implementing_when_more_tasks_remain():
 
 
 def test_node_coder_retries_a_failed_task_below_the_attempt_limit():
-    read_missing_file_response = "## Action\nread_file\n\n## Path\nmissing.py\n"
-    router = FakeRouter([read_missing_file_response] * 10)
+    router = FakeRouter([_tool_call("read_file", {"path": "missing.py"})] * 10)
     state = new_project_state("proj-1")
     state["task_queue"] = [{"description": "Do the trivial thing"}]
 
@@ -221,8 +250,7 @@ def test_node_coder_retries_a_failed_task_below_the_attempt_limit():
 
 
 def test_node_coder_blocks_after_exhausting_the_attempt_budget():
-    read_missing_file_response = "## Action\nread_file\n\n## Path\nmissing.py\n"
-    router = FakeRouter([read_missing_file_response] * 100)
+    router = FakeRouter([_tool_call("read_file", {"path": "missing.py"})] * 10)
     state = new_project_state("proj-1")
     state["task_queue"] = [{"description": "Do the trivial thing"}]
     state["current_task"] = {
@@ -233,14 +261,16 @@ def test_node_coder_blocks_after_exhausting_the_attempt_budget():
     update = node_coder(state, router, executor_client=_RecordingExecutorClient())
 
     assert update["phase"] == "blocked"
+    assert update["curator_source"] == "coder"
     assert update["current_task"]["attempts"] == MAX_TASK_ATTEMPTS
 
 
-def test_route_after_coder_halts_when_blocked():
+def test_route_after_coder_routes_to_memory_curator_when_blocked():
+    """Exhausted retries are a curation-worthy transition into blocked (Phase 14)."""
     state = new_project_state("proj-1")
     state["phase"] = "blocked"
 
-    assert route_after_coder(state) == END
+    assert route_after_coder(state) == "memory_curator"
 
 
 def test_route_after_coder_advances_to_reviewer_when_reviewing():
@@ -248,15 +278,6 @@ def test_route_after_coder_advances_to_reviewer_when_reviewing():
     state["phase"] = "reviewing"
 
     assert route_after_coder(state) == "reviewer"
-
-
-def test_route_after_coder_returns_end_when_phase_testing():
-    """The reviewer now sits between coder and frontend_review/cost_check; 'testing'
-    is no longer a phase that routes from coder — it's handled by route_after_reviewer."""
-    state = new_project_state("proj-1")
-    state["phase"] = "testing"
-
-    assert route_after_coder(state) == END
 
 
 def test_route_after_coder_loops_back_when_still_implementing():
@@ -313,6 +334,7 @@ def test_node_testing_arms_merge_gate_on_pass():
     update = node_testing(state, executor)
 
     assert update["phase"] == "awaiting_merge_approval"
+    assert update["curator_source"] == "testing"
     assert update["coverage_pct"] == 95.0
     assert update["pending_approval"]["kind"] == "merge_approval"
 
@@ -328,6 +350,7 @@ def test_node_testing_routes_back_to_coder_on_test_failure():
     update = node_testing(state, executor)
 
     assert update["phase"] == "implementing"
+    assert update["curator_source"] == "testing"
     assert len(update["messages"]) == 1
     assert "Test failures:" in update["messages"][0].content
 
@@ -421,35 +444,87 @@ def test_node_testing_calls_executor_run_tests():
     assert ("run_tests", "proj-1", "pytest") in executor.calls
 
 
-def test_node_done_returns_empty_update():
+# -- node_done tests (Phase 13: always commits locally, autonomously) -----------
+
+
+def test_node_done_commits_locally_when_no_remote_is_configured():
+    executor = _RecordingExecutorClient()
     state = new_project_state("proj-1")
     state["phase"] = "done"
 
-    assert node_done(state) == {}
+    update = node_done(state, executor)
+
+    assert update == {"phase": "done"}
+    cmd_calls = [c for c in executor.calls if c[0] == "run_command"]
+    assert any(c[2][:2] == ("git", "add") for c in cmd_calls)
+    assert any(c[2][:2] == ("git", "commit") for c in cmd_calls)
+    assert not any(c[2][:2] == ("git", "push") for c in cmd_calls)
+
+
+def test_node_done_derives_branch_name_from_project_id_when_unset():
+    executor = _RecordingExecutorClient()
+    state = new_project_state("proj-xyz")
+    state["phase"] = "done"
+
+    node_done(state, executor)
+
+    checkout_calls = [c for c in executor.calls if c[0] == "run_command" and c[2][:2] == ("git", "checkout")]
+    assert checkout_calls
+    assert "feature/proj-xyz" in checkout_calls[0][2]
+
+
+def test_node_done_pushes_when_a_remote_is_configured():
+    executor = _RecordingExecutorClient()
+    state = new_project_state("proj-1")
+    state["phase"] = "done"
+    state["git_remote_url"] = "git@github.com:test/repo.git"
+    state["pr_mode"] = "manual"
+
+    update = node_done(state, executor)
+
+    assert update == {"phase": "done"}
+    cmd_calls = [c for c in executor.calls if c[0] == "run_command"]
+    assert any(c[2][:2] == ("git", "push") for c in cmd_calls)
+
+
+# -- memory_curator wiring smoke test (full coverage in test_memory_curator.py) --
+
+
+def test_node_memory_curator_is_a_noop_without_a_curator_source():
+    state = new_project_state("proj-1")
+
+    assert node_memory_curator(state, projects_root=None, conn=None, router=None) == {}
 
 
 # -- Reviewer node tests -------------------------------------------------------
 
-_APPROVE_REVIEW_RESPONSE = "## Verdict\napprove\n\n## Findings\n"
+_APPROVE_REVIEW = structured(ReviewResult(verdict="approve", findings=[]))
 
-_CHANGES_REQUESTED_RESPONSE = (
-    "## Verdict\nchanges-requested\n\n"
-    "## Findings\n"
-    "- file: models.py, line: 15, severity: critical, message: hardcoded password in source code\n"
+_CHANGES_REQUESTED_REVIEW = structured(
+    ReviewResult(
+        verdict="changes-requested",
+        findings=[
+            ReviewFinding(
+                file="models.py", line=15, severity="critical",
+                message="hardcoded password in source code",
+            )
+        ],
+    )
 )
 
 
 def test_node_reviewer_approves_and_advances_to_testing():
-    router = FakeRouter([_APPROVE_REVIEW_RESPONSE])
+    router = FakeRouter([_APPROVE_REVIEW])
     state = new_project_state("proj-1")
 
     update = node_reviewer(state, router, _RecordingExecutorClient())
 
-    assert update == {"phase": "testing"}
+    assert update["phase"] == "testing"
+    assert update["cost_usd_session"] > 0
 
 
 def test_node_reviewer_requests_changes_and_routes_back_to_coder():
-    router = FakeRouter([_CHANGES_REQUESTED_RESPONSE])
+    router = FakeRouter([_CHANGES_REQUESTED_REVIEW])
     state = new_project_state("proj-1")
 
     update = node_reviewer(state, router, _RecordingExecutorClient())
@@ -476,12 +551,15 @@ def test_route_after_reviewer_loops_back_to_coder_on_changes_requested():
 
 # -- Frontend Reviewer node tests -----------------------------------------------
 
-_APPROVE_FRONTEND_RESPONSE = "## Verdict\napprove\n\n## Findings\n"
+_APPROVE_FRONTEND = structured(FrontendReviewResult(verdict="approve", findings=[]))
 
-_FRONTEND_CHANGES_REQUESTED_RESPONSE = (
-    "## Verdict\nchanges-requested\n\n"
-    "## Findings\n"
-    "- line: 5, severity: critical, message: text unreadable on dark background\n"
+_FRONTEND_CHANGES_REQUESTED = structured(
+    FrontendReviewResult(
+        verdict="changes-requested",
+        findings=[
+            FrontendFinding(line=5, severity="critical", message="text unreadable on dark background")
+        ],
+    )
 )
 
 
@@ -497,16 +575,17 @@ def test_node_frontend_review_skips_when_no_frontend_files():
 
 
 def test_node_frontend_review_approves_and_advances_to_testing():
-    router = FakeRouter([_APPROVE_FRONTEND_RESPONSE])
+    router = FakeRouter([_APPROVE_FRONTEND])
     executor = _RecordingExecutorClient(files={"index.html": "<html></html>"})
 
     update = node_frontend_review(new_project_state("proj-1"), router, executor)
 
-    assert update == {"phase": "testing"}
+    assert update["phase"] == "testing"
+    assert update["cost_usd_session"] > 0
 
 
 def test_node_frontend_review_requests_changes_and_routes_back_to_coder():
-    router = FakeRouter([_FRONTEND_CHANGES_REQUESTED_RESPONSE])
+    router = FakeRouter([_FRONTEND_CHANGES_REQUESTED])
     executor = _RecordingExecutorClient(files={"index.html": "<html></html>"})
 
     update = node_frontend_review(new_project_state("proj-1"), router, executor)

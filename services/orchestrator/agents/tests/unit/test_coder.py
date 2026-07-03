@@ -2,36 +2,44 @@
 
 Per .claude/rules/testing.md, LLM-backed agent tests mock the provider at
 the model_router.resolve() boundary (router_fakes.py, shared with
-test_planner.py). RecordingExecutorClient fakes the Executor side and
-records every call made to it, so tests can assert on *how* the Coder
-worked (the exact sequence of tool calls), not just the final file state --
-per TODO.md Phase 9's explicit ask.
+test_planner.py/test_reviewer.py). RecordingExecutorClient fakes the
+Executor side and records every call made to it, so tests can assert on
+*how* the Coder worked (the exact sequence of tool calls), not just the
+final file state -- per TODO.md Phase 9's explicit ask.
 """
 
 import asyncio
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from services.orchestrator.agents.coder import (
-    decide_next_action,
+    CoderTask,
+    _TaskList,
     decompose_plan_into_tasks,
     run_coder_task,
 )
-from services.orchestrator.agents.tests.unit.router_fakes import FakeRouter
+from services.orchestrator.agents.tests.unit.router_fakes import FakeRouter, structured, usage
 from services.orchestrator.executor_client import CommandResult, ExecutorClientError
 
-DECOMPOSE_RESPONSE = (
-    "## Tasks\n"
-    "Add a User model with email and password_hash fields\n"
-    "Add a POST /login endpoint\n"
+TASK_LIST = _TaskList(
+    tasks=[
+        CoderTask(description="Add a User model with email and password_hash fields"),
+        CoderTask(description="Add a POST /login endpoint"),
+    ]
 )
 
-READ_FILE_ACTION_RESPONSE = "## Action\nread_file\n\n## Path\nmodels.py\n"
-WRITE_FILE_ACTION_RESPONSE = (
-    "## Action\nwrite_file\n\n## Path\nmodels.py\n\n## Content\nclass User:\n    pass\n"
-)
-RUN_COMMAND_ACTION_RESPONSE = "## Action\nrun_command\n\n## Command\npython3\n-m\npytest\n"
-DONE_ACTION_RESPONSE = "## Action\ndone\n"
+
+def _tool_call_message(name: str, args: dict, call_id: str = "call_1") -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": name, "args": args, "id": call_id}],
+        usage_metadata=usage(),
+    )
+
+
+def _done_message() -> AIMessage:
+    return AIMessage(content="done", tool_calls=[], usage_metadata=usage())
 
 
 class RecordingExecutorClient:
@@ -57,10 +65,10 @@ class RecordingExecutorClient:
         return CommandResult(stdout="3 passed", stderr="", exit_code=0)
 
 
-def test_decompose_plan_into_tasks_parses_task_list():
-    router = FakeRouter([DECOMPOSE_RESPONSE])
+def test_decompose_plan_into_tasks_returns_task_list():
+    router = FakeRouter([structured(TASK_LIST)])
 
-    tasks = asyncio.run(
+    tasks, message = asyncio.run(
         decompose_plan_into_tasks(router, {"summary": "An auth service", "goals": ["login"]})
     )
 
@@ -68,67 +76,29 @@ def test_decompose_plan_into_tasks_parses_task_list():
         "Add a User model with email and password_hash fields",
         "Add a POST /login endpoint",
     ]
+    assert message.usage_metadata is not None
 
 
 def test_decompose_plan_into_tasks_raises_on_no_tasks():
-    router = FakeRouter(["## Tasks\n"])
+    router = FakeRouter([structured(_TaskList(tasks=[]))])
 
     with pytest.raises(ValueError, match="no tasks found"):
         asyncio.run(decompose_plan_into_tasks(router, {"summary": "x"}))
 
 
-def test_decide_next_action_parses_read_file():
-    router = FakeRouter([READ_FILE_ACTION_RESPONSE])
-
-    action = asyncio.run(decide_next_action(router, "implement the User model", []))
-
-    assert action.kind == "read_file"
-    assert action.path == "models.py"
-
-
-def test_decide_next_action_parses_write_file():
-    router = FakeRouter([WRITE_FILE_ACTION_RESPONSE])
-
-    action = asyncio.run(decide_next_action(router, "implement the User model", []))
-
-    assert action.kind == "write_file"
-    assert action.path == "models.py"
-    assert action.content == "class User:\n    pass"
-
-
-def test_decide_next_action_parses_run_command():
-    router = FakeRouter([RUN_COMMAND_ACTION_RESPONSE])
-
-    action = asyncio.run(decide_next_action(router, "run the tests", []))
-
-    assert action.kind == "run_command"
-    assert action.command == ["python3", "-m", "pytest"]
-
-
-def test_decide_next_action_parses_done():
-    router = FakeRouter([DONE_ACTION_RESPONSE])
-
-    action = asyncio.run(decide_next_action(router, "implement the User model", []))
-
-    assert action.kind == "done"
-
-
-def test_decide_next_action_raises_on_malformed_action():
-    router = FakeRouter(["## Action\nfrobnicate\n"])
-
-    with pytest.raises(ValueError, match="malformed coder action"):
-        asyncio.run(decide_next_action(router, "x", []))
-
-
 def test_run_coder_task_reads_then_writes_then_finishes():
     router = FakeRouter(
-        [READ_FILE_ACTION_RESPONSE, WRITE_FILE_ACTION_RESPONSE, DONE_ACTION_RESPONSE]
+        [
+            _tool_call_message("read_file", {"path": "models.py"}, "call_1"),
+            _tool_call_message(
+                "write_file", {"path": "models.py", "content": "class User:\n    pass"}, "call_2"
+            ),
+            _done_message(),
+        ]
     )
     executor = RecordingExecutorClient(files={"models.py": "# empty\n"})
 
-    result = asyncio.run(
-        run_coder_task(router, executor, "proj-1", "Add a User model")
-    )
+    result = asyncio.run(run_coder_task(router, executor, "proj-1", "Add a User model"))
 
     assert result.success is True
     assert executor.calls == [
@@ -136,11 +106,18 @@ def test_run_coder_task_reads_then_writes_then_finishes():
         ("write_file", "proj-1", "models.py", "class User:\n    pass"),
     ]
     assert executor.files["models.py"] == "class User:\n    pass"
+    assert result.cost_usd > 0
 
 
 def test_run_coder_task_records_a_failed_read_and_still_recovers():
     router = FakeRouter(
-        [READ_FILE_ACTION_RESPONSE, WRITE_FILE_ACTION_RESPONSE, DONE_ACTION_RESPONSE]
+        [
+            _tool_call_message("read_file", {"path": "models.py"}, "call_1"),
+            _tool_call_message(
+                "write_file", {"path": "models.py", "content": "class User:\n    pass"}, "call_2"
+            ),
+            _done_message(),
+        ]
     )
     executor = RecordingExecutorClient(files={})
 
@@ -153,7 +130,7 @@ def test_run_coder_task_records_a_failed_read_and_still_recovers():
 
 
 def test_run_coder_task_returns_failure_when_max_steps_exhausted():
-    router = FakeRouter([READ_FILE_ACTION_RESPONSE] * 3)
+    router = FakeRouter([_tool_call_message("read_file", {"path": "models.py"}, "call_1")] * 3)
     executor = RecordingExecutorClient(files={"models.py": "# empty\n"})
 
     result = asyncio.run(
@@ -163,3 +140,29 @@ def test_run_coder_task_returns_failure_when_max_steps_exhausted():
     assert result.success is False
     assert len(result.transcript) == 3
     assert len(executor.calls) == 3
+
+
+def test_run_coder_task_finishes_immediately_when_model_makes_no_tool_calls():
+    router = FakeRouter([_done_message()])
+    executor = RecordingExecutorClient()
+
+    result = asyncio.run(run_coder_task(router, executor, "proj-1", "trivial task"))
+
+    assert result.success is True
+    assert result.transcript == []
+    assert executor.calls == []
+
+
+def test_run_coder_task_dispatches_run_command_as_an_argv_list():
+    router = FakeRouter(
+        [
+            _tool_call_message("run_command", {"command": ["python3", "-m", "pytest"]}, "call_1"),
+            _done_message(),
+        ]
+    )
+    executor = RecordingExecutorClient()
+
+    result = asyncio.run(run_coder_task(router, executor, "proj-1", "run the tests"))
+
+    assert result.success is True
+    assert executor.calls == [("run_command", "proj-1", ("python3", "-m", "pytest"))]

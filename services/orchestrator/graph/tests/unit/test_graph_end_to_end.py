@@ -6,43 +6,71 @@ can prove persistence: an ephemeral in-memory checkpointer would trivially
 "survive" a restart within the same test process, proving nothing.
 
 Every run now passes through the Planner's interview -> draft -> critique
--> plan-approval gate (Phase 8) and the Coder's task decomposition/ReAct
-loop (Phase 9) before it can ever reach the cost/merge gates -- see
-planner_fakes.py's fast_track_router() for the scripted LLM responses that
-sail a test straight through both when a test cares about what happens
-*after* them, not the interview or coding itself. Those tests never touch
-the Executor, so _UNUSED_EXECUTOR_CLIENT is a placeholder object, never
-actually called.
+-> plan-approval gate (Phase 8), the Coder's task decomposition/tool-calling
+loop (Phase 9), the Reviewer (Phase 10), and the Memory Curator sitting on
+every phase-transition edge (Phase 14) before it can ever reach the cost/
+merge gates -- see planner_fakes.py's fast_track_router() for the scripted
+LLM responses that sail a test straight through when a test cares about what
+happens *after* them, not the interview or coding itself. The Memory
+Curator's own LLM call is a no-op whenever `messages` is still empty
+(node_memory_curator's early-return guard), which every fast-track path
+here satisfies, so fast_track_router() never needs extra scripted responses
+for curation. _UNUSED_EXECUTOR_CLIENT is a stub that reports a clean passing
+test run and successful git commands for any test that reaches node_testing/
+node_done without caring about the specifics.
 """
 
 from langgraph.types import Command
 
+from services.orchestrator.agents.planner import InterviewTurn
+from services.orchestrator.executor_client import CommandResult, TestResult
 from services.orchestrator.graph.build import build_project_graph
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
 from services.orchestrator.graph.nodes import COST_THRESHOLD_USD_STUB
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.graph.tests.unit.planner_fakes import (
-    EMPTY_DRAFT_RESPONSE,
-    NO_FINDINGS_CRITIQUE_RESPONSE,
-    READY_RESPONSE,
+    EMPTY_DRAFT,
+    NO_FINDINGS_CRITIQUE,
+    READY_TURN,
     FakeRouter,
     fast_track_router,
+    structured,
 )
 
-_UNUSED_EXECUTOR_CLIENT = object()
+
+class _StubExecutorClient:
+    """Placeholder ExecutorClient for tests that drive the graph past
+    node_testing/node_done but don't care about real test execution or git
+    output -- always reports a clean passing test run and a successful git
+    command."""
+
+    async def run_tests(self, project_id: str, framework: str = "pytest") -> TestResult:
+        return TestResult(passed=1, failed=0, coverage_pct=100.0, report="1 passed")
+
+    async def run_command(self, project_id: str, command, timeout=None) -> CommandResult:
+        return CommandResult(stdout="", stderr="", exit_code=0)
+
+
+_UNUSED_EXECUTOR_CLIENT = _StubExecutorClient()
 
 
 def _config(project_id: str) -> dict:
     return {"configurable": {"thread_id": project_id}}
 
 
-def test_planner_interview_asks_a_question_before_reaching_plan_approval(tmp_path):
-    questions_response = "## Status\nquestions\n\n## Questions\n- What language?\n"
+def test_planner_interview_asks_a_question_before_reaching_plan_approval(
+    tmp_path, memory_conn, projects_root
+):
     router = FakeRouter(
-        [questions_response, READY_RESPONSE, EMPTY_DRAFT_RESPONSE, NO_FINDINGS_CRITIQUE_RESPONSE]
+        [
+            structured(InterviewTurn(status="questions", questions=["What language?"])),
+            READY_TURN,
+            EMPTY_DRAFT,
+            NO_FINDINGS_CRITIQUE,
+        ]
     )
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, router, _UNUSED_EXECUTOR_CLIENT)
+    graph = build_project_graph(checkpointer, router, _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
     config = _config("proj-interview")
 
     graph.invoke(
@@ -69,9 +97,11 @@ def test_planner_interview_asks_a_question_before_reaching_plan_approval(tmp_pat
     assert snapshot.next == ("plan_wait",)
 
 
-def test_project_below_cost_threshold_reaches_plan_approval_then_merge_gate(tmp_path):
+def test_project_below_cost_threshold_reaches_plan_approval_then_merge_gate(
+    tmp_path, memory_conn, projects_root
+):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT)
+    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
     config = _config("proj-under-budget")
 
     graph.invoke(new_project_state("proj-under-budget"), config=config)
@@ -94,9 +124,9 @@ def test_project_below_cost_threshold_reaches_plan_approval_then_merge_gate(tmp_
     assert any(task.interrupts for task in snapshot.tasks)
 
 
-def test_cost_interrupt_fires_at_threshold(tmp_path):
+def test_cost_interrupt_fires_at_threshold(tmp_path, memory_conn, projects_root):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT)
+    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
     config = _config("proj-over-budget")
     graph.invoke(
         new_project_state("proj-over-budget", cost_usd_session=COST_THRESHOLD_USD_STUB),
@@ -111,9 +141,11 @@ def test_cost_interrupt_fires_at_threshold(tmp_path):
     assert any(task.interrupts for task in snapshot.tasks)
 
 
-def test_resume_approve_after_cost_interrupt_reaches_merge_gate(tmp_path):
+def test_resume_approve_after_cost_interrupt_reaches_merge_gate(
+    tmp_path, memory_conn, projects_root
+):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT)
+    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
     config = _config("proj-resume-continue")
     graph.invoke(
         new_project_state("proj-resume-continue", cost_usd_session=COST_THRESHOLD_USD_STUB),
@@ -128,9 +160,11 @@ def test_resume_approve_after_cost_interrupt_reaches_merge_gate(tmp_path):
     assert snapshot.next == ("merge_wait",)
 
 
-def test_resume_reject_after_cost_interrupt_blocks_and_halts_the_run(tmp_path):
+def test_resume_reject_after_cost_interrupt_blocks_and_halts_the_run(
+    tmp_path, memory_conn, projects_root
+):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT)
+    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
     config = _config("proj-resume-pause")
     graph.invoke(
         new_project_state("proj-resume-pause", cost_usd_session=COST_THRESHOLD_USD_STUB),
@@ -145,9 +179,11 @@ def test_resume_reject_after_cost_interrupt_blocks_and_halts_the_run(tmp_path):
     assert snapshot.next == ()
 
 
-def test_resume_reject_at_merge_gate_blocks_and_halts_the_run(tmp_path):
+def test_resume_reject_at_merge_gate_blocks_and_halts_the_run(
+    tmp_path, memory_conn, projects_root
+):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT)
+    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
     config = _config("proj-reject-merge")
     graph.invoke(new_project_state("proj-reject-merge"), config=config)
     graph.invoke(Command(resume="approve"), config=config)
@@ -159,9 +195,11 @@ def test_resume_reject_at_merge_gate_blocks_and_halts_the_run(tmp_path):
     assert snapshot.next == ()
 
 
-def test_resume_approve_at_merge_gate_reaches_done(tmp_path):
+def test_resume_approve_at_merge_gate_reaches_done(
+    tmp_path, memory_conn, projects_root
+):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT)
+    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
     config = _config("proj-approve-merge")
     graph.invoke(new_project_state("proj-approve-merge"), config=config)
     graph.invoke(Command(resume="approve"), config=config)
@@ -173,7 +211,9 @@ def test_resume_approve_at_merge_gate_reaches_done(tmp_path):
     assert snapshot.next == ()
 
 
-def test_pending_interrupt_survives_a_simulated_restart(tmp_path):
+def test_pending_interrupt_survives_a_simulated_restart(
+    tmp_path, memory_conn, projects_root
+):
     """Proves checkpointer persistence, not just in-memory graph state.
 
     Builds the graph, gets through plan approval and trips the cost gate,
@@ -189,7 +229,7 @@ def test_pending_interrupt_survives_a_simulated_restart(tmp_path):
 
     checkpointer_before_restart = build_sqlite_checkpointer(db_path)
     graph_before_restart = build_project_graph(
-        checkpointer_before_restart, fast_track_router(), _UNUSED_EXECUTOR_CLIENT
+        checkpointer_before_restart, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root
     )
     graph_before_restart.invoke(
         new_project_state(project_id, cost_usd_session=COST_THRESHOLD_USD_STUB),
@@ -202,7 +242,7 @@ def test_pending_interrupt_survives_a_simulated_restart(tmp_path):
 
     checkpointer_after_restart = build_sqlite_checkpointer(db_path)
     graph_after_restart = build_project_graph(
-        checkpointer_after_restart, FakeRouter([]), _UNUSED_EXECUTOR_CLIENT
+        checkpointer_after_restart, FakeRouter([]), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root
     )
 
     snapshot_after_restart = graph_after_restart.get_state(config)

@@ -11,12 +11,13 @@ import sqlite3
 from pathlib import Path
 from typing import Literal
 
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
+from services.orchestrator.agents.llm import invoke_structured
 from services.orchestrator.memory.global_store import record_memory
 from services.orchestrator.memory.project_memory import append_memory_entry
 from services.orchestrator.model_router.router import ModelRouter
-from services.orchestrator.model_router.schemas import CompletionMessage, CompletionRequest
 
 CURATOR_ROLE = "memory_curator"
 
@@ -24,12 +25,10 @@ _SYSTEM_PROMPT = (
     "You curate a single software project's memory. Given a list of raw "
     "phase events, write a short markdown summary of what happened for "
     "LEARNINGS.md, and decide whether anything is worth remembering across "
-    "projects. Respond with exactly two sections: '## Summary' followed by "
-    "the markdown summary, and '## Global Memories' followed by zero or "
-    "more lines, each formatted as "
-    "'type: <error_pattern|fix|preference|skill_usage> | tags: <space "
-    "separated tags> | <content>'. Omit the Global Memories section "
-    "entirely if nothing is cross-project relevant."
+    "projects -- zero or more global memories, each with a type "
+    "(error_pattern, fix, preference, or skill_usage), space-separated tags, "
+    "and content. Leave global_memories empty if nothing is cross-project "
+    "relevant."
 )
 
 
@@ -45,12 +44,12 @@ class CurationResult(BaseModel):
     """The Memory Curator's output for a single completed phase."""
 
     summary_markdown: str
-    global_memories: list[CuratedGlobalMemory]
+    global_memories: list[CuratedGlobalMemory] = []
 
 
 async def curate_phase(
     router: ModelRouter, project_id: str, phase_events: list[str]
-) -> CurationResult:
+) -> tuple[CurationResult, AIMessage]:
     """Summarizes a completed phase's events into markdown plus global memories.
 
     Args:
@@ -60,27 +59,20 @@ async def curate_phase(
         phase_events: Raw event strings from the completed phase's log.
 
     Returns:
-        A CurationResult with a markdown summary and zero or more proposed
-        global memory rows.
+        A tuple of (CurationResult, raw AIMessage) -- the raw message carries
+        usage_metadata for the calling node to price via ModelRouter.cost_usd().
 
     Raises:
         NoCapableProviderError: If no provider is configured for the
             "memory_curator" role.
-        ProviderRequestError: If the underlying model call fails.
-        ValueError: If the model's response doesn't match the expected format.
+        ValueError: If the model's response doesn't match CurationResult.
     """
-    provider = router.resolve(CURATOR_ROLE)
-    request = CompletionRequest(
-        messages=[
-            CompletionMessage(role="system", content=_SYSTEM_PROMPT),
-            CompletionMessage(
-                role="user",
-                content=f"Project: {project_id}\nEvents:\n" + "\n".join(phase_events),
-            ),
-        ]
-    )
-    result = await provider.complete(request)
-    return _parse_curation_response(result.content)
+    llm = router.resolve(CURATOR_ROLE)
+    messages = [
+        SystemMessage(content=_SYSTEM_PROMPT),
+        HumanMessage(content=f"Project: {project_id}\nEvents:\n" + "\n".join(phase_events)),
+    ]
+    return await invoke_structured(llm, CurationResult, messages)
 
 
 async def curate_and_store_phase(
@@ -90,7 +82,7 @@ async def curate_and_store_phase(
     project_id: str,
     phase_events: list[str],
     created_at: str,
-) -> CurationResult:
+) -> tuple[CurationResult, AIMessage]:
     """Curates a completed phase and writes the result to both memory layers.
 
     Args:
@@ -104,9 +96,10 @@ async def curate_and_store_phase(
             created from this phase.
 
     Returns:
-        The CurationResult that was written to disk and sqlite.
+        A tuple of (CurationResult, raw AIMessage) that was written to disk
+        and sqlite -- the raw message carries usage_metadata for cost tracking.
     """
-    result = await curate_phase(router, project_id, phase_events)
+    result, ai_message = await curate_phase(router, project_id, phase_events)
     append_memory_entry(projects_root, project_id, "LEARNINGS.md", result.summary_markdown)
     for memory in result.global_memories:
         record_memory(
@@ -117,45 +110,4 @@ async def curate_and_store_phase(
             tags=memory.tags,
             created_at=created_at,
         )
-    return result
-
-
-def _parse_curation_response(content: str) -> CurationResult:
-    """Parses the curator's '## Summary' / '## Global Memories' response text."""
-    summary_lines: list[str] = []
-    memory_lines: list[str] = []
-    section: str | None = None
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped == "## Summary":
-            section = "summary"
-            continue
-        if stripped == "## Global Memories":
-            section = "memories"
-            continue
-        if section == "summary":
-            summary_lines.append(line)
-        elif section == "memories" and stripped:
-            memory_lines.append(stripped)
-
-    return CurationResult(
-        summary_markdown="\n".join(summary_lines).strip() + "\n",
-        global_memories=[_parse_memory_line(line) for line in memory_lines],
-    )
-
-
-def _parse_memory_line(line: str) -> CuratedGlobalMemory:
-    """Parses one 'type: X | tags: Y | content' line into a CuratedGlobalMemory.
-
-    Raises:
-        ValueError: If the line doesn't match the expected pipe-delimited
-            format, or `type` isn't one of the four known memory types.
-    """
-    parts = [part.strip() for part in line.split("|", maxsplit=2)]
-    if len(parts) != 3 or not parts[0].startswith("type:") or not parts[1].startswith("tags:"):
-        raise ValueError(f"malformed global memory line: {line!r}")
-    return CuratedGlobalMemory(
-        type=parts[0].removeprefix("type:").strip(),
-        tags=parts[1].removeprefix("tags:").strip(),
-        content=parts[2].strip(),
-    )
+    return result, ai_message

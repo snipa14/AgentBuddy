@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 DEFAULT_MEMORY_DB_PATH = Path("/data/memory/foundry_memory.db")
 DEFAULT_EXECUTOR_URL = "http://executor:8000"
+DEFAULT_PROJECTS_ROOT = Path("/data/projects")
 
 
 class OrchestratorConfig(BaseModel):
@@ -14,6 +15,7 @@ class OrchestratorConfig(BaseModel):
 
     memory_db_path: Path
     executor_url: str
+    projects_root: Path
 
     @classmethod
     def from_env(cls) -> "OrchestratorConfig":
@@ -23,9 +25,16 @@ class OrchestratorConfig(BaseModel):
             A validated OrchestratorConfig, defaulting `memory_db_path` to
             the `foundry_memory` volume's mount point and `executor_url` to
             the Executor's service name (both from docker-compose.yml) when
-            `MEMORY_DB_PATH`/`EXECUTOR_URL` are unset.
+            `MEMORY_DB_PATH`/`EXECUTOR_URL` are unset.  `projects_root`
+            defaults to ``/data/projects``.
         """
         raw_path = os.environ.get("MEMORY_DB_PATH")
         memory_db_path = Path(raw_path) if raw_path else DEFAULT_MEMORY_DB_PATH
         executor_url = os.environ.get("EXECUTOR_URL", DEFAULT_EXECUTOR_URL)
-        return cls(memory_db_path=memory_db_path, executor_url=executor_url)
+        raw_projects = os.environ.get("PROJECTS_ROOT")
+        projects_root = Path(raw_projects) if raw_projects else DEFAULT_PROJECTS_ROOT
+        return cls(
+            memory_db_path=memory_db_path,
+            executor_url=executor_url,
+            projects_root=projects_root,
+        )

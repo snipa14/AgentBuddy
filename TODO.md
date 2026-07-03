@@ -275,12 +275,24 @@ The Definition of Done's real end-to-end proof is `services/orchestrator/agents/
 **Goal:** feature-branch commits always happen autonomously; PR automation follows `pr_mode`; merge-to-main is always gated.
 **Decisions:** ADR-009
 
-- [ ] Local git operations via the Executor's `run_command` only — never a separate, unscoped git tool
-- [ ] GitHub API client (PyGithub or raw REST) for push, PR creation (auto mode), and PR status (manual mode just reports the branch)
-- [ ] Implement the merge-to-main `interrupt()` exactly as in ARCHITECTURE.md §6.3, regardless of `pr_mode`
-- [ ] Tests: auto mode opens a PR against a throwaway/test repo (mock GitHub API for unit tests; gate any real-repo integration test behind a CI secret); manual mode pushes the branch and produces the right Telegram copy; **a merge attempt without a resumed approval is provably blocked** — assert no merge call is ever made
+- [x] Local git operations via the Executor's `run_command` only — never a separate, unscoped git tool
+- [x] GitHub API client (PyGithub or raw REST) for push, PR creation (auto mode), and PR status (manual mode just reports the branch)
+- [x] Implement the merge-to-main `interrupt()` exactly as in ARCHITECTURE.md §6.3, regardless of `pr_mode`
+- [x] Tests: auto mode opens a PR against a throwaway/test repo (mock GitHub API for unit tests; gate any real-repo integration test behind a CI secret); manual mode pushes the branch and produces the right Telegram copy; **a merge attempt without a resumed approval is provably blocked** — assert no merge call is ever made
 
 **Definition of Done:** the "blocked without approval" test is the one that matters most here — write it first, not last.
+
+**Verification status:** the graph-layer suite (`services/orchestrator/graph/tests/unit/test_integrator.py`) is written and hand-traced but unverified by actually running it in this sandbox -- `langgraph`/`pygithub` aren't installed here and the host-install hook (`.claude/rules/security.md`, `block_host_installs.py`) correctly blocks installing them outside a workspace container, the same gap every graph-layer phase since Phase 5 has documented. Install them and run `pytest services/orchestrator/graph/tests/unit/test_integrator.py -v` on a machine that has them.
+
+A validation pass on the uncommitted first implementation found and fixed several real defects before this note was written:
+1. **`build_project_graph` couldn't be called at all**: `graph/build.py` used `node_intake` and `node_frontend_review` (both already required by earlier phases) without importing them -- a `NameError` on the very first `build_project_graph()` call, in every deployment and every test. Fixed by adding both back to the import list.
+2. **Two conditional-edge routing tables were out of sync with the node functions they route**: `route_after_cost_wait` returns `"memory_curator"` but `build.py`'s map for the `cost_wait` node still only mapped `{"testing": "testing", END: END}` (a stale mapping from before the Memory Curator was wired in); `route_after_memory_curator` can return `"coder"` (test-failure retries) but the `memory_curator` node's map didn't include that key at all. Either would have raised a routing error the first time a real run actually took that path. Fixed both maps.
+3. **`IntegratorClient.commit_and_push` never actually worked**: it called `Executor.run_command` with a single shell string (e.g. `"git config user.email '...' && git config user.name '...'"`), but `run_command`'s real contract is an argv list executed directly via the Docker SDK's `exec_run` with no shell involved (`services/executor/containers.py`'s `exec_in_container`) -- so `&&` was never interpreted, and even a single git subcommand as one string would fail (Docker would try to exec a binary literally named that whole string). It also treated the returned `CommandResult` object as if it were a plain string (`.strip()` on a Pydantic model) and used a nonexistent git flag (`git rev-parse --is-init`) to detect an existing repo. None of this was caught before because the file's own test suite mocked `run_command` with a fake that accepted a string and returned strings -- a fake that didn't match the real interface at all (".claude/rules/security.md" calls this pattern out by name for the Docker boundary; the same principle applies here). Rewrote every call as a real argv list, checks `CommandResult.exit_code` instead of parsing stdout, and drops the invalid-flag repo check (`git init` on an already-initialized repo is a safe no-op, so there's nothing to detect).
+4. **`git remote add origin` failing on a second run**: a project's feature branch is recreated on every merge, but `git remote add` errors if `origin` already exists from a prior run. Fixed to fall back to `git remote set-url` when `add` fails.
+5. **`GITHUB_TOKEN` was read once at module import time** (`_GITHUB_TOKEN = os.environ.get(...)` as a module-level constant), so a test (or a real deployment) setting the env var after the module first loads would never see it -- `create_pull_request` would always see whatever value was present the first time anything imported `integrator_client.py`, which in this sandbox's test run order is usually empty, silently failing every "PR created successfully" test case. Fixed to read `os.environ.get("GITHUB_TOKEN", "")` inside `create_pull_request` at call time.
+6. **The Integrator's entire git-commit path was dead code in every real run**: `node_done` originally no-op'd unless *both* `git_branch` and `git_remote_url` were already set on `ProjectState`, but nothing anywhere in the graph ever set either field (they're new fields this phase added) -- so despite everything else above being fixed, a real project would still never commit anything, directly contradicting this phase's own goal ("feature-branch commits always happen autonomously"). Fixed per ADR-029: `git_branch` now defaults to `feature/{project_id}` (always mechanically derivable, no missing wiring needed), so a local commit always happens autonomously; `git_remote_url` is left unset by default since threading the project registry's `git_remote` field into `ProjectState` is a separate, pre-existing gap Phase 7/8 already flagged and deferred, not something to silently fold into this phase.
+7. **`route_after_plan_wait`/`route_after_cost_wait`/`route_after_merge_wait` all short-circuited straight to `END` on a rejected/blocked approval**, bypassing the `memory_curator` node entirely -- meaning "any transition into blocked" (Phase 14's own stated requirement, see below) never actually triggered curation for these three gates. Fixed to always route to `memory_curator` regardless of the decision; `route_after_memory_curator`'s own blocked-phase check now does the halting, *after* curation has a chance to run.
+8. `route_after_memory_curator`'s return type annotation (`str | Literal["END"]`) used `Literal` without importing it from `typing` -- a `NameError` at `graph/nodes.py`'s import time, meaning literally nothing in the module (or anything importing it) could load. Fixed to `-> str`, matching every other `route_*` function's annotation in the file (`END` is a sentinel object, not the literal string `"END"`).
 
 ---
 
@@ -289,15 +301,76 @@ The Definition of Done's real end-to-end proof is `services/orchestrator/agents/
 **Goal:** the curator actually runs as part of the live graph, not just in isolation (closes the loop on Phase 6).
 **Decisions:** ADR-007
 
-- [ ] Hook curator invocation into phase-transition edges (`testing → done`, any transition into `blocked`, every approval resolution)
-- [ ] Confirm a lesson learned in project A is retrievable via `recall()` while working on project B
-- [ ] Tests: simulate two fixture projects hitting the same error pattern; confirm the second project's Coder agent has access to the first one's recorded fix via global recall
+- [x] Hook curator invocation into phase-transition edges (`testing → done`, any transition into `blocked`, every approval resolution)
+- [x] Confirm a lesson learned in project A is retrievable via `recall()` while working on project B
+- [x] Tests: simulate two fixture projects hitting the same error pattern; confirm the second project's Coder agent has access to the first one's recorded fix via global recall
 
 **Definition of Done:** the cross-project recall test passes — this is the concrete proof the global memory layer is actually useful, not just present.
 
+**Verification status:** same sandbox limitation as Phase 13 -- `services/orchestrator/graph/tests/unit/test_memory_curator.py` is written and hand-traced but unverified by actually running it here (`langgraph` not installed, host-install hook correctly blocks installing it). `services/orchestrator/memory`'s own suite (no LangGraph dependency) is verified for real -- `pytest services/orchestrator/memory -v` passes as part of this session's `pytest services/executor --ignore=services/executor/tests/unit/test_api.py services/orchestrator/memory services/orchestrator/registry` run (79 passed, 6 skipped).
+
+A validation pass found and fixed real defects beyond the shared `route_after_*`/`Literal`-import bugs already listed under Phase 13 (both phases' graph wiring landed in the same working tree, per this session's git.md-noted bundling):
+1. **`node_coder`'s exhausted-retries transition into `blocked` never went through the curator at all** -- `route_after_coder` routed straight to `END`, and `node_coder` never set `curator_source`. This is exactly the "any transition into blocked" case Phase 14's own task list calls out, but the Coder's blocked path was the one transition into `blocked` this phase's original implementation missed (`node_plan_wait`/`node_cost_wait`/`node_merge_wait` all correctly set `curator_source` on rejection, just couldn't reach the curator node due to bug #7 above). Fixed: `node_coder` now sets `curator_source="coder"` when blocking, and `route_after_coder` routes to `memory_curator` instead of `END` directly.
+2. **`node_memory_curator` never accounted for its own LLM call's cost** -- it always returned `{}` on success, even though curation is itself a real, billed completion (Phase 15's cost-tracking requirement covers every LLM-backed node, and the curator is one). Fixed to fold the curation call's `cost_usd` into `cost_usd_session`/`cost_usd_weekly`, same as every other LLM-backed node -- while still returning a literal `{}` (not zero-valued cost keys) when curation didn't run at all, so the existing "no-op" test assertions stay meaningful.
+3. The test file's own `_FakeCuratorRouter` set `mock.complete.return_value = MagicMock(...)` on a plain (non-async) `MagicMock` -- `await`ing that call would have raised `TypeError`, silently caught by `node_memory_curator`'s broad `except Exception`, meaning `test_node_memory_curator_runs_curation_and_stores` would never actually have exercised a successful curation even before Phase 15 replaced this fake entirely. Superseded by Phase 15's `BaseChatModel`-shaped fakes (`planner_fakes.py`'s `FakeChatModel`/`ScriptedStructured`), which don't have this problem since `with_structured_output(...).ainvoke()` is a real `async def`.
+
 ---
 
-## Phase 15 — Multi-Project Concurrency
+## Phase 15 — Model Router: LangChain Migration & Structured Output
+
+**Goal:** replace the custom `Provider` protocol with LangChain's `BaseChatModel` across every existing agent, so tool-calling, retry, and per-role structured output come from a maintained integration instead of hand-rolled markdown parsing -- and make the cost-threshold gate (Phase 5, ADR-009) actually trip from real usage instead of a field that never changes from its initial value.
+**Decisions:** ADR-025 (supersedes ADR-022's rationale), ADR-026
+
+- [x] `pyproject.toml`: add `langchain-anthropic`, `langchain-ollama` dependencies
+- [x] `model_router/provider.py` (the custom `Provider` Protocol) and the hand-rolled `providers/anthropic.py`/`providers/ollama.py` removed
+- [x] `model_router/router.py`: `resolve(role: str) -> BaseChatModel`, constructing `ChatAnthropic(model=..., api_key=..., max_retries=5)` / `ChatOllama(model=..., base_url=..., max_retries=5)` per configured provider entry; existing capability/prefer-chain matching logic and `NoCapableProviderError`/`UnknownRoleError` behavior preserved unchanged (only the constructed object type changes)
+- [x] `config/models.yaml`: add `cost_per_1m_input_tokens`/`cost_per_1m_output_tokens` to every provider entry (Pydantic schema validation extended to require them)
+- [x] Cost tracking: `ModelRouter.cost_usd(role, usage_metadata)` looks up the resolved provider's per-token pricing and returns a `cost_usd` delta; every LLM-backed agent function returns `(result, raw_ai_message)` so the calling graph node -- not the agent code itself -- can price the call and fold the delta into its own `cost_usd_session`/`cost_usd_weekly` state update (`graph/nodes.py`'s `_with_cost` helper); the Memory Curator is included (it makes a real, billed call too) even though it wasn't explicitly named in this phase's original task list
+- [x] Structured output migration: `Planner` (`draft_plan`/`critique_plan`/`ask_clarifying_questions`), `Reviewer` (`review_changes`), `Frontend Reviewer` (`review_frontend`), and `Memory Curator` (`curate_phase`, added beyond the original list once `Provider`'s removal made its `.complete()` call unusable) switch from `agents/parsing.py`'s `split_sections`/`bullet_lines` markdown parsing to `llm.with_structured_output(schema, include_raw=True)` via a shared `agents/llm.py::invoke_structured` helper; `agents/parsing.py` deleted (nothing references it anymore, including the Coder -- see below)
+- [x] Coder tool-calling migration: `run_coder_task` switches to `llm.bind_tools([read_file, write_file, run_command])` (LangChain `@tool`-decorated functions closed over one project's `ExecutorClient`); task completion is signaled by the model returning a turn with no further tool calls; `decompose_plan_into_tasks` also migrated to structured output (not explicitly listed in the original task breakdown, but it used the same soon-to-be-deleted `Provider.complete()` call and needed to move too)
+- [x] Test fakes: `agents/tests/unit/router_fakes.py`'s `FakeRouter`/`ScriptedProvider` and `graph/tests/unit/planner_fakes.py`'s duplicate copy rewritten to fake `BaseChatModel`'s surface (`.ainvoke`, `.bind_tools`, `.with_structured_output`) instead of a custom `.complete()`; every agent unit test (`test_planner.py`, `test_coder.py`, `test_reviewer.py`, `test_frontend_reviewer.py`, `test_memory_curator.py`) and every graph-layer test that drives the fast-track flow updated accordingly
+- [x] Tests: cost-accumulation tests in `model_router/tests/unit/test_router.py` (`cost_usd()` computed from scripted `usage_metadata`, including that it resolves the same provider `resolve()` would); a construction-time assertion that every `ChatAnthropic`/`ChatOllama` the router builds has `max_retries` set; structured-output round trips for each migrated role via `ScriptedStructured`, including a parsing-failure case that asserts `invoke_structured` raises rather than silently drops; Coder tool-calling round trips scripting `AIMessage.tool_calls` sequences, matching the exact-call-sequence assertion style already used in `test_coder.py`
+
+**Definition of Done:** every existing agent's test suite passes against the new `BaseChatModel`-based router with zero references to the old `Provider` protocol remaining anywhere in `services/`; a real (or realistically mocked) Claude API response's token usage produces a nonzero `cost_usd_weekly` the existing cost gate (`node_cost_check`) can actually trip on.
+
+**Verification status:** implemented and hand-traced, but **not verified by actually running the migrated test suites in this sandbox** -- `langchain-anthropic`/`langchain-ollama`/`langgraph`/`fastapi`/`pygithub` are none of them installed here, and `.claude/rules/security.md`'s host-install hook correctly blocks installing any of them outside a workspace container (confirmed by attempting it: `block_host_installs.py` fired as designed). This is the same gap every LangGraph-touching phase since Phase 5 has carried, now extended to the model_router/agents layer too, since it depends on `langchain-anthropic`/`langchain-ollama` for the first time. What *is* verified for real in this session: every touched file byte-compiles (`python3 -m py_compile`) and passes an AST-level unused-import scan; `pytest services/executor --ignore=services/executor/tests/unit/test_api.py services/orchestrator/memory services/orchestrator/registry` (the suites with no LangChain/LangGraph/FastAPI dependency) is green at 79 passed, 6 skipped, confirming this phase's changes didn't regress anything outside its own footprint. `grep` swept the whole repo for every deleted symbol (`CompletionRequest`/`CompletionMessage`/`CompletionResult`/`ImageContent`/`TokenUsage`/`ProviderRequestError`/`AnthropicProvider`/`OllamaProvider`/`agents.parsing`/`decide_next_action`/`CoderAction`/etc.) and fixed every real reference found, including one in `services/orchestrator/agents/__init__.py` that would have broken the package's own import. Install the five packages and run `pytest services/orchestrator -v` on a machine that has them before treating this phase's Definition of Done as fully met.
+
+---
+
+## Phase 16 — Live Progress Streaming to Telegram
+
+**Goal:** close the proactive-notification gap flagged in ARCHITECTURE.md §11 ("no push or poll mechanism exists yet") and give the Coder's long turns visible incremental progress in Telegram instead of silence until the whole turn completes.
+**Decisions:** ADR-027
+
+- [ ] Orchestrator: a new `GET /stream/{project_id}` endpoint returning the latest buffered progress chunk(s) for a project's currently-running node, plus a monotonic sequence number so the Gateway only ever requests what's new
+- [ ] Coder node: switches its LLM call from `ainvoke` to `astream`; partial content is appended to a per-project progress buffer as it streams (LangGraph nodes still commit their actual state update only once, on return -- the buffer is separate, ungated, read-only-for-the-Gateway state)
+- [ ] Telegram Gateway: a background poller task started when a project's webhook/`/new` flow begins and stopped once the project reaches a terminal phase (`done`/`blocked`) or goes idle for some window; polls the stream endpoint every ~3s and relays new chunks as Telegram messages, coalescing rapid updates into one edited message rather than one message per chunk
+- [ ] `ARCHITECTURE.md` §11: remove the "no push or poll mechanism exists yet" gap note -- this phase closes it
+- [ ] Tests: a fake Orchestrator stream endpoint returning scripted chunks across repeated polls; assert the Gateway poller relays them in order, stops polling once the project reaches a terminal phase, and never re-sends a chunk already relayed (sequence-number correctness)
+
+**Definition of Done:** a live Coder turn against a real (or scripted, streaming-capable) provider produces at least one Telegram message before that turn's underlying LLM call returns.
+
+---
+
+## Phase 17 — Polyglot Workspace Images & Dependency Install
+
+**Goal:** the Coder can build in Python or Node.js projects without granting any agent-reachable code path the ability to build or customize a Docker image -- ADR-005's `docker-socket-proxy` `BUILD=0` boundary stays exactly as it is.
+**Decisions:** ADR-028
+
+- [ ] `images/workspace-node/Dockerfile`: Node.js base image mirroring `images/workspace-python`'s security posture exactly (non-root `sandbox` user, capability-stripped, pinned base tag, no unnecessary setuid binaries)
+- [ ] `registry/schemas.py`: `stack` becomes `Stack = Literal["python", "node"]` (currently a free `str`); `registry/cli.py`'s `--stack` argument gets `choices=["python", "node"]`
+- [ ] `services/executor/`: `workspace_image` becomes a per-call parameter derived from the project's `stack`, not the single Executor-wide `ExecutorConfig.workspace_image`/`WORKSPACE_IMAGE` env var it is today -- an `image_for_stack(stack: str) -> str` lookup the Executor owns (`"python"` -> `images/workspace-python`, `"node"` -> `images/workspace-node`), with `ExecutorConfig.workspace_image` kept as the fallback for any stack without a dedicated image yet
+- [ ] `services/orchestrator/executor_client.py`: every method threads the project's `stack` (already known via the registry / `ProjectState`) through to the Executor's HTTP payload
+- [ ] `services/executor/containers.py`: `workspace_container()` mounts a second, per-project named Docker volume (`foundry-cache-{project_id}`) at the workspace image's package-manager cache directory (`~/.cache/pip` for Python, `~/.npm` for Node) alongside the existing project bind mount; `.claude/rules/security.md`'s "Workspace container launch checklist" updated to explicitly allow this one additional named volume (still zero host paths outside the project directory -- a Docker-managed named volume isn't a host path)
+- [ ] Manifest-detection + auto-install: before a workspace container's requested tool call executes, the Executor checks for a known manifest file at the project root (`requirements.txt`/`pyproject.toml` for python, `package.json` for node) and runs the matching install command (`pip install -r requirements.txt`, `npm install`) first, relying on the package manager's own cache-hit behavior against the mounted cache volume to make repeat installs with no dependency changes fast rather than re-downloading every time
+- [ ] Cache volume cleanup: when a project is archived/removed from the registry, the Executor removes that project's cache volume alongside its existing container cleanup
+- [ ] Tests: unit tests (mocked Docker) asserting the cache volume is mounted with the right stack-specific bind path, the correct install command runs for each stack, and no install command runs when no manifest is present; a real-Docker integration test proving a `node`-stack project's `npm install` resolves a real package the Coder can subsequently `require()`/`import`
+
+**Definition of Done:** a Python project and a Node project both round-trip through Coder -> dependency install -> `run_tests` using their own dedicated images, with `docker-socket-proxy`'s `BUILD` unchanged at `0` throughout.
+
+---
+
+## Phase 18 — Multi-Project Concurrency
 
 **Goal:** more than one project can be active at once without state bleed, with sane sharing of the GPU and the global cost budget.
 **Decisions:** ADR-006
@@ -311,7 +384,7 @@ The Definition of Done's real end-to-end proof is `services/orchestrator/agents/
 
 ---
 
-## Phase 16 — Skills Packaging
+## Phase 19 — Skills Packaging
 
 **Goal:** every skill referenced above exists as a portable, independently-testable `SKILL.md`.
 **Decisions:** ADR-014
@@ -324,7 +397,7 @@ The Definition of Done's real end-to-end proof is `services/orchestrator/agents/
 
 ---
 
-## Phase 17 — Docs, README, CV Polish
+## Phase 20 — Docs, README, CV Polish
 
 **Goal:** a stranger can clone the repo and run it from the README alone; the project reads well on a GitHub profile.
 **Decisions:** ADR-003
@@ -333,13 +406,13 @@ The Definition of Done's real end-to-end proof is `services/orchestrator/agents/
 - [ ] One human pass to confirm `ARCHITECTURE.md` still matches what was actually built
 - [ ] `CONTRIBUTING.md` and a short `SECURITY.md` summarizing §8 of `ARCHITECTURE.md`
 - [ ] Confirm the LICENSE choice before making the repo public
-- [ ] Tag `v0.1.0` once Phases 0–16 are green
+- [ ] Tag `v0.1.0` once Phases 0–19 are green
 
 **Definition of Done:** someone who has never seen the project can read the README and get a running stack without asking a question.
 
 ---
 
-## Phase 18 — Security Hardening Pass
+## Phase 21 — Security Hardening Pass
 
 **Goal:** deliberately try to break the boundaries described in `ARCHITECTURE.md` §8 before calling v1 done.
 **Decisions:** ADR-005
@@ -354,13 +427,17 @@ The Definition of Done's real end-to-end proof is `services/orchestrator/agents/
 
 ---
 
-## Phase 19 — Stretch / Future Work
+## Phase 22 — Stretch / Future Work
 
 Not required for v1. Each item should get an `ARCHITECTURE.md` update (new ADR) before implementation starts.
 
 - [ ] MCP servers (filesystem, GitHub) as an alternative or supplement to the custom Executor tools
 - [ ] Neo4j-backed cross-project pattern memory, layered under — not replacing — the markdown files
 - [ ] Prometheus `/metrics` + Grafana dashboard for the platform itself
-- [ ] A2A Agent Card exposure, if Foundry ever needs to interoperate with another agent system
-- [ ] Polyglot workspace images beyond Python, as real projects demand them
+- [ ] A2A Agent Card exposure, if Foundry ever needs to interoperate with another agent system -- verified against the real A2A spec (Linux-Foundation-governed as of mid-2025: HTTP/JSON-RPC/SSE transport, capability-discovery "Agent Cards", OAuth2/JWT mutual auth): this item is correctly scoped as *external* interop only. Foundry's own agents (Planner/Coder/Reviewer/Tester/Frontend Reviewer) are in-process LangGraph node functions sharing one `ProjectState` dict, not separate networked services with their own identity -- there is no internal "agent-to-agent" protocol to build, and there shouldn't be one until Foundry needs to talk to an agent system it doesn't own
+- [ ] Workspace images for languages beyond Python and Node/npm (Phase 17), as real projects demand them -- Go is the natural next target (a single static-binary toolchain, no separate package-manager-install-on-startup complexity beyond `go mod download`)
 - [ ] AMD 6750XT / ROCm-specific tuning for secondary agent roles
+- [ ] Mid-implementation re-planning path: once a project passes `awaiting_plan_approval`, `plan`/`task_queue` are effectively frozen -- Reviewer and Tester can only send "fix this diff" feedback back to the Coder, never "the plan itself was wrong." If the Coder or Reviewer discovers a task rests on a false assumption partway through implementation, there is currently no route back to the Planner short of a human manually rejecting and restarting the whole project. Needs a `replan` phase/interrupt any implementation-side node can trigger
+- [ ] Context management / compaction strategy: no phase addresses what happens when `messages`, `task_queue`, or a project's own file tree grow large enough to approach a provider's context window on a long-running or brownfield project -- every agent node currently reconstructs its prompt from full, uncompacted state on every call. Needs a documented summarization/compaction approach (even a simple one, e.g. curator-driven pruning of `messages`) before Foundry can be trusted on large or long-lived codebases
+- [ ] Deployment-target tooling (Kubernetes, Docker Compose multi-service apps, etc.): the Coder's `run_command` action can invoke any binary present in the workspace image, but the only shipped image has no `kubectl`, no Docker CLI (deliberately -- ARCHITECTURE.md §4.3 and `.claude/rules/security.md` forbid Docker access outside the Executor itself), and no cluster-credentials story. A Coder agent with real `kubectl`/cluster access is a materially different trust boundary than one bind-mounted to a single project directory with no network egress and all capabilities dropped -- needs its own ADR and threat-model pass before any of this is added, not a workspace-image tweak
+- [ ] Per-task structured progress tracking: `task_queue` items are free-form description strings with completion tracked only by removal from the list (no explicit pass/fail/blocked status per task). Anthropic's own published guidance on long-running coding-agent harnesses (see "Effective harnesses for long-running agents") specifically calls out a persistent, machine-readable feature/task list with per-item status as what prevents an agent from losing track of progress across a long session or a restart. Foundry already has the checkpointed `ProjectState` + per-project `PROJECT_MEMORY.md`/`LEARNINGS.md` (Phase 6) covering part of this, but no per-task status field a resumed session or a `/status` Telegram query could read directly

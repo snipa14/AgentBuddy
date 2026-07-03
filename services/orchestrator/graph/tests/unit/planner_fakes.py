@@ -1,54 +1,111 @@
 """Shared fakes for per-project subgraph tests.
 
-A ScriptedProvider/FakeRouter pair mocking the LLM at the
-model_router.resolve() boundary, per .claude/rules/testing.md -- these
-tests exercise the graph's structure and interrupt/resume mechanics, not
-Planner/Coder prompt quality (see services/orchestrator/agents/tests/unit/
-for that).
+A FakeChatModel/FakeRouter pair mocking the LLM at the model_router.resolve()
+boundary, per .claude/rules/testing.md -- these tests exercise the graph's
+structure and interrupt/resume mechanics, not Planner/Coder prompt quality
+(see services/orchestrator/agents/tests/unit/ for that). Deliberately a
+separate copy of the fakes from agents/tests/unit/router_fakes.py rather than
+a shared import, so the two test tiers never couple to each other's fixture
+changes.
 """
 
-from services.orchestrator.model_router.schemas import CompletionResult
+from dataclasses import dataclass
 
-READY_RESPONSE = "## Status\nready\n"
+from langchain_core.messages import AIMessage
+from pydantic import BaseModel
 
-EMPTY_DRAFT_RESPONSE = (
-    "## Summary\nA minimal test project.\n\n"
-    "## Goals\n\n## Milestones\n\n## Risks\n\n## Assumptions\n"
-)
-
-NO_FINDINGS_CRITIQUE_RESPONSE = "## Findings\n\n## Additional Risks\n\n## Additional Assumptions\n"
-
-ONE_TASK_RESPONSE = "## Tasks\nDo the trivial thing\n"
-
-CODER_DONE_RESPONSE = "## Action\ndone\n"
-
-REVIEWER_APPROVE_RESPONSE = "## Verdict\napprove\n\n## Findings\n"
+from services.orchestrator.agents.coder import CoderTask, _TaskList
+from services.orchestrator.agents.planner import CritiqueResult, DraftPlan, InterviewTurn
+from services.orchestrator.agents.reviewer import ReviewResult
 
 
-class ScriptedProvider:
-    """Returns one canned response per call, in order."""
+@dataclass
+class ScriptedStructured:
+    """One scripted `with_structured_output(schema, include_raw=True)` response."""
 
-    name = "fake"
+    parsed: BaseModel | None
+    raw: AIMessage
 
-    def __init__(self, responses: list[str]):
+
+def _usage(input_tokens: int = 10, output_tokens: int = 10) -> dict:
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+
+
+def structured(parsed: BaseModel) -> ScriptedStructured:
+    """Convenience constructor for a happy-path ScriptedStructured response."""
+    return ScriptedStructured(parsed=parsed, raw=AIMessage(content="", usage_metadata=_usage()))
+
+
+READY_TURN = structured(InterviewTurn(status="ready"))
+
+EMPTY_DRAFT = structured(DraftPlan(summary="A minimal test project."))
+
+NO_FINDINGS_CRITIQUE = structured(CritiqueResult())
+
+ONE_TASK = structured(_TaskList(tasks=[CoderTask(description="Do the trivial thing")]))
+
+CODER_DONE = AIMessage(content="done", tool_calls=[], usage_metadata=_usage())
+
+REVIEWER_APPROVE = structured(ReviewResult(verdict="approve", findings=[]))
+
+
+class _FakeStructuredRunnable:
+    def __init__(self, model: "FakeChatModel", schema, include_raw: bool):
+        self._model = model
+        self._include_raw = include_raw
+
+    async def ainvoke(self, messages, **kwargs):
+        response = self._model._pop()
+        if not isinstance(response, ScriptedStructured):
+            raise TypeError(
+                f"scripted a {type(response).__name__} for a with_structured_output() call"
+            )
+        if not self._include_raw:
+            return response.parsed
+        return {"raw": response.raw, "parsed": response.parsed, "parsing_error": None}
+
+
+class FakeChatModel:
+    """Fakes `BaseChatModel`'s `.ainvoke()`/`.bind_tools()`/`.with_structured_output()`."""
+
+    def __init__(self, responses: list):
         self._responses = list(responses)
 
-    def supports(self, capability):
-        return True
+    def _pop(self):
+        return self._responses.pop(0)
 
-    async def complete(self, request):
-        content = self._responses.pop(0)
-        return CompletionResult(content=content, model="fake-model", provider_name="fake")
+    def bind_tools(self, tools):
+        return self
+
+    async def ainvoke(self, messages, **kwargs):
+        response = self._pop()
+        if isinstance(response, ScriptedStructured):
+            raise TypeError("scripted a ScriptedStructured response for a plain ainvoke() call")
+        return response
+
+    def with_structured_output(self, schema, include_raw: bool = False):
+        return _FakeStructuredRunnable(self, schema, include_raw)
 
 
 class FakeRouter:
-    """Always resolves any role to the same ScriptedProvider."""
+    """Always resolves any role to the same FakeChatModel."""
 
-    def __init__(self, responses: list[str]):
-        self._provider = ScriptedProvider(responses)
+    def __init__(self, responses: list):
+        self._model = FakeChatModel(responses)
 
     def resolve(self, role):
-        return self._provider
+        return self._model
+
+    def cost_usd(self, role, usage_metadata):
+        if usage_metadata is None:
+            return 0.0
+        input_tokens = usage_metadata.get("input_tokens", 0) or 0
+        output_tokens = usage_metadata.get("output_tokens", 0) or 0
+        return input_tokens / 1_000_000 * 3.0 + output_tokens / 1_000_000 * 15.0
 
 
 def fast_track_router(rounds: int = 1) -> FakeRouter:
@@ -66,11 +123,11 @@ def fast_track_router(rounds: int = 1) -> FakeRouter:
             the six responses below, in order.
     """
     responses = [
-        READY_RESPONSE,
-        EMPTY_DRAFT_RESPONSE,
-        NO_FINDINGS_CRITIQUE_RESPONSE,
-        ONE_TASK_RESPONSE,
-        CODER_DONE_RESPONSE,
-        REVIEWER_APPROVE_RESPONSE,
+        READY_TURN,
+        EMPTY_DRAFT,
+        NO_FINDINGS_CRITIQUE,
+        ONE_TASK,
+        CODER_DONE,
+        REVIEWER_APPROVE,
     ] * rounds
     return FakeRouter(responses)

@@ -24,15 +24,26 @@ providers:
     base_url: http://ollama:11434
     model: qwen3-coder:30b-a3b
     capabilities: [tool_calling]
+    # Self-hosted -- no per-token billing.
+    cost_per_1m_input_tokens: 0
+    cost_per_1m_output_tokens: 0
   claude_opus:
     type: anthropic
     model: claude-opus-4-8
     capabilities: [tool_calling, long_context, vision]
+    # Illustrative pricing (USD per 1M tokens) -- confirm against the live
+    # Anthropic pricing page before relying on this for real budget alerts.
+    cost_per_1m_input_tokens: 15.0
+    cost_per_1m_output_tokens: 75.0
   claude_sonnet:
     type: anthropic
     model: claude-sonnet-5
     capabilities: [tool_calling, long_context, vision]
+    cost_per_1m_input_tokens: 3.0
+    cost_per_1m_output_tokens: 15.0
   claude_haiku:
     type: anthropic
     model: claude-haiku-4-5
     capabilities: [tool_calling]
+    cost_per_1m_input_tokens: 0.8
+    cost_per_1m_output_tokens: 4.0

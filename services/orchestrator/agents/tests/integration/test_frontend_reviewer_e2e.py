@@ -91,7 +91,7 @@ def anthropic_api_key() -> str:
 @pytest.fixture(scope="module")
 def router(anthropic_api_key) -> ModelRouter:
     config = load_models_config(Path("config/models.claude-only.yaml"))
-    return ModelRouter(config, httpx.AsyncClient(), anthropic_api_key=anthropic_api_key)
+    return ModelRouter(config, anthropic_api_key=anthropic_api_key)
 
 
 @pytest.fixture(scope="session")
@@ -152,7 +152,7 @@ def project_id(projects_root):
 def test_frontend_reviewer_captures_a_real_screenshot_and_gets_a_real_vision_verdict(
     router, executor_client, project_id
 ):
-    verdict, findings = asyncio.run(
+    verdict, findings, _ = asyncio.run(
         review_frontend(router, executor_client, project_id, url=SERVER_URL)
     )
 

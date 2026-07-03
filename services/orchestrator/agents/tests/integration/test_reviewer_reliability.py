@@ -28,7 +28,6 @@ import asyncio
 import os
 from pathlib import Path
 
-import httpx
 import pytest
 
 from services.orchestrator.agents.reviewer import review_changes
@@ -105,11 +104,11 @@ def anthropic_api_key() -> str:
 @pytest.fixture(scope="module")
 def router(anthropic_api_key) -> ModelRouter:
     config = load_models_config(Path("config/models.claude-only.yaml"))
-    return ModelRouter(config, httpx.AsyncClient(), anthropic_api_key=anthropic_api_key)
+    return ModelRouter(config, anthropic_api_key=anthropic_api_key)
 
 
 async def _run_once(router: ModelRouter, files: dict[str, str]) -> str:
-    result = await review_changes(router, _FixtureExecutorClient(files), "proj-reliability")
+    result, _ = await review_changes(router, _FixtureExecutorClient(files), "proj-reliability")
     return result.verdict
 
 

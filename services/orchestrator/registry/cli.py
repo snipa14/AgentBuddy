@@ -67,6 +67,7 @@ def _start_intake(project_id: str, description: str) -> None:
     from services.orchestrator.config import OrchestratorConfig
     from services.orchestrator.executor_client import ExecutorClient
     from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
+    from services.orchestrator.memory.global_store import build_global_memory_connection
     from services.orchestrator.model_router.config import load_models_config
     from services.orchestrator.model_router.router import ModelRouter
     from services.orchestrator.service import OrchestratorService
@@ -76,10 +77,11 @@ def _start_intake(project_id: str, description: str) -> None:
     router = ModelRouter(models_config, httpx.AsyncClient(), anthropic_api_key=anthropic_api_key)
     config = OrchestratorConfig.from_env()
     checkpointer = build_sqlite_checkpointer(config.memory_db_path)
+    memory_conn = build_global_memory_connection(config.memory_db_path)
     executor_client = ExecutorClient(config.executor_url, httpx.AsyncClient())
-    OrchestratorService(checkpointer, router, executor_client).handle_webhook(
-        project_id, description
-    )
+    OrchestratorService(
+        checkpointer, router, executor_client, memory_conn, config.projects_root
+    ).handle_webhook(project_id, description)
 
 
 def main(argv: list[str] | None = None) -> int:

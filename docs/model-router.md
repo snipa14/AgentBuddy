@@ -1,9 +1,10 @@
 # Model Router
 
 `services/orchestrator/model_router/` resolves an agent role (`planner`, `coder`,
-`reviewer`, ...) to a `Provider` instance, following the `prefer` fallback chain
-declared for that role in `config/models.yaml`. See ARCHITECTURE.md §4.4 for the
-design rationale and ADR-001/ADR-015/ADR-016 in §10 for the decisions behind it.
+`reviewer`, ...) to a LangChain `BaseChatModel` (a `ChatAnthropic` or `ChatOllama`
+instance), following the `prefer` fallback chain declared for that role in
+`config/models.yaml`. See ARCHITECTURE.md §4.4 for the design rationale and
+ADR-001/ADR-015/ADR-016/ADR-025/ADR-026 in §10 for the decisions behind it.
 
 ## Adding a new role
 
@@ -42,13 +43,16 @@ providers:
 
 `capabilities:` is declared explicitly per provider (ADR-016) — the router
 never infers capabilities from `type`, so two providers of the same type can
-have different capability profiles without touching Python.
+have different capability profiles without touching Python. Every provider
+entry also declares `cost_per_1m_input_tokens`/`cost_per_1m_output_tokens`
+(USD per 1M tokens, `0` for self-hosted providers) -- required by the config
+schema, and what `ModelRouter.cost_usd(role, usage_metadata)` uses to turn a
+completion's token usage into a dollar figure (ADR-026).
 
 Adding a genuinely new provider *type* (a third backend beyond Ollama and
-Anthropic) does need code: implement the `Provider` protocol
-(`services/orchestrator/model_router/provider.py`) in a new module under
-`providers/`, add a matching `TypeProviderConfig` to the discriminated union in
-`config.py`, and register construction for it in `ModelRouter.__init__`.
+Anthropic) does need code: construct the matching LangChain chat model class
+(e.g. `ChatOpenAI` from `langchain-openai`) in `ModelRouter.__init__`, and add
+a matching `TypeProviderConfig` to the discriminated union in `config.py`.
 
 ## The Claude-only preset
 
@@ -61,17 +65,21 @@ deployment with no GPU:
 cp config/models.claude-only.yaml config/models.yaml
 ```
 
-Because it declares no `ollama`-type provider, the router never constructs an
-`OllamaProvider` and never attempts an Ollama connection for any role — this
+Because it declares no `ollama`-type provider, the router never constructs a
+`ChatOllama` and never attempts an Ollama connection for any role — this
 holds regardless of whether `OLLAMA_ENABLED` is set. See ADR-015 for why local
 availability is a startup-time decision rather than a per-call probe.
 
 ## Testing notes
 
-- Unit tests for the router and providers live in
-  `services/orchestrator/model_router/tests/unit/` and mock the injected
-  `httpx.AsyncClient` — no real network call is ever made.
+- Unit tests for the router live in
+  `services/orchestrator/model_router/tests/unit/test_router.py` and
+  construct real `ChatAnthropic`/`ChatOllama` instances against fake
+  credentials -- no real network call is made unless a test actually invokes
+  the model (none do; resolution and cost math are pure functions of config).
 - Tests for LLM-backed *agent* nodes (Phase 8+) should mock at the
-  `model_router.resolve()` boundary instead, per
-  `.claude/rules/testing.md` — that tests the agent's handling of a
-  completion, not the router's own resolution logic.
+  `model_router.resolve()` boundary instead, per `.claude/rules/testing.md`
+  -- `services/orchestrator/agents/tests/unit/router_fakes.py` fakes the
+  `BaseChatModel` surface (`.ainvoke()`/`.bind_tools()`/
+  `.with_structured_output()`) agent code actually drives, so this tests the
+  agent's handling of a completion, not the router's own resolution logic.

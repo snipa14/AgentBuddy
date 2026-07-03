@@ -10,7 +10,9 @@ derived entirely from checkpointer state, which is why they survive a
 process restart without any registry file at all.
 """
 
+import sqlite3
 import uuid
+from pathlib import Path
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -34,6 +36,8 @@ class OrchestratorService:
         checkpointer: BaseCheckpointSaver,
         router: ModelRouter,
         executor_client: ExecutorClient,
+        memory_conn: sqlite3.Connection,
+        projects_root: Path,
     ) -> None:
         """Builds the service.
 
@@ -43,9 +47,11 @@ class OrchestratorService:
                 and later Reviewer/Tester) resolves its role from.
             executor_client: The Executor client the Coder dispatches
                 read_file/write_file/run_command actions through.
+            memory_conn: An open global memory connection for the Memory Curator.
+            projects_root: The projects/ root directory for per-project LEARNINGS.md.
         """
         self._checkpointer = checkpointer
-        self._graph = build_project_graph(checkpointer, router, executor_client)
+        self._graph = build_project_graph(checkpointer, router, executor_client, memory_conn, projects_root)
 
     def handle_webhook(self, project_id: str | None, text: str) -> dict[str, Any]:
         """Starts a new project thread, or echoes status for an existing one.

@@ -25,7 +25,7 @@ Every container spawned by the Executor must have all of the following — no ex
 - Non-root user (UID ≠ 0)
 - `cap_drop=["ALL"]`
 - `security_opt=["no-new-privileges:true"]`
-- Only the target project directory bind-mounted (`projects/<id>/`), read-write. No host paths outside this.
+- The target project directory bind-mounted (`projects/<id>/`), read-write, plus (from Phase 17 onward) at most one Docker-managed named volume per project holding that project's package-manager cache. No host paths outside `projects/<id>/` — a named volume is not a host path, and it is only ever used for a package-manager cache directory, never for application code, credentials, or anything the project's own files should own. `docker-socket-proxy`'s `VOLUMES` permission stays `0`; a named volume referenced in a container's own `Binds`/`Mounts` at creation time is created implicitly by the daemon as part of the `/containers/create` call already permitted by `CONTAINERS=1` — it does not require a separate `/volumes/*` call. Confirm this against a real `docker-socket-proxy` instance before relying on it in production, since it hasn't been verified against a live daemon in this repo yet.
 - Isolated bridge network with an explicit `--network` argument. Never `host` networking.
 - `mem_limit` set (default: `2g`, configurable per project but not removable)
 - `nano_cpus` set (default: `2e9`, configurable per project but not removable)
