@@ -62,6 +62,7 @@ def new_project_state(
     pr_mode: PrMode = "manual",
     coverage_gate_mode: CoverageGateMode = "hard",
     cost_usd_session: float = 0.0,
+    cost_usd_weekly: float = 0.0,
     initial_message: str | None = None,
 ) -> ProjectState:
     """Builds the initial state for a brand-new project thread.
@@ -88,6 +89,10 @@ def new_project_state(
             Defaults to 'hard' (TODO.md Phase 11).
         cost_usd_session: Starting session cost in USD. Non-zero values are
             only used to drive tests of the cost-threshold interrupt.
+        cost_usd_weekly: Starting weekly cost in USD. Non-zero values are
+            only used to drive tests of the global cost-threshold gate
+            (TODO.md Phase 18) -- a real deployment always starts this at
+            0.0 and lets `_with_cost` accumulate it.
         initial_message: The stakeholder's original project request (e.g.
             the text of a Telegram `/new` message), seeded as the first
             entry in `messages` -- this is what the Planner's intake
@@ -107,7 +112,7 @@ def new_project_state(
         task_queue=[],
         current_task=None,
         cost_usd_session=cost_usd_session,
-        cost_usd_weekly=0.0,
+        cost_usd_weekly=cost_usd_weekly,
         coverage_pct=None,
         coverage_threshold=coverage_threshold,
         pr_mode=pr_mode,

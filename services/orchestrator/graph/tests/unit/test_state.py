@@ -34,3 +34,9 @@ def test_new_project_state_accepts_overrides():
     assert state["pr_mode"] == "auto"
     assert state["coverage_gate_mode"] == "soft"
     assert state["cost_usd_session"] == 12.5
+
+
+def test_new_project_state_seeds_cost_usd_weekly():
+    state = new_project_state("proj-1", cost_usd_weekly=12.5)
+
+    assert state["cost_usd_weekly"] == 12.5
