@@ -11,6 +11,9 @@ build/
 .coverage
 htmlcov/
 
+# Local agent scratch (subagent-driven-development ledger/briefs)
+.superpowers/
+
 # Environment / secrets
 *.env
 secrets/*
