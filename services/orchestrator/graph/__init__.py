@@ -1,12 +1,10 @@
-"""LangGraph nodes, state schema, checkpointer, and graph assembly."""
+"""LangGraph nodes, state schema, checkpointer, and graph assembly.
 
-from services.orchestrator.graph.build import build_project_graph
-from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
-from services.orchestrator.graph.state import ProjectState, new_project_state
-
-__all__ = [
-    "ProjectState",
-    "build_project_graph",
-    "build_sqlite_checkpointer",
-    "new_project_state",
-]
+Deliberately no re-exports here (ADR-030's fix, applied to this package
+too): importing any submodule of this package always executes this file
+first, and eagerly importing build.py/checkpointer.py would force
+langgraph as a transitive dependency onto submodules that don't need it
+(cost_aggregator.py, state.py's pure-dataclass pieces). Nothing in this
+codebase imports from the package root -- confirmed via grep before this
+file was stripped.
+"""
