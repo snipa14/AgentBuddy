@@ -86,13 +86,13 @@ from services.orchestrator.agents.planner import (
 from services.orchestrator.agents.reviewer import REVIEWER_ROLE, review_changes
 from services.orchestrator.agents.tester import run_tests
 from services.orchestrator.executor_client import ExecutorClient
+from services.orchestrator.graph.cost_aggregator import other_projects_cost_usd_weekly
 from services.orchestrator.graph.state import ProjectState
 from services.orchestrator.integrator_client import IntegratorClient
 from services.orchestrator.model_router.router import ModelRouter
 
 logger = logging.getLogger(__name__)
 
-COST_THRESHOLD_USD_STUB = 50.0
 MAX_TASK_ATTEMPTS = 3
 
 
@@ -403,27 +403,40 @@ def route_after_frontend_review(state: ProjectState) -> str:
     return "cost_check"
 
 
-def node_cost_check(state: ProjectState) -> dict[str, Any]:
-    """Trips the cost-threshold gate if session cost is at or above the stub limit.
+def node_cost_check(
+    state: ProjectState, checkpointer: Any, threshold_usd: float
+) -> dict[str, Any]:
+    """Trips the cost-threshold gate if the *global* weekly total is at or above threshold_usd.
 
-    Returns an empty update (no gate) unless `cost_usd_session` has reached
-    `COST_THRESHOLD_USD_STUB`, in which case it commits the pending approval
-    payload that `node_cost_wait` will interrupt on next.
+    The gate is global, not per-project (TODO.md Phase 18, ADR-009): sums
+    every other known project's latest checkpointed cost_usd_weekly
+    (other_projects_cost_usd_weekly) plus this project's own live
+    cost_usd_weekly from state. Returns an empty update (no gate) unless
+    that combined total has reached threshold_usd, in which case it commits
+    the pending approval payload node_cost_wait will interrupt on next.
     """
-    if state["cost_usd_session"] < COST_THRESHOLD_USD_STUB:
+    global_total = state["cost_usd_weekly"] + other_projects_cost_usd_weekly(
+        checkpointer, exclude_project_id=state["project_id"]
+    )
+    if global_total < threshold_usd:
         return {}
-    logger.info("project %s: cost threshold reached", state["project_id"])
+    logger.info(
+        "project %s: global cost threshold reached (%.2f >= %.2f)",
+        state["project_id"],
+        global_total,
+        threshold_usd,
+    )
     return {
         "phase": "awaiting_cost_approval",
         "pending_approval": {
             "kind": "cost_alert",
             "thread_id": state["project_id"],
             "project_id": state["project_id"],
-            "cost_usd_session": state["cost_usd_session"],
-            "threshold_usd": COST_THRESHOLD_USD_STUB,
+            "cost_usd_weekly_global": global_total,
+            "threshold_usd": threshold_usd,
             "summary": (
-                f"Crossed ${state['cost_usd_session']:.2f} of "
-                f"${COST_THRESHOLD_USD_STUB:.2f} session cost limit -- continue?"
+                f"Crossed ${global_total:.2f} of "
+                f"${threshold_usd:.2f} global weekly cost limit -- continue?"
             ),
         },
     }

@@ -18,7 +18,6 @@ from services.orchestrator.executor_client import (
 )
 from services.orchestrator.executor_client import TestResult as ExecutorTestResult
 from services.orchestrator.graph.nodes import (
-    COST_THRESHOLD_USD_STUB,
     MAX_TASK_ATTEMPTS,
     node_coder,
     node_done,
@@ -287,29 +286,58 @@ def test_route_after_coder_loops_back_when_still_implementing():
     assert route_after_coder(state) == "coder"
 
 
-def test_node_cost_check_returns_empty_update_below_threshold():
-    state = new_project_state("proj-1", cost_usd_session=COST_THRESHOLD_USD_STUB - 1)
+class _FakeCheckpointer:
+    def __init__(self, others: dict[str, float]):
+        self._others = others
 
-    assert cost_check(state) == {}
+    def list(self, config):
+        for thread_id in self._others:
+            yield type(
+                "T", (), {"config": {"configurable": {"thread_id": thread_id}}}
+            )()
+
+    def get_tuple(self, config):
+        thread_id = config["configurable"]["thread_id"]
+        if thread_id not in self._others:
+            return None
+        return type(
+            "T",
+            (),
+            {"checkpoint": {"channel_values": {"cost_usd_weekly": self._others[thread_id]}}},
+        )()
 
 
-def test_node_cost_check_arms_gate_at_threshold():
-    state = new_project_state("proj-1", cost_usd_session=COST_THRESHOLD_USD_STUB)
+def test_node_cost_check_returns_empty_update_below_global_threshold():
+    state = new_project_state("proj-1", cost_usd_weekly=10.0)
+    checkpointer = _FakeCheckpointer({"proj-2": 20.0})  # 10 + 20 = 30, under 50
 
-    update = cost_check(state)
+    assert cost_check(state, checkpointer=checkpointer, threshold_usd=50.0) == {}
+
+
+def test_node_cost_check_arms_gate_when_global_total_crosses_threshold():
+    state = new_project_state("proj-1", cost_usd_weekly=10.0)
+    checkpointer = _FakeCheckpointer({"proj-2": 45.0})  # 10 + 45 = 55, over 50
+
+    update = cost_check(state, checkpointer=checkpointer, threshold_usd=50.0)
 
     assert update["phase"] == "awaiting_cost_approval"
     assert update["pending_approval"] == {
         "kind": "cost_alert",
         "thread_id": "proj-1",
         "project_id": "proj-1",
-        "cost_usd_session": COST_THRESHOLD_USD_STUB,
-        "threshold_usd": COST_THRESHOLD_USD_STUB,
-        "summary": (
-            f"Crossed ${COST_THRESHOLD_USD_STUB:.2f} of "
-            f"${COST_THRESHOLD_USD_STUB:.2f} session cost limit -- continue?"
-        ),
+        "cost_usd_weekly_global": 55.0,
+        "threshold_usd": 50.0,
+        "summary": "Crossed $55.00 of $50.00 global weekly cost limit -- continue?",
     }
+
+
+def test_node_cost_check_trips_purely_from_other_projects_even_with_zero_own_cost():
+    state = new_project_state("proj-1", cost_usd_weekly=0.0)
+    checkpointer = _FakeCheckpointer({"proj-2": 60.0})
+
+    update = cost_check(state, checkpointer=checkpointer, threshold_usd=50.0)
+
+    assert update["phase"] == "awaiting_cost_approval"
 
 
 def test_route_after_cost_check_waits_when_gate_armed():
