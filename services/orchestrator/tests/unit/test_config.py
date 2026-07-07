@@ -34,3 +34,19 @@ def test_from_env_reads_executor_url_override(monkeypatch):
     config = OrchestratorConfig.from_env()
 
     assert config.executor_url == "http://localhost:9000"
+
+
+def test_from_env_defaults_global_cost_threshold_usd(monkeypatch):
+    monkeypatch.delenv("GLOBAL_COST_THRESHOLD_USD", raising=False)
+
+    config = OrchestratorConfig.from_env()
+
+    assert config.global_cost_threshold_usd == 50.0
+
+
+def test_from_env_reads_global_cost_threshold_usd_override(monkeypatch):
+    monkeypatch.setenv("GLOBAL_COST_THRESHOLD_USD", "125.5")
+
+    config = OrchestratorConfig.from_env()
+
+    assert config.global_cost_threshold_usd == 125.5
