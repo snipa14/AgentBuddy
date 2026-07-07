@@ -33,7 +33,12 @@ def main() -> None:
     memory_conn = build_global_memory_connection(config.memory_db_path)
     executor_client = ExecutorClient(config.executor_url, httpx.AsyncClient())
     service = OrchestratorService(
-        checkpointer, _build_router(), executor_client, memory_conn, config.projects_root
+        checkpointer,
+        _build_router(),
+        executor_client,
+        memory_conn,
+        config.projects_root,
+        config.global_cost_threshold_usd,
     )
     app = build_app(service)
     uvicorn.run(app, host="0.0.0.0", port=8000)

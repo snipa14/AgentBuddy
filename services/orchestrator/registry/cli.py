@@ -80,7 +80,12 @@ def _start_intake(project_id: str, description: str) -> None:
     memory_conn = build_global_memory_connection(config.memory_db_path)
     executor_client = ExecutorClient(config.executor_url, httpx.AsyncClient())
     OrchestratorService(
-        checkpointer, router, executor_client, memory_conn, config.projects_root
+        checkpointer,
+        router,
+        executor_client,
+        memory_conn,
+        config.projects_root,
+        config.global_cost_threshold_usd,
     ).handle_webhook(project_id, description)
 
 

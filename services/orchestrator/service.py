@@ -19,7 +19,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from services.orchestrator.executor_client import ExecutorClient
-from services.orchestrator.graph.build import build_project_graph
+from services.orchestrator.graph.build import DEFAULT_GLOBAL_COST_THRESHOLD_USD, build_project_graph
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.progress_buffer import clear_progress
@@ -41,6 +41,7 @@ class OrchestratorService:
         executor_client: ExecutorClient,
         memory_conn: sqlite3.Connection,
         projects_root: Path,
+        global_cost_threshold_usd: float = DEFAULT_GLOBAL_COST_THRESHOLD_USD,
     ) -> None:
         """Builds the service.
 
@@ -52,9 +53,16 @@ class OrchestratorService:
                 read_file/write_file/run_command actions through.
             memory_conn: An open global memory connection for the Memory Curator.
             projects_root: The projects/ root directory for per-project LEARNINGS.md.
+            global_cost_threshold_usd: The global weekly USD cost-gate
+                threshold (TODO.md Phase 18); defaults to
+                DEFAULT_GLOBAL_COST_THRESHOLD_USD. A real deployment passes
+                OrchestratorConfig.global_cost_threshold_usd.
         """
         self._checkpointer = checkpointer
-        self._graph = build_project_graph(checkpointer, router, executor_client, memory_conn, projects_root)
+        self._graph = build_project_graph(
+            checkpointer, router, executor_client, memory_conn, projects_root,
+            global_cost_threshold_usd,
+        )
 
     def handle_webhook(self, project_id: str | None, text: str) -> dict[str, Any]:
         """Starts a new project thread, or echoes status for an existing one.
