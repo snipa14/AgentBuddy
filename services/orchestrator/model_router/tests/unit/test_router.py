@@ -262,6 +262,85 @@ def test_cost_usd_returns_zero_when_usage_is_none():
     assert router.cost_usd("coder", None) == 0.0
 
 
+def test_router_wraps_ollama_model_in_throttle_but_leaves_anthropic_unwrapped():
+    from services.orchestrator.model_router.router import _ThrottledChatModel
+
+    config = _config(
+        {
+            "roles": {
+                "local_role": {"requires": [], "prefer": ["local"]},
+                "claude_role": {"requires": [], "prefer": ["claude_sonnet"]},
+            },
+            "providers": {
+                "local": {
+                    "type": "ollama",
+                    "model": "qwen3-coder",
+                    "base_url": "http://ollama:11434",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                },
+                "claude_sonnet": {
+                    "type": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 3.0,
+                    "cost_per_1m_output_tokens": 15.0,
+                },
+            },
+        }
+    )
+    router = ModelRouter(config, ollama_enabled=True, anthropic_api_key="key")
+
+    assert isinstance(router.resolve("local_role"), _ThrottledChatModel)
+    assert not isinstance(router.resolve("claude_role"), _ThrottledChatModel)
+
+
+def test_throttled_chat_model_serializes_concurrent_ainvoke_calls():
+    """Two 'simultaneous' calls through the same throttle never overlap --
+    proving the shared-GPU serialization constraint (TODO.md Phase 18).
+    Uses threading (not asyncio) concurrency deliberately: every real
+    LLM-backed graph node bridges to its one async call via its own
+    asyncio.run(), each in its own OS thread when two projects run
+    concurrently (ADR-019), so this test reproduces that shape directly.
+    """
+    import asyncio
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from langchain_core.messages import AIMessage
+
+    from services.orchestrator.model_router.router import _ThrottledChatModel
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    class _SlowFakeModel:
+        async def ainvoke(self, *args, **kwargs):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return AIMessage(content="done")
+
+    throttled = _ThrottledChatModel(_SlowFakeModel(), threading.Semaphore(1))
+
+    def call():
+        asyncio.run(throttled.ainvoke("hi"))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(call), pool.submit(call)]
+        for future in futures:
+            future.result()
+
+    assert max_active == 1
+
+
 def test_cost_usd_uses_the_provider_that_would_actually_be_resolved():
     config = _config(
         {

@@ -1,6 +1,8 @@
 """Resolves agent roles to a configured, available LangChain chat model."""
 
 import os
+import threading
+from typing import Any
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -16,6 +18,66 @@ OLLAMA_ENABLED_ENV_VAR = "OLLAMA_ENABLED"
 PROVIDER_MAX_RETRIES = 5
 
 
+class _ThrottledChatModel:
+    """Wraps a BaseChatModel so at most one call is ever in flight at a time.
+
+    Local inference shares one physical GPU (TODO.md Phase 18), so
+    ModelRouter wraps every Ollama-backed model in this class before
+    storing it; ChatAnthropic entries are stored unwrapped, so
+    Claude-API-bound work runs in parallel without this constraint.
+
+    A threading.Semaphore, not asyncio.Semaphore, is required: every
+    LLM-backed graph node bridges to its one async call via its own
+    asyncio.run() (ADR-019), so when two projects run concurrently each
+    gets its own OS thread and its own event loop -- an asyncio.Semaphore
+    scoped to one loop can't coordinate across them.
+
+    Covers exactly the four methods anything in this codebase calls on a
+    resolved model (agents/llm.py's invoke_structured, agents/coder.py's
+    tool-calling loop): .ainvoke(), .astream(), .bind_tools(),
+    .with_structured_output(). The latter two return a new
+    _ThrottledChatModel wrapping whatever Runnable the real model's
+    equivalent method returns, so throttling survives the call chains those
+    two callers actually use. Deliberately duck-typed rather than a
+    BaseChatModel subclass -- LangChain's BaseChatModel has several
+    abstract methods (_generate/_agenerate/_stream/_astream) this wrapper
+    has no need to implement, since nothing in this codebase calls anything
+    beyond these four entry points on a router.resolve() result (confirmed
+    by a repo-wide grep during Phase 18 planning).
+    """
+
+    def __init__(self, model: Any, semaphore: threading.Semaphore) -> None:
+        self._model = model
+        self._semaphore = semaphore
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+        with self._semaphore:
+            return await self._model.ainvoke(*args, **kwargs)
+
+    async def astream(self, *args: Any, **kwargs: Any) -> Any:
+        with self._semaphore:
+            async for chunk in self._model.astream(*args, **kwargs):
+                yield chunk
+
+    def bind_tools(self, *args: Any, **kwargs: Any) -> "_ThrottledChatModel":
+        return _ThrottledChatModel(self._model.bind_tools(*args, **kwargs), self._semaphore)
+
+    def with_structured_output(self, *args: Any, **kwargs: Any) -> "_ThrottledChatModel":
+        return _ThrottledChatModel(
+            self._model.with_structured_output(*args, **kwargs), self._semaphore
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegates any attribute not defined on this wrapper to the real model.
+
+        Covers accesses this wrapper doesn't need to intercept itself -- e.g.
+        `.max_retries`, checked directly on a resolved model by
+        test_every_constructed_model_has_retries_enabled -- without having to
+        enumerate every such attribute by hand.
+        """
+        return getattr(self._model, name)
+
+
 class ModelRouter:
     """Resolves agent roles to a `BaseChatModel`, following the config's prefer chains.
 
@@ -26,7 +88,11 @@ class ModelRouter:
 
     Every constructed model has retries enabled (`max_retries`, ADR-025) --
     transient provider errors no longer need to be handled by hand-rolled
-    retry logic in agent code.
+    retry logic in agent code. Every Ollama-backed model is additionally
+    wrapped in `_ThrottledChatModel` so local inference never runs more than
+    one call at a time (TODO.md Phase 18) -- one physical GPU serves every
+    Ollama-backed role in a deployment, regardless of how many are declared
+    in `models.yaml`.
     """
 
     def __init__(
@@ -54,15 +120,17 @@ class ModelRouter:
 
         self._config = config
         self._models: dict[str, BaseChatModel] = {}
+        self._local_semaphore = threading.Semaphore(1)
         for provider_name, provider_config in config.providers.items():
             if provider_config.type == "ollama":
                 if not ollama_enabled:
                     continue
-                self._models[provider_name] = ChatOllama(
+                raw_model = ChatOllama(
                     model=provider_config.model,
                     base_url=provider_config.base_url,
                     max_retries=PROVIDER_MAX_RETRIES,
                 )
+                self._models[provider_name] = _ThrottledChatModel(raw_model, self._local_semaphore)
             else:
                 if anthropic_api_key is None:
                     raise ValueError(
