@@ -39,6 +39,8 @@ from services.orchestrator.graph.nodes import (
 from services.orchestrator.graph.state import ProjectState
 from services.orchestrator.model_router.router import ModelRouter
 
+DEFAULT_GLOBAL_COST_THRESHOLD_USD = 50.0
+
 
 def build_project_graph(
     checkpointer: BaseCheckpointSaver,
@@ -46,6 +48,7 @@ def build_project_graph(
     executor_client: ExecutorClient,
     memory_conn: sqlite3.Connection,
     projects_root: Path,
+    global_cost_threshold_usd: float = DEFAULT_GLOBAL_COST_THRESHOLD_USD,
 ) -> CompiledStateGraph:
     """Builds and compiles the per-project subgraph.
 
@@ -75,6 +78,11 @@ def build_project_graph(
             inside a workspace container.
         memory_conn: An open global memory connection for the Memory Curator.
         projects_root: The projects/ root directory for per-project LEARNINGS.md.
+        global_cost_threshold_usd: The global weekly USD threshold
+            node_cost_check gates on (TODO.md Phase 18) -- summed across
+            every active project's checkpointed cost_usd_weekly, not just
+            this one. Defaults to DEFAULT_GLOBAL_COST_THRESHOLD_USD; a real
+            deployment passes OrchestratorConfig.global_cost_threshold_usd.
 
     Returns:
         A compiled graph ready for `.invoke()`/`.get_state()` calls keyed by
@@ -100,7 +108,14 @@ def build_project_graph(
         "frontend_review",
         functools.partial(node_frontend_review, router=router, executor_client=executor_client),
     )
-    builder.add_node("cost_check", node_cost_check)
+    builder.add_node(
+        "cost_check",
+        functools.partial(
+            node_cost_check,
+            checkpointer=checkpointer,
+            threshold_usd=global_cost_threshold_usd,
+        ),
+    )
     builder.add_node("cost_wait", node_cost_wait)
     builder.add_node(
         "testing", functools.partial(node_testing, executor_client=executor_client)

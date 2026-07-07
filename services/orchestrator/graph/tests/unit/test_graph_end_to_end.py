@@ -24,9 +24,8 @@ from langgraph.types import Command
 
 from services.orchestrator.agents.planner import InterviewTurn
 from services.orchestrator.executor_client import CommandResult, TestResult
-from services.orchestrator.graph.build import build_project_graph
+from services.orchestrator.graph.build import DEFAULT_GLOBAL_COST_THRESHOLD_USD, build_project_graph
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
-from services.orchestrator.graph.nodes import COST_THRESHOLD_USD_STUB
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.graph.tests.unit.planner_fakes import (
     EMPTY_DRAFT,
@@ -133,7 +132,7 @@ def test_cost_interrupt_fires_at_threshold(tmp_path, memory_conn, projects_root)
     graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
     config = _config("proj-over-budget")
     graph.invoke(
-        new_project_state("proj-over-budget", cost_usd_session=COST_THRESHOLD_USD_STUB),
+        new_project_state("proj-over-budget", cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
         config=config,
     )
     graph.invoke(Command(resume="approve"), config=config)
@@ -152,7 +151,7 @@ def test_resume_approve_after_cost_interrupt_reaches_merge_gate(
     graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
     config = _config("proj-resume-continue")
     graph.invoke(
-        new_project_state("proj-resume-continue", cost_usd_session=COST_THRESHOLD_USD_STUB),
+        new_project_state("proj-resume-continue", cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
         config=config,
     )
     graph.invoke(Command(resume="approve"), config=config)
@@ -171,7 +170,7 @@ def test_resume_reject_after_cost_interrupt_blocks_and_halts_the_run(
     graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
     config = _config("proj-resume-pause")
     graph.invoke(
-        new_project_state("proj-resume-pause", cost_usd_session=COST_THRESHOLD_USD_STUB),
+        new_project_state("proj-resume-pause", cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
         config=config,
     )
     graph.invoke(Command(resume="approve"), config=config)
@@ -236,7 +235,7 @@ def test_pending_interrupt_survives_a_simulated_restart(
         checkpointer_before_restart, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root
     )
     graph_before_restart.invoke(
-        new_project_state(project_id, cost_usd_session=COST_THRESHOLD_USD_STUB),
+        new_project_state(project_id, cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
         config=config,
     )
     graph_before_restart.invoke(Command(resume="approve"), config=config)
@@ -261,3 +260,25 @@ def test_pending_interrupt_survives_a_simulated_restart(
     final_snapshot = graph_after_restart.get_state(config)
     assert final_snapshot.values["phase"] == "done"
     assert final_snapshot.next == ()
+
+
+def test_cost_interrupt_fires_from_a_lower_configured_global_threshold(
+    tmp_path, memory_conn, projects_root
+):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    graph = build_project_graph(
+        checkpointer,
+        fast_track_router(),
+        _UNUSED_EXECUTOR_CLIENT,
+        memory_conn,
+        projects_root,
+        global_cost_threshold_usd=1.0,
+    )
+    config = _config("proj-tiny-budget")
+
+    graph.invoke(new_project_state("proj-tiny-budget", cost_usd_weekly=2.0), config=config)
+    graph.invoke(Command(resume="approve"), config=config)
+
+    snapshot = graph.get_state(config)
+    assert snapshot.values["phase"] == "awaiting_cost_approval"
+    assert snapshot.values["pending_approval"]["threshold_usd"] == 1.0
