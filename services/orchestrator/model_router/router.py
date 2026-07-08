@@ -78,8 +78,13 @@ class _ThrottledChatModel:
         return getattr(self._model, name)
 
 
+ResolvedChatModel = BaseChatModel | _ThrottledChatModel
+"""What resolve() actually returns: a real BaseChatModel, or the
+_ThrottledChatModel proxy wrapping one for Ollama-backed roles."""
+
+
 class ModelRouter:
-    """Resolves agent roles to a `BaseChatModel`, following the config's prefer chains.
+    """Resolves agent roles to a `ResolvedChatModel`, following the config's prefer chains.
 
     Local provider availability is fixed once at construction time (ADR-015):
     if Ollama isn't enabled for this deployment, no `ChatOllama` is ever
@@ -119,7 +124,7 @@ class ModelRouter:
             ollama_enabled = os.environ.get(OLLAMA_ENABLED_ENV_VAR, "false").lower() == "true"
 
         self._config = config
-        self._models: dict[str, BaseChatModel] = {}
+        self._models: dict[str, ResolvedChatModel] = {}
         self._local_semaphore = threading.Semaphore(1)
         for provider_name, provider_config in config.providers.items():
             if provider_config.type == "ollama":
@@ -150,7 +155,7 @@ class ModelRouter:
         """
         return frozenset(self._models)
 
-    def resolve(self, role: str) -> BaseChatModel:
+    def resolve(self, role: str) -> ResolvedChatModel:
         """Resolves a role to the first configured, capable provider in its prefer list.
 
         Args:
@@ -159,7 +164,8 @@ class ModelRouter:
         Returns:
             The `BaseChatModel` for the first provider in the role's prefer
             list that was constructed (i.e. enabled) and supports every
-            capability the role requires.
+            capability the role requires, wrapped in `_ThrottledChatModel`
+            if it's an Ollama-backed provider.
 
         Raises:
             UnknownRoleError: If role isn't declared in the loaded config.
