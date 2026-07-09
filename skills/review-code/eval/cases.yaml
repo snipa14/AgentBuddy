@@ -1,0 +1,37 @@
+# skills/review-code/eval/cases.yaml
+cases:
+  - name: flags_hardcoded_credential
+    input: |
+      Review this diff:
+
+      ```diff
+      + API_KEY = "sk-live-abcd1234efgh5678"
+      +
+      + def call_billing_api():
+      +     return requests.get("https://billing.example.com/v1/charge", headers={"Authorization": API_KEY})
+      ```
+    expect:
+      must_match_any:
+        - "hardcod"
+        - "secret"
+        - "credential"
+        - "api.?key"
+        - "token"
+  - name: flags_bare_except
+    input: |
+      Review this diff:
+
+      ```diff
+      + def load_config(path):
+      +     try:
+      +         return json.load(open(path))
+      +     except:
+      +         pass
+      ```
+    expect:
+      must_match_any:
+        - "bare except"
+        - "swallow"
+        - "silently"
+        - "except:"
+        - "catch.{0,15}specific"
