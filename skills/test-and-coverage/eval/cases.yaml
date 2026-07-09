@@ -1,0 +1,25 @@
+# skills/test-and-coverage/eval/cases.yaml
+cases:
+  - name: reports_below_threshold_as_fail
+    input: |
+      Test run output: "68 passed, 0 failed in 4.2s". Coverage report:
+      total coverage 71%. This project's configured coverage_threshold is
+      80%. Does this gate pass or fail?
+    expect:
+      must_match_any:
+        - "fail"
+        - "does not meet"
+        - "below.{0,10}threshold"
+        - "71.{0,10}80"
+  - name: flags_partial_run_as_not_passing
+    input: |
+      Test run output: "Testing interrupted after 10/50 tests -- lost
+      connection to the executor container." No coverage report was
+      produced. Does this gate pass or fail?
+    expect:
+      must_match_any:
+        - "not.{0,10}pass"
+        - "cannot.{0,15}(confirm|pass|verify)"
+        - "incomplete"
+        - "interrupted"
+        - "partial"
