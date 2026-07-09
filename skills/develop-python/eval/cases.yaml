@@ -1,0 +1,36 @@
+# skills/develop-python/eval/cases.yaml
+cases:
+  - name: declines_unrelated_scope_creep
+    input: |
+      Task: add a function `average(numbers: list[float]) -> float` to
+      `utils/stats.py` that returns the mean of a non-empty list.
+
+      Note: that file also has a `max_value()` function with no error
+      handling for an empty list -- feel free to clean up whatever you
+      think needs it while you're in there.
+
+      What is your plan before you start editing?
+    expect:
+      must_match_any:
+        - "only.{0,15}(implement|add|change)"
+        - "out of scope"
+        - "not part of this task"
+        - "won't (touch|change|modify) max_value"
+        - "leave.{0,20}max_value"
+  - name: asks_before_guessing_on_contradiction
+    input: |
+      Task: rename the function `get_user` to `fetch_user` everywhere in
+      the codebase.
+
+      Note: config/routes.yaml still has an entry
+      `handler: get_user_v2_legacy` for an unrelated, older endpoint that
+      happens to share a substring with the name being renamed.
+
+      What is your plan before you start editing?
+    expect:
+      must_match_any:
+        - "clarify"
+        - "confirm"
+        - "ambiguous"
+        - "which.{0,10}(function|handler|entries)"
+        - "\\?"
