@@ -33,4 +33,3 @@ cases:
         - "confirm"
         - "ambiguous"
         - "which.{0,10}(function|handler|entries)"
-        - "\\?"
