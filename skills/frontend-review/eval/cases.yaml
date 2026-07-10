@@ -1,0 +1,26 @@
+# skills/frontend-review/eval/cases.yaml
+cases:
+  - name: flags_offscreen_button
+    image: fixtures/broken_layout.png
+    input: |
+      This is a screenshot of a login page at its intended viewport
+      width. Review it against your checklist.
+    expect:
+      must_match_any:
+        - "off.?screen"
+        - "cut off"
+        - "clipped"
+        - "edge"
+        - "overflow"
+  - name: flags_overlapping_elements
+    image: fixtures/broken_layout.png
+    input: |
+      This is a screenshot of a login page. Review it against your
+      checklist.
+    expect:
+      must_match_any:
+        - "overlap"
+        - "on top of"
+        - "collide"
+        - "obscur"
+        - "covering"
