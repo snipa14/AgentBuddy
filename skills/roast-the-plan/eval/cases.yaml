@@ -1,0 +1,31 @@
+cases:
+  - name: flags_security_gap
+    input: |
+      Draft plan excerpt: "Users can upload a profile photo. We'll write
+      the uploaded file directly to `/uploads/{filename}` using the
+      filename the client sends in the upload request."
+
+      Roast this plan.
+    expect:
+      must_match_any:
+        - "path traversal"
+        - "sanitiz"
+        - "validate.{0,15}filename"
+        - "security"
+        - "\\.\\./"
+  - name: flags_untested_claim
+    input: |
+      Draft plan excerpt: "This design will scale to 100,000 concurrent
+      users without any additional infrastructure changes." Nothing
+      earlier in the plan or the interview that produced it mentions
+      load testing, expected traffic, or any capacity numbers.
+
+      Roast this plan.
+    expect:
+      must_match_any:
+        - "untested"
+        - "no evidence"
+        - "unsupported"
+        - "unbacked"
+        - "assum"
+        - "claim"
