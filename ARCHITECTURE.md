@@ -299,13 +299,10 @@ Each skill's `eval/` directory holds `cases.yaml` (>=2 fixture cases, each plant
 ## 5. State Schema
 
 ```python
-from typing import TypedDict, Literal, Annotated
-from operator import add
-from langchain_core.messages import BaseMessage
-
 class ProjectState(TypedDict):
     project_id: str
     mode: Literal["greenfield", "brownfield"]
+    stack: Literal["python", "node"]
     phase: Literal[
         "intake", "planning", "roasting", "awaiting_plan_approval",
         "implementing", "reviewing", "testing", "awaiting_cost_approval",
@@ -314,17 +311,21 @@ class ProjectState(TypedDict):
     plan: dict
     messages: Annotated[list[BaseMessage], add]
     task_queue: list[dict]
-    current_task: dict | None
     cost_usd_session: float
     cost_usd_weekly: float
     coverage_pct: float | None
     coverage_threshold: int
     pr_mode: Literal["auto", "manual", "configurable"]
     coverage_gate_mode: Literal["hard", "soft", "configurable"]
+    git_branch: str | None
+    git_remote_url: str | None
+    curator_source: str | None
     pending_approval: dict | None
 ```
 
 `pending_approval` is what gets attached to the `interrupt()` payload — the Gateway reads it to render the right Telegram message (plan text + approve/reject buttons, or "cost threshold reached: $42.10 of $50/week — continue?").
+
+Each `task_queue` item is `{"description": str, "status": "pending" | "in_progress" | "done" | "blocked", "attempts": int}` (ADR-034). Every task for the current implementation phase stays in the list for its lifetime — nothing is removed on completion — so a resumed session or a `/status` query can see the full per-task history, not just whichever task is currently active. There is no separate `current_task` field: the active task (at most one at a time) is whichever item has `status == "in_progress"`.
 
 ---
 
@@ -554,6 +555,7 @@ Lightweight ADR-style record of every decision made during planning, so the reas
 | 031 | Phase 17's cache-volume cleanup ships as two standalone, tested primitives (`containers.clear_project_cache_volume`, `tools.tool_clear_project_cache`) with nothing calling them yet, rather than also building a project-archival/removal flow to wire them into | TODO.md's Phase 17 task list assumes an "archived/removed from the registry" event already exists to hook cache cleanup into, but no such flow exists anywhere in this codebase -- `registry/registration.py` only ever adds projects; there is no `archive_project`/`remove_project` function of any kind in any phase completed so far. Building one was judged out of Phase 17's actual scope (a new registry capability, not a polyglot-workspace concern) and against CLAUDE.md's phase-discipline rule against implementing later-phase features to unblock a current one. The primitives exist and are tested now so that whichever future phase adds project archival only needs to call them, not design them |
 | 032 | The cost-threshold gate (ADR-009) sums every *other* active project's latest checkpointed `cost_usd_weekly` (a new `cost_aggregator.py` helper reading only each thread's newest checkpoint, not every historical version) plus the current project's own live total, replacing the Phase 5 stub's per-project `cost_usd_session` check entirely; local (Ollama-backed) model calls are serialized through one `threading.Semaphore(1)` per `ModelRouter` instance, wrapped transparently behind `resolve()`'s existing return value so no agent module needed to change (Phase 18) | The stub gate never actually matched ADR-009 ("globally configurable" cost threshold) -- it compared one project's own session cost to a hardcoded constant. `checkpointer.list(None)` returns every historical checkpoint version per thread, not just the latest, so a naive full-history sum would double/triple-count a single project's spend; the aggregator reads only each thread's latest via `get_tuple()`. `threading.Semaphore` (not `asyncio.Semaphore`) is required because every LLM-backed node bridges to its async call via its own `asyncio.run()` (ADR-019) -- concurrent projects each get their own OS thread and event loop, which an `asyncio.Semaphore` scoped to one loop can't coordinate across |
 | 033 | Skill evals (`skills/_eval_lib/`) are a standalone harness independent of `services.orchestrator.model_router`/`config/models.yaml`, calling Anthropic/Ollama directly over `httpx` with an injectable `CompleteFn`, rather than resolving roles through `ModelRouter` (Phase 19) | Only 4 of the 7 packaged skills (`develop-python`, `review-code`, `frontend-review`, `roast-the-plan`) map to a `ModelRouter` role that exists today; `test-and-coverage` and `git-ops` are backed by fully deterministic code with no LLM role at all, and `docs-writer` has no agent module yet. Coupling skill evals to Foundry's own routing config would have meant adding 3 speculative roles to `models.yaml` for skills with no graph node (phase-discipline violation), and would contradict ADR-014's actual point -- skills must work identically in Foundry, Claude Code, or any other harness, so their evals must not depend on Foundry's internal wiring either. `CompleteFn`'s injectable signature (`(system_prompt, user_prompt, image_bytes) -> str`) is what makes the harness's parsing/matching logic (`cases_schema.py`, `harness.py`, `cli.py`) genuinely unit-testable with a fake completion function, while the one module that actually reaches a network (`models.py`) stays thin and is reviewed by hand where no `ANTHROPIC_API_KEY`/Ollama instance is available to exercise it for real |
+| 034 | `task_queue` items carry an explicit `status` ("pending"/"in_progress"/"done"/"blocked") and `attempts` count, and are never removed from the list on completion; the separate `current_task` field is deleted from `ProjectState` (Phase 22 stretch) | `task_queue` previously tracked completion only by list removal (`task_queue[1:]`), with the active item duplicated into a free-form `current_task` dict carrying an ad hoc `attempts` key. This meant a permanently-blocked task (attempts exhausted) was left sitting in both `current_task` *and* unchanged in `task_queue[0]` forever — two copies of one logical entity with no shared status. A single in-place status list is both the fix for that duplication bug and what actually satisfies Anthropic's published guidance on long-running coding-agent harnesses: a persistent, machine-readable task list with per-item status, readable by a resumed session or a `/status` query (TODO.md Phase 22) |
 
 ---
 
