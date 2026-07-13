@@ -16,7 +16,6 @@ def test_new_project_state_defaults_to_intake_phase_with_no_pending_approval():
     assert state["pending_approval"] is None
     assert state["messages"] == []
     assert state["task_queue"] == []
-    assert state["current_task"] is None
 
 
 def test_new_project_state_accepts_overrides():

@@ -24,6 +24,7 @@ Mode = Literal["greenfield", "brownfield"]
 PrMode = Literal["auto", "manual", "configurable"]
 CoverageGateMode = Literal["hard", "soft", "configurable"]
 Stack = Literal["python", "node"]
+TaskStatus = Literal["pending", "in_progress", "done", "blocked"]
 
 
 class ProjectState(TypedDict):
@@ -41,7 +42,6 @@ class ProjectState(TypedDict):
     plan: dict
     messages: Annotated[list[BaseMessage], add]
     task_queue: list[dict]
-    current_task: dict | None
     cost_usd_session: float
     cost_usd_weekly: float
     coverage_pct: float | None
@@ -110,7 +110,6 @@ def new_project_state(
         plan={},
         messages=[HumanMessage(content=initial_message)] if initial_message else [],
         task_queue=[],
-        current_task=None,
         cost_usd_session=cost_usd_session,
         cost_usd_weekly=cost_usd_weekly,
         coverage_pct=None,
