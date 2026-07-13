@@ -200,7 +200,9 @@ def test_node_task_decomposition_populates_task_queue():
     update = node_task_decomposition(state, router)
 
     assert update["phase"] == "implementing"
-    assert update["task_queue"] == [{"description": "Do the trivial thing"}]
+    assert update["task_queue"] == [
+        {"description": "Do the trivial thing", "status": "pending", "attempts": 0}
+    ]
 
 
 def test_node_coder_returns_reviewing_phase_when_queue_already_empty():
@@ -212,56 +214,105 @@ def test_node_coder_returns_reviewing_phase_when_queue_already_empty():
     assert update == {"phase": "reviewing"}
 
 
+def test_node_coder_returns_reviewing_phase_when_every_task_is_already_done():
+    state = new_project_state("proj-1")
+    state["task_queue"] = [
+        {"description": "First task", "status": "done", "attempts": 1}
+    ]
+
+    update = node_coder(state, router=None, executor_client=None)
+
+    assert update == {"phase": "reviewing"}
+
+
 def test_node_coder_succeeds_and_advances_to_reviewing_when_last_task_done():
     router = FakeRouter([CODER_DONE])
     state = new_project_state("proj-1")
-    state["task_queue"] = [{"description": "Do the trivial thing"}]
+    state["task_queue"] = [
+        {"description": "Do the trivial thing", "status": "pending", "attempts": 0}
+    ]
 
     update = node_coder(state, router, executor_client=_RecordingExecutorClient())
 
-    assert update["task_queue"] == []
-    assert update["current_task"] is None
+    assert update["task_queue"] == [
+        {"description": "Do the trivial thing", "status": "done", "attempts": 0}
+    ]
     assert update["phase"] == "reviewing"
 
 
 def test_node_coder_keeps_implementing_when_more_tasks_remain():
     router = FakeRouter([CODER_DONE])
     state = new_project_state("proj-1")
-    state["task_queue"] = [{"description": "First task"}, {"description": "Second task"}]
+    state["task_queue"] = [
+        {"description": "First task", "status": "pending", "attempts": 0},
+        {"description": "Second task", "status": "pending", "attempts": 0},
+    ]
 
     update = node_coder(state, router, executor_client=_RecordingExecutorClient())
 
-    assert update["task_queue"] == [{"description": "Second task"}]
-    assert update["current_task"] is None
+    assert update["task_queue"] == [
+        {"description": "First task", "status": "done", "attempts": 0},
+        {"description": "Second task", "status": "pending", "attempts": 0},
+    ]
+    assert update["phase"] == "implementing"
+
+
+def test_node_coder_resumes_the_in_progress_task_rather_than_the_first_pending_one():
+    router = FakeRouter([CODER_DONE])
+    state = new_project_state("proj-1")
+    state["task_queue"] = [
+        {"description": "First task", "status": "done", "attempts": 0},
+        {"description": "Second task", "status": "in_progress", "attempts": 1},
+        {"description": "Third task", "status": "pending", "attempts": 0},
+    ]
+
+    update = node_coder(state, router, executor_client=_RecordingExecutorClient())
+
+    assert update["task_queue"] == [
+        {"description": "First task", "status": "done", "attempts": 0},
+        {"description": "Second task", "status": "done", "attempts": 1},
+        {"description": "Third task", "status": "pending", "attempts": 0},
+    ]
     assert update["phase"] == "implementing"
 
 
 def test_node_coder_retries_a_failed_task_below_the_attempt_limit():
     router = FakeRouter([_tool_call("read_file", {"path": "missing.py"})] * 10)
     state = new_project_state("proj-1")
-    state["task_queue"] = [{"description": "Do the trivial thing"}]
+    state["task_queue"] = [
+        {"description": "Do the trivial thing", "status": "pending", "attempts": 0}
+    ]
 
     update = node_coder(state, router, executor_client=_RecordingExecutorClient())
 
     assert update["phase"] == "implementing"
-    assert update["current_task"]["attempts"] == 1
-    assert update["current_task"]["description"] == "Do the trivial thing"
+    assert update["task_queue"] == [
+        {"description": "Do the trivial thing", "status": "in_progress", "attempts": 1}
+    ]
 
 
 def test_node_coder_blocks_after_exhausting_the_attempt_budget():
     router = FakeRouter([_tool_call("read_file", {"path": "missing.py"})] * 10)
     state = new_project_state("proj-1")
-    state["task_queue"] = [{"description": "Do the trivial thing"}]
-    state["current_task"] = {
-        "description": "Do the trivial thing",
-        "attempts": MAX_TASK_ATTEMPTS - 1,
-    }
+    state["task_queue"] = [
+        {
+            "description": "Do the trivial thing",
+            "status": "in_progress",
+            "attempts": MAX_TASK_ATTEMPTS - 1,
+        }
+    ]
 
     update = node_coder(state, router, executor_client=_RecordingExecutorClient())
 
     assert update["phase"] == "blocked"
     assert update["curator_source"] == "coder"
-    assert update["current_task"]["attempts"] == MAX_TASK_ATTEMPTS
+    assert update["task_queue"] == [
+        {
+            "description": "Do the trivial thing",
+            "status": "blocked",
+            "attempts": MAX_TASK_ATTEMPTS,
+        }
+    ]
 
 
 def test_route_after_coder_routes_to_memory_curator_when_blocked():

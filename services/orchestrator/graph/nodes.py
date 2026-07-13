@@ -237,12 +237,20 @@ def node_task_decomposition(state: ProjectState, router: ModelRouter) -> dict[st
     """Breaks the approved plan into task_queue, once, right after plan approval."""
     tasks, ai_message = asyncio.run(decompose_plan_into_tasks(router, state["plan"]))
     cost = router.cost_usd(CODER_ROLE, ai_message.usage_metadata)
-    logger.info("project %s: decomposed into %d task(s)", state["project_id"], len(tasks))
+    task_queue = [
+        {"description": task.description, "status": "pending", "attempts": 0} for task in tasks
+    ]
+    logger.info("project %s: decomposed into %d task(s)", state["project_id"], len(task_queue))
     return _with_cost(
         state,
-        {"task_queue": [task.model_dump() for task in tasks], "phase": "implementing"},
+        {"task_queue": task_queue, "phase": "implementing"},
         cost,
     )
+
+
+def _replace_task(task_queue: list[dict], index: int, task: dict) -> list[dict]:
+    """Returns a new task_queue list with the item at `index` replaced by `task`."""
+    return [task if i == index else existing for i, existing in enumerate(task_queue)]
 
 
 def node_coder(
@@ -253,58 +261,72 @@ def node_coder(
     No `interrupt()` call happens anywhere in this node (the Coder is fully
     autonomous within its retry budget), so -- unlike the Planner/cost/merge
     gates -- there's no LangGraph replay concern here: this node can safely
-    make LLM and Executor calls directly. Retry count is tracked in
-    `current_task["attempts"]` rather than a new ProjectState field, since
-    `current_task` is already a free-form dict.
+    make LLM and Executor calls directly. Every task_queue item carries its
+    own `status` and `attempts` count (ADR-034); the active task is whichever
+    item has status "in_progress" (promoted from the first "pending" item if
+    none is active yet), rather than a separate `current_task` field.
     """
     task_queue = state["task_queue"]
-    if not task_queue:
-        return {"phase": "reviewing"}
+    active_index = next(
+        (i for i, task in enumerate(task_queue) if task["status"] == "in_progress"), None
+    )
+    if active_index is None:
+        active_index = next(
+            (i for i, task in enumerate(task_queue) if task["status"] == "pending"), None
+        )
+        if active_index is None:
+            return {"phase": "reviewing"}
 
-    current_task = state["current_task"] or {**task_queue[0], "attempts": 0}
+    active_task = {**task_queue[active_index], "status": "in_progress"}
     result = asyncio.run(
         run_coder_task(
             router,
             executor_client,
             state["project_id"],
-            current_task["description"],
+            active_task["description"],
             stack=state["stack"],
         )
     )
+
     if result.success:
-        remaining = task_queue[1:]
+        active_task["status"] = "done"
+        new_queue = _replace_task(task_queue, active_index, active_task)
+        remaining = sum(1 for task in new_queue if task["status"] in ("pending", "in_progress"))
         logger.info(
-            "project %s: task succeeded, %d remaining", state["project_id"], len(remaining)
+            "project %s: task succeeded, %d remaining", state["project_id"], remaining
         )
         return _with_cost(
             state,
             {
-                "task_queue": remaining,
-                "current_task": None,
+                "task_queue": new_queue,
                 "phase": "implementing" if remaining else "reviewing",
             },
             result.cost_usd,
         )
 
-    attempts = current_task.get("attempts", 0) + 1
-    if attempts >= MAX_TASK_ATTEMPTS:
+    active_task["attempts"] += 1
+    if active_task["attempts"] >= MAX_TASK_ATTEMPTS:
+        active_task["status"] = "blocked"
         logger.warning(
-            "project %s: task exhausted %d attempts, blocking", state["project_id"], attempts
+            "project %s: task exhausted %d attempts, blocking",
+            state["project_id"],
+            active_task["attempts"],
         )
+        new_queue = _replace_task(task_queue, active_index, active_task)
         return _with_cost(
             state,
-            {
-                "phase": "blocked",
-                "curator_source": "coder",
-                "current_task": {**current_task, "attempts": attempts},
-            },
+            {"task_queue": new_queue, "phase": "blocked", "curator_source": "coder"},
             result.cost_usd,
         )
-    logger.info("project %s: task attempt %d failed, retrying", state["project_id"], attempts)
+
+    logger.info(
+        "project %s: task attempt %d failed, retrying",
+        state["project_id"],
+        active_task["attempts"],
+    )
+    new_queue = _replace_task(task_queue, active_index, active_task)
     return _with_cost(
-        state,
-        {"current_task": {**current_task, "attempts": attempts}, "phase": "implementing"},
-        result.cost_usd,
+        state, {"task_queue": new_queue, "phase": "implementing"}, result.cost_usd
     )
 
 
