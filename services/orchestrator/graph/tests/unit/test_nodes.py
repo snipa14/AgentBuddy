@@ -575,6 +575,28 @@ def test_node_memory_curator_is_a_noop_without_a_curator_source():
     assert node_memory_curator(state, projects_root=None, conn=None, router=None) == {}
 
 
+def test_task_progress_lines_renders_each_task_with_status_and_attempts():
+    from services.orchestrator.graph.nodes import _task_progress_lines
+
+    task_queue = [
+        {"description": "Add a User model", "status": "done", "attempts": 1},
+        {"description": "Add a POST /login endpoint", "status": "blocked", "attempts": 3},
+    ]
+
+    lines = _task_progress_lines(task_queue)
+
+    assert lines == [
+        "[done] Add a User model (attempts: 1)",
+        "[blocked] Add a POST /login endpoint (attempts: 3)",
+    ]
+
+
+def test_task_progress_lines_returns_empty_list_for_empty_queue():
+    from services.orchestrator.graph.nodes import _task_progress_lines
+
+    assert _task_progress_lines([]) == []
+
+
 # -- Reviewer node tests -------------------------------------------------------
 
 _APPROVE_REVIEW = structured(ReviewResult(verdict="approve", findings=[]))

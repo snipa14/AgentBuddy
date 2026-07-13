@@ -110,6 +110,15 @@ def _with_cost(state: ProjectState, update: dict[str, Any], cost_usd: float) -> 
     return update
 
 
+def _task_progress_lines(task_queue: list[dict]) -> list[str]:
+    """Renders each task_queue item as a one-line status summary for the
+    Memory Curator's input, e.g. "[done] Add a User model (attempts: 1)"."""
+    return [
+        f"[{task['status']}] {task['description']} (attempts: {task['attempts']})"
+        for task in task_queue
+    ]
+
+
 def node_intake(state: ProjectState) -> dict[str, Any]:
     """Logs entry into intake and advances to the Planner's interview."""
     logger.info("project %s: intake", state["project_id"])
@@ -696,7 +705,9 @@ def node_memory_curator(
         return {}
 
     project_id = state["project_id"]
-    phase_events = [msg.content for msg in state["messages"][-20:]]
+    phase_events = [msg.content for msg in state["messages"][-20:]] + _task_progress_lines(
+        state["task_queue"]
+    )
     if not phase_events:
         logger.info("project %s: nothing to curate (no events)", project_id)
         return {}
