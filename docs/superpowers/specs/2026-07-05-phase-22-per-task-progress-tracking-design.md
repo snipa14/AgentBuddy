@@ -65,19 +65,17 @@ added alongside the existing `Phase`/`Mode`/`Stack`/`PrMode`/`CoverageGateMode` 
 
 `new_project_state()`: drop the `current_task=None` line; `task_queue=[]` unchanged.
 
-`CoderTask` (`services/orchestrator/agents/coder.py`):
+`CoderTask` (`services/orchestrator/agents/coder.py`) is **not** modified — it stays exactly
+`{description: str}`, since it is also the LLM-facing structured-output schema
+(`_TaskList` wraps `list[CoderTask]` for `decompose_plan_into_tasks`'s model call). Adding
+`status`/`attempts` fields there, even with defaults, would put them in the JSON schema the
+model sees, asking it to reason about values that are purely internal bookkeeping.
 
-```python
-class CoderTask(BaseModel):
-    """One item from a decomposed plan's task_queue."""
-    description: str
-    status: TaskStatus = "pending"
-    attempts: int = 0
-```
-
-Both new fields default so the LLM structured-output schema (`_TaskList`) is unaffected —
-the model only ever produces `description`; `status`/`attempts` are filled in by
-`model_dump()`'s defaults at decomposition time.
+Instead, `node_task_decomposition` builds the `task_queue` item dicts itself from the
+decomposed `CoderTask.description` values, adding `status: "pending"` and `attempts: 0`
+at construction time — mirroring how `attempts` was already handled today (bolted onto
+`current_task` ad hoc at promotion time, never part of `CoderTask`), just one step earlier
+in the pipeline.
 
 ## `node_coder` Rewrite (`services/orchestrator/graph/nodes.py`)
 
