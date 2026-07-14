@@ -120,7 +120,9 @@ class OrchestratorService:
             project_id: The project to look up.
 
         Returns:
-            A dict with `project_id`, `phase`, and `pending_approval`.
+            A dict with `project_id`, `phase`, `pending_approval`, and
+            `task_progress` (None before task decomposition has run, else
+            `{"done": int, "total": int, "tasks": list[dict]}`).
 
         Raises:
             UnknownProjectError: If project_id has no checkpoint history.
@@ -131,10 +133,21 @@ class OrchestratorService:
         phase = snapshot.values["phase"]
         if phase in _TERMINAL_PHASES:
             clear_progress(project_id)
+        task_queue = snapshot.values["task_queue"]
+        task_progress = (
+            {
+                "done": sum(1 for task in task_queue if task["status"] == "done"),
+                "total": len(task_queue),
+                "tasks": task_queue,
+            }
+            if task_queue
+            else None
+        )
         return {
             "project_id": project_id,
             "phase": phase,
             "pending_approval": snapshot.values["pending_approval"],
+            "task_progress": task_progress,
         }
 
     def list_projects(self) -> list[str]:

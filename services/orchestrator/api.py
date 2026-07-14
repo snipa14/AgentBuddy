@@ -27,6 +27,7 @@ class ProjectStatusResponse(BaseModel):
     project_id: str
     phase: str
     pending_approval: dict | None
+    task_progress: dict | None
 
 
 class ProjectListResponse(BaseModel):

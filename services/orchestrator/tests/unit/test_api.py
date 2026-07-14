@@ -89,6 +89,20 @@ def test_status_known_project_returns_current_phase(client):
     assert response.json()["phase"] == "awaiting_plan_approval"
 
 
+def test_status_includes_task_progress_once_tasks_exist(client):
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"})
+    client.post("/resume/my-project", json={"decision": "approve"})
+
+    response = client.get("/status/my-project")
+
+    body = response.json()
+    assert body["task_progress"] == {
+        "done": 1,
+        "total": 1,
+        "tasks": [{"description": "Do the trivial thing", "status": "done", "attempts": 0}],
+    }
+
+
 def test_list_projects_returns_created_ids(client):
     client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "project-a"})
     client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "project-b"})

@@ -75,6 +75,26 @@ def test_status_unknown_project_raises(service):
         service.status("does-not-exist")
 
 
+def test_status_before_decomposition_has_no_task_progress(service):
+    result = service.handle_webhook("my-project", "hello")
+
+    assert result["phase"] == "awaiting_plan_approval"
+    assert result["task_progress"] is None
+
+
+def test_status_after_plan_approval_includes_task_progress(service):
+    service.handle_webhook("my-project", "hello")
+
+    result = service.resume("my-project", "approve")
+
+    assert result["phase"] == "awaiting_merge_approval"
+    assert result["task_progress"] == {
+        "done": 1,
+        "total": 1,
+        "tasks": [{"description": "Do the trivial thing", "status": "done", "attempts": 0}],
+    }
+
+
 def test_list_projects_returns_known_ids(service):
     service.handle_webhook("project-a", "hello")
     service.handle_webhook("project-b", "hello")
