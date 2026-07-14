@@ -705,9 +705,9 @@ def node_memory_curator(
         return {}
 
     project_id = state["project_id"]
-    phase_events = [msg.content for msg in state["messages"][-20:]] + _task_progress_lines(
-        state["task_queue"]
-    )
+    phase_events = [msg.content for msg in state["messages"][-20:]]
+    if phase_events:
+        phase_events = phase_events + _task_progress_lines(state["task_queue"])
     if not phase_events:
         logger.info("project %s: nothing to curate (no events)", project_id)
         return {}
