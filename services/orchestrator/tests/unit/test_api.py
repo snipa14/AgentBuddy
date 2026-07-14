@@ -6,7 +6,10 @@ from fastapi.testclient import TestClient
 from services.orchestrator.api import build_app
 from services.orchestrator.executor_client import CommandResult, TestResult
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
-from services.orchestrator.graph.tests.unit.planner_fakes import fast_track_router
+from services.orchestrator.graph.tests.unit.planner_fakes import (
+    fast_track_router,
+    fast_track_router_with_curation,
+)
 from services.orchestrator.memory.global_store import build_global_memory_connection
 from services.orchestrator.progress_buffer import add_progress, get_chunks_since
 from services.orchestrator.service import OrchestratorService
@@ -32,7 +35,11 @@ def client(tmp_path):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
     memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
     service = OrchestratorService(
-        checkpointer, fast_track_router(rounds=2), _StubExecutorClient(), memory_conn, tmp_path / "projects"
+        checkpointer,
+        fast_track_router_with_curation(rounds=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
     )
     return TestClient(build_app(service))
 
@@ -103,7 +110,20 @@ def test_status_includes_task_progress_once_tasks_exist(client):
     }
 
 
-def test_list_projects_returns_created_ids(client):
+def test_list_projects_returns_created_ids(tmp_path):
+    """Uses fast_track_router() (no curator responses), not the shared
+    `client` fixture: neither project here ever resumes, so curator_source
+    is never set and the Memory Curator never fires -- inserting curator
+    responses into the shared queue would misalign project-b's consumption,
+    which starts immediately after project-a's 3 items with no resume in
+    between to "absorb" a curator slot."""
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer, fast_track_router(rounds=2), _StubExecutorClient(), memory_conn, tmp_path / "projects"
+    )
+    client = TestClient(build_app(service))
+
     client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "project-a"})
     client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "project-b"})
 

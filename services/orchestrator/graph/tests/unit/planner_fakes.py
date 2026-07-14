@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from pydantic import BaseModel
 
 from services.orchestrator.agents.coder import CoderTask, _TaskList
+from services.orchestrator.agents.memory_curator import CurationResult
 from services.orchestrator.agents.planner import CritiqueResult, DraftPlan, InterviewTurn
 from services.orchestrator.agents.reviewer import ReviewResult
 
@@ -69,6 +70,8 @@ ONE_TASK = structured(_TaskList(tasks=[CoderTask(description="Do the trivial thi
 CODER_DONE = AIMessage(content="done", tool_calls=[], usage_metadata=_usage())
 
 REVIEWER_APPROVE = structured(ReviewResult(verdict="approve", findings=[]))
+
+CURATION_OK = structured(CurationResult(summary_markdown="Stub curation summary."))
 
 
 class _FakeStructuredRunnable:
@@ -154,5 +157,39 @@ def fast_track_router(rounds: int = 1) -> FakeRouter:
         ONE_TASK,
         CODER_DONE,
         REVIEWER_APPROVE,
+    ] * rounds
+    return FakeRouter(responses)
+
+
+def fast_track_router_with_curation(rounds: int = 1) -> FakeRouter:
+    """Like fast_track_router(), but also scripts a CurationResult response at
+    each of the three memory_curator checkpoints (after plan_wait, after
+    testing, after merge_wait) that fire for real whenever `messages` is
+    non-empty.
+
+    fast_track_router() itself deliberately has no curator responses: every
+    one of its other consumers (test_graph_end_to_end.py,
+    test_integrator.py, test_concurrency.py's own hand-rolled scripts) seeds
+    `new_project_state()` without `initial_message`, so `messages` stays
+    empty for the whole run and node_memory_curator's `if not phase_events`
+    guard skips the LLM call entirely -- adding curator responses there
+    would be unused dead entries at best.
+
+    OrchestratorService.handle_webhook(), however, always seeds
+    `initial_message` (ADR-035), so `messages` is non-empty from the first
+    curator checkpoint onward for every test that drives the graph via
+    OrchestratorService (test_service.py, test_api.py) -- those tests need
+    this variant instead.
+    """
+    responses = [
+        READY_TURN,
+        EMPTY_DRAFT,
+        NO_FINDINGS_CRITIQUE,
+        CURATION_OK,
+        ONE_TASK,
+        CODER_DONE,
+        REVIEWER_APPROVE,
+        CURATION_OK,
+        CURATION_OK,
     ] * rounds
     return FakeRouter(responses)
