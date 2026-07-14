@@ -161,6 +161,26 @@ def fast_track_router(rounds: int = 1) -> FakeRouter:
     return FakeRouter(responses)
 
 
+def start_only_router(projects: int = 2) -> FakeRouter:
+    """Scripts only the Planner interview->draft->critique sequence
+    (READY_TURN, EMPTY_DRAFT, NO_FINDINGS_CRITIQUE), repeated once per
+    project, for tests that drive multiple *independent* projects through
+    handle_webhook()/POST /webhook alone -- never resuming past plan_wait.
+
+    fast_track_router(rounds=N)'s per-round grouping assumes each round's
+    six responses are consumed by a single project's full start+resume
+    cascade. That assumption breaks when N independent projects each make
+    exactly one non-resuming call: project A's first invoke() only consumes
+    a round's first 3 (Planner-shaped) items before pausing at plan_wait, so
+    project B's invoke() pops starting at index 3 -- ONE_TASK, a _TaskList --
+    where node_planner_ask expects an InterviewTurn, raising AttributeError
+    on `turn.status`. See test_concurrency.py's `_start_script()` for the
+    same pattern under real interleaving.
+    """
+    responses = [READY_TURN, EMPTY_DRAFT, NO_FINDINGS_CRITIQUE] * projects
+    return FakeRouter(responses)
+
+
 def fast_track_router_with_curation(rounds: int = 1) -> FakeRouter:
     """Like fast_track_router(), but also scripts a CurationResult response at
     each of the three memory_curator checkpoints (after plan_wait, after
