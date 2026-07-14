@@ -19,6 +19,7 @@ from services.telegram_gateway.rendering import (
     CALLBACK_EDIT,
     CALLBACK_REJECT,
     render_approval,
+    render_task_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,18 +42,24 @@ def _start_poller_from_response(poller: ProgressPoller, response, chat_id: int) 
 
 async def _relay_webhook_result(message: Message, response) -> None:
     """Renders a webhook response: an Approve/Reject/Edit keyboard if the
-    project is now paused at a gate, a plain acknowledgment otherwise.
+    project is now paused at a gate, a task-progress summary if tasks exist,
+    a plain acknowledgment otherwise.
 
     Args:
         message: The incoming message to reply to.
         response: The httpx.Response returned by OrchestratorClient.send_webhook.
     """
-    pending_approval = response.json().get("pending_approval")
+    body = response.json()
+    pending_approval = body.get("pending_approval")
     if pending_approval:
         text, keyboard = render_approval(pending_approval)
         await message.answer(text, reply_markup=keyboard)
-    else:
-        await message.answer("Got it -- working on that.")
+        return
+    task_progress = body.get("task_progress")
+    if task_progress:
+        await message.answer(render_task_progress(task_progress))
+        return
+    await message.answer("Got it -- working on that.")
 
 
 @router.message(Command("start"))

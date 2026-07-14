@@ -101,6 +101,41 @@ def test_handle_command_sends_plain_acknowledgment_when_no_gate_is_pending(
     message.answer.assert_awaited_once_with("Got it -- working on that.")
 
 
+def test_handle_command_renders_task_progress_when_no_gate_is_pending(
+    message, orchestrator, poller
+):
+    response = MagicMock()
+    response.json.return_value = {
+        "project_id": "proj-1",
+        "phase": "implementing",
+        "pending_approval": None,
+        "task_progress": {
+            "done": 1,
+            "total": 3,
+            "tasks": [
+                {"description": "First task", "status": "done", "attempts": 1},
+                {"description": "Second task", "status": "in_progress", "attempts": 0},
+                {"description": "Third task", "status": "pending", "attempts": 0},
+            ],
+        },
+    }
+    orchestrator.send_webhook = AsyncMock(return_value=response)
+
+    asyncio.run(handle_command(message, orchestrator, poller))
+
+    message.answer.assert_awaited_once_with("1/3 tasks done\nIn progress: Second task")
+
+
+def test_handle_command_falls_back_to_plain_acknowledgment_without_task_progress(
+    message, orchestrator, poller
+):
+    """The original webhook fixture has no task_progress key at all -- confirms
+    the new branch doesn't break the pre-existing no-tasks-yet case."""
+    asyncio.run(handle_command(message, orchestrator, poller))
+
+    message.answer.assert_awaited_once_with("Got it -- working on that.")
+
+
 def test_handle_approval_callback_resumes_with_parsed_decision_and_thread_id(orchestrator):
     callback = MagicMock()
     callback.data = "approve:thread-123"

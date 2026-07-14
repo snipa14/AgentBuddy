@@ -2,7 +2,7 @@
 
 from aiogram.types import InlineKeyboardMarkup
 
-from services.telegram_gateway.rendering import render_approval
+from services.telegram_gateway.rendering import render_approval, render_task_progress
 
 
 def test_render_approval_includes_summary_text_and_three_buttons():
@@ -23,3 +23,43 @@ def test_render_approval_falls_back_to_default_text_when_summary_missing():
     text, _ = render_approval({"thread_id": "abc123"})
 
     assert text == "Approval needed."
+
+
+def test_render_task_progress_shows_done_count_and_in_progress_task():
+    text = render_task_progress(
+        {
+            "done": 1,
+            "total": 3,
+            "tasks": [
+                {"description": "First task", "status": "done", "attempts": 1},
+                {"description": "Second task", "status": "in_progress", "attempts": 0},
+                {"description": "Third task", "status": "pending", "attempts": 0},
+            ],
+        }
+    )
+
+    assert text == "1/3 tasks done\nIn progress: Second task"
+
+
+def test_render_task_progress_shows_blocked_task_instead_of_in_progress():
+    text = render_task_progress(
+        {
+            "done": 0,
+            "total": 1,
+            "tasks": [{"description": "Do the thing", "status": "blocked", "attempts": 3}],
+        }
+    )
+
+    assert text == "0/1 tasks done\nBlocked: Do the thing"
+
+
+def test_render_task_progress_shows_only_the_count_when_all_tasks_are_done():
+    text = render_task_progress(
+        {
+            "done": 1,
+            "total": 1,
+            "tasks": [{"description": "Do the thing", "status": "done", "attempts": 1}],
+        }
+    )
+
+    assert text == "1/1 tasks done"

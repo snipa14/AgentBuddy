@@ -40,3 +40,29 @@ def render_approval(pending_approval: dict[str, Any]) -> tuple[str, InlineKeyboa
         ]
     )
     return text, keyboard
+
+
+def render_task_progress(task_progress: dict[str, Any]) -> str:
+    """Renders a ProjectStatusResponse's task_progress field as a status line.
+
+    Args:
+        task_progress: {"done": int, "total": int, "tasks": [{"description",
+            "status", "attempts"}, ...]} (services/orchestrator/api.py).
+
+    Returns:
+        A one- or two-line summary, e.g. "1/3 tasks done\\nIn progress: ..."
+        -- a blocked task takes priority over an in-progress one for the
+        second line, since a blocked task means the phase has actually halted.
+    """
+    lines = [f"{task_progress['done']}/{task_progress['total']} tasks done"]
+    blocked = next(
+        (task for task in task_progress["tasks"] if task["status"] == "blocked"), None
+    )
+    active = next(
+        (task for task in task_progress["tasks"] if task["status"] == "in_progress"), None
+    )
+    if blocked:
+        lines.append(f"Blocked: {blocked['description']}")
+    elif active:
+        lines.append(f"In progress: {active['description']}")
+    return "\n".join(lines)
