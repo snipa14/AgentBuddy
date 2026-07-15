@@ -39,3 +39,11 @@ def test_new_project_state_seeds_cost_usd_weekly():
     state = new_project_state("proj-1", cost_usd_weekly=12.5)
 
     assert state["cost_usd_weekly"] == 12.5
+
+
+def test_new_project_state_defaults_compaction_fields_to_empty():
+    state = new_project_state("proj-1")
+
+    assert state["messages_summary"] == ""
+    assert state["messages_curated_through"] == 0
+    assert state["changed_files"] == []

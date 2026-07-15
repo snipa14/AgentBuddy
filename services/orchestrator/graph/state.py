@@ -51,6 +51,9 @@ class ProjectState(TypedDict):
     git_branch: str | None
     git_remote_url: str | None
     curator_source: str | None
+    messages_summary: str
+    messages_curated_through: int
+    changed_files: list[str]
     pending_approval: dict | None
 
 
@@ -119,5 +122,8 @@ def new_project_state(
         git_branch=None,
         git_remote_url=None,
         curator_source=None,
+        messages_summary="",
+        messages_curated_through=0,
+        changed_files=[],
         pending_approval=None,
     )
