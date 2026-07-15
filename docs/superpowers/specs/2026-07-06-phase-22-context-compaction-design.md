@@ -24,6 +24,19 @@ this to three concrete, independent growth vectors:
    `max_rounds=5` safety cap on `agents/planner.py`'s `run_intake_to_final_plan`
    is a reference implementation the real LangGraph nodes deliberately don't
    call -- see that module's docstring).
+
+   Important nuance caught during this design's own self-review:
+   `node_planner_ask` only ever runs *before* `plan_wait`, and
+   `node_memory_curator` (the only thing that would ever advance a
+   compaction cursor) only ever fires *after* `plan_wait` -- there is no
+   path back to the Planner post-approval today (no re-planning phase --
+   out of scope here, see below). So a curator-driven cursor can never
+   actually be non-zero the moment `_extract_description_and_history` runs,
+   for any project, under the graph's current topology. The compaction fix
+   below therefore has no practical effect on interview-round growth *today*
+   -- its value is forward-proofing for the already-planned "mid-implementation
+   re-planning path" stretch item, which will need exactly this. The part of
+   the fix with immediate effect is the Memory Curator's own prompt, below.
 2. **`task_queue`** is deliberately never shrunk (ADR-034) -- bounded
    per-call cost today since `node_coder` only ever reads the one active
    task, but `_task_progress_lines()` renders **every** task into the Memory
@@ -129,6 +142,16 @@ def _extract_description_and_history(state: ProjectState) -> tuple[str, list[str
 "answers/events so far" portion is compacted. `max(1, ...)` guards against
 the cursor ever pointing at or before index 0 (e.g. its default `0`), so the
 description is never accidentally duplicated into `qa_history`.
+
+As noted above, `messages_curated_through` is always `0` at every point
+this function runs under the graph's current topology, so this change is a
+no-op today (`cursor = max(1, 0) = 1`, identical to the current
+`messages[1:]` read) -- it activates only once something (the planned
+re-planning path) can route back to `node_planner_ask` after a curation
+checkpoint has already advanced the cursor. Included now because it shares
+the same fields the curator fix below needs anyway, and because writing it
+alongside the curator fix is far cheaper than retrofitting it once
+re-planning actually lands.
 
 **Accepted limitation:** `messages_summary` grows slower than raw
 `messages` (one short paragraph per phase transition instead of per raw
