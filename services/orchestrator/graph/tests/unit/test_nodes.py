@@ -139,6 +139,42 @@ def test_node_planner_ask_advances_to_roasting_when_ready():
     assert update["cost_usd_session"] > 0
 
 
+def test_extract_description_and_history_uses_summary_and_cursor_when_set():
+    from services.orchestrator.graph.nodes import _extract_description_and_history
+    from langchain_core.messages import HumanMessage
+
+    state = new_project_state("proj-1")
+    state["messages"] = [
+        HumanMessage(content="original request"),
+        HumanMessage(content="old question"),
+        HumanMessage(content="old answer"),
+        HumanMessage(content="new question"),
+        HumanMessage(content="new answer"),
+    ]
+    state["messages_summary"] = "Stakeholder already answered the basics."
+    state["messages_curated_through"] = 3
+
+    description, qa_history = _extract_description_and_history(state)
+
+    assert description == "original request"
+    assert qa_history == [
+        "Stakeholder already answered the basics.",
+        "new question",
+        "new answer",
+    ]
+
+
+def test_extract_description_and_history_omits_summary_when_never_curated():
+    from services.orchestrator.graph.nodes import _extract_description_and_history
+
+    state = new_project_state("proj-1", initial_message="original request")
+
+    description, qa_history = _extract_description_and_history(state)
+
+    assert description == "original request"
+    assert qa_history == []
+
+
 def test_route_after_planner_ask_waits_when_questioning():
     state = new_project_state("proj-1")
     state["phase"] = "planning"

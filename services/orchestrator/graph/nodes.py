@@ -131,7 +131,10 @@ def _extract_description_and_history(state: ProjectState) -> tuple[str, list[str
     if not messages:
         return "", []
     description = messages[0].content
-    qa_history = [message.content for message in messages[1:]]
+    cursor = max(1, state["messages_curated_through"])
+    tail = [message.content for message in messages[cursor:]]
+    summary = state["messages_summary"]
+    qa_history = ([summary] if summary else []) + tail
     return description, qa_history
 
 
