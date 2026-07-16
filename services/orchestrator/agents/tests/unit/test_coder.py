@@ -112,6 +112,54 @@ def test_run_coder_task_reads_then_writes_then_finishes():
     assert result.cost_usd > 0
 
 
+def test_run_coder_task_records_written_file_paths():
+    router = FakeRouter(
+        [
+            _tool_call_message("read_file", {"path": "models.py"}, "call_1"),
+            _tool_call_message(
+                "write_file", {"path": "models.py", "content": "class User:\n    pass"}, "call_2"
+            ),
+            _tool_call_message(
+                "write_file", {"path": "views.py", "content": "def login(): ..."}, "call_3"
+            ),
+            _done_message(),
+        ]
+    )
+    executor = RecordingExecutorClient(files={"models.py": "# empty\n"})
+
+    result = asyncio.run(run_coder_task(router, executor, "proj-1", "Add a User model"))
+
+    assert result.written_files == ["models.py", "views.py"]
+
+
+def test_run_coder_task_written_files_empty_when_no_writes_happen():
+    router = FakeRouter([_done_message()])
+    executor = RecordingExecutorClient()
+
+    result = asyncio.run(run_coder_task(router, executor, "proj-1", "trivial task"))
+
+    assert result.written_files == []
+
+
+def test_run_coder_task_records_written_files_even_when_max_steps_exhausted():
+    router = FakeRouter(
+        [
+            _tool_call_message(
+                "write_file", {"path": "partial.py", "content": "# wip"}, "call_1"
+            )
+        ]
+        * 3
+    )
+    executor = RecordingExecutorClient()
+
+    result = asyncio.run(
+        run_coder_task(router, executor, "proj-1", "Add a User model", max_steps=3)
+    )
+
+    assert result.success is False
+    assert result.written_files == ["partial.py", "partial.py", "partial.py"]
+
+
 def test_run_coder_task_records_a_failed_read_and_still_recovers():
     router = FakeRouter(
         [

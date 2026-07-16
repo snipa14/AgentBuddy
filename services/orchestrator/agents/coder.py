@@ -57,6 +57,7 @@ class CoderTaskResult(BaseModel):
 
     success: bool
     transcript: list[str]
+    written_files: list[str] = []
     cost_usd: float = 0.0
 
 
@@ -192,6 +193,7 @@ async def run_coder_task(
         HumanMessage(content=f"Task: {task_description}"),
     ]
     transcript: list[str] = []
+    written_files: list[str] = []
     total_cost = 0.0
 
     for _ in range(max_steps):
@@ -206,7 +208,9 @@ async def run_coder_task(
         messages.append(ai_message)
 
         if not ai_message.tool_calls:
-            return CoderTaskResult(success=True, transcript=transcript, cost_usd=total_cost)
+            return CoderTaskResult(
+                success=True, transcript=transcript, written_files=written_files, cost_usd=total_cost
+            )
 
         for call in ai_message.tool_calls:
             tool_fn = tools_by_name.get(call["name"])
@@ -216,6 +220,10 @@ async def run_coder_task(
                 else f"error: unknown tool {call['name']!r}"
             )
             transcript.append(f"{call['name']}({call['args']}) -> {observation}")
+            if call["name"] == "write_file":
+                written_files.append(call["args"]["path"])
             messages.append(ToolMessage(content=str(observation), tool_call_id=call["id"]))
 
-    return CoderTaskResult(success=False, transcript=transcript, cost_usd=total_cost)
+    return CoderTaskResult(
+        success=False, transcript=transcript, written_files=written_files, cost_usd=total_cost
+    )
