@@ -179,9 +179,11 @@ async def run_coder_task(
         further tool calls; success=False if max_steps is exhausted first.
         transcript records every tool call and its observation either way,
         for the graph node's retry bookkeeping and for tests to assert on
-        (not just final state). cost_usd accumulates every turn's completion
-        cost (ModelRouter.cost_usd()), for the calling node to fold into
-        ProjectState's running totals.
+        (not just final state). written_files collects every path touched by
+        a write_file tool call during the run, in call order, regardless of
+        whether the overall task succeeded. cost_usd accumulates every turn's
+        completion cost (ModelRouter.cost_usd()), for the calling node to fold
+        into ProjectState's running totals.
     """
     llm = router.resolve(CODER_ROLE)
     tools = _build_tools(executor_client, project_id, stack)
@@ -209,7 +211,10 @@ async def run_coder_task(
 
         if not ai_message.tool_calls:
             return CoderTaskResult(
-                success=True, transcript=transcript, written_files=written_files, cost_usd=total_cost
+                success=True,
+                transcript=transcript,
+                written_files=written_files,
+                cost_usd=total_cost,
             )
 
         for call in ai_message.tool_calls:
