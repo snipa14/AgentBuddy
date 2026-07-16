@@ -705,7 +705,8 @@ def node_memory_curator(
         return {}
 
     project_id = state["project_id"]
-    phase_events = [msg.content for msg in state["messages"][-20:]]
+    cursor = state["messages_curated_through"]
+    phase_events = [msg.content for msg in state["messages"][cursor:]]
     if phase_events:
         phase_events = phase_events + _task_progress_lines(state["task_queue"])
     if not phase_events:
@@ -715,7 +716,7 @@ def node_memory_curator(
     created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     try:
-        _, ai_message = asyncio.run(
+        result, ai_message = asyncio.run(
             curate_and_store_phase(
                 router,
                 projects_root,
@@ -727,7 +728,19 @@ def node_memory_curator(
         )
         cost = router.cost_usd(CURATOR_ROLE, ai_message.usage_metadata)
         logger.info("project %s: memory curated from %d event(s)", project_id, len(phase_events))
-        return _with_cost(state, {}, cost)
+        new_summary = (
+            f"{state['messages_summary']}\n\n{result.summary_markdown}"
+            if state["messages_summary"]
+            else result.summary_markdown
+        )
+        return _with_cost(
+            state,
+            {
+                "messages_summary": new_summary,
+                "messages_curated_through": len(state["messages"]),
+            },
+            cost,
+        )
     except Exception:
         logger.warning("project %s: curator failed — continuing without curation", project_id)
         return {}

@@ -6,8 +6,9 @@ recall works (the Definition of Done).
 
 import sqlite3
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from langchain_core.messages import AIMessage
 from langgraph.graph import END
 
 from services.orchestrator.agents.memory_curator import CuratedGlobalMemory, CurationResult
@@ -85,6 +86,8 @@ def test_node_memory_curator_runs_curation_and_stores(tmp_path):
 
     assert update["cost_usd_session"] > state["cost_usd_session"]
     assert update["cost_usd_weekly"] > state["cost_usd_weekly"]
+    assert update["messages_summary"] == "Completed implementation and testing for proj-cross-project.\n"
+    assert update["messages_curated_through"] == 2
     # Check LEARNINGS.md was written
     learnings = (projects_root / "proj-curate" / "LEARNINGS.md").read_text()
     assert "Completed implementation and testing" in learnings
@@ -95,6 +98,60 @@ def test_node_memory_curator_runs_curation_and_stores(tmp_path):
     assert len(results) == 1
     assert results[0].type == "error_pattern"
     conn.close()
+
+
+def test_node_memory_curator_appends_to_existing_summary_rather_than_overwriting(tmp_path):
+    """A second curation checkpoint's summary is appended to the first's, not
+    replacing it -- messages_summary is the compacted stand-in for
+    everything curated so far, not just the most recent phase."""
+    router = _curator_router()
+    from services.orchestrator.memory.global_store import build_global_memory_connection
+
+    conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir()
+
+    state = new_project_state("proj-curate", initial_message="build a thing")
+    state["curator_source"] = "testing"
+    state["messages"] = [MagicMock(content="did implementation"), MagicMock(content="ran tests")]
+    state["messages_summary"] = "Prior phase: planned the project."
+    state["messages_curated_through"] = 0
+
+    update = node_memory_curator(state, projects_root, conn, router)
+
+    assert update["messages_summary"] == (
+        "Prior phase: planned the project.\n\n"
+        "Completed implementation and testing for proj-cross-project.\n"
+    )
+    assert update["messages_curated_through"] == 2
+    conn.close()
+
+
+def test_node_memory_curator_includes_all_events_since_cursor_not_just_last_20(tmp_path):
+    """Regression test for the removed hardcoded messages[-20:] window: with
+    more than 20 events accumulated since the last curation checkpoint, every
+    one of them must reach the curator, not just the most recent 20."""
+    router = _curator_router()
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir()
+    conn = sqlite3.connect(":memory:")
+
+    state = new_project_state("proj-curate")
+    state["curator_source"] = "testing"
+    state["messages"] = [MagicMock(content=f"event {i}") for i in range(25)]
+    state["messages_curated_through"] = 0
+
+    fake_ai_message = AIMessage(
+        content="", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+    )
+    with patch(
+        "services.orchestrator.graph.nodes.curate_and_store_phase",
+        new=AsyncMock(return_value=(_CURATION_RESULT, fake_ai_message)),
+    ) as mock_curate:
+        node_memory_curator(state, projects_root, conn, router)
+
+    phase_events = mock_curate.call_args.args[4]
+    assert len(phase_events) == 25
 
 
 def test_node_memory_curator_continues_on_failure():
