@@ -633,6 +633,23 @@ def test_task_progress_lines_returns_empty_list_for_empty_queue():
     assert _task_progress_lines([]) == []
 
 
+def test_task_progress_lines_caps_done_tasks_to_the_most_recent_limit():
+    from services.orchestrator.graph.nodes import _task_progress_lines
+
+    task_queue = (
+        [{"description": f"Old done task {i}", "status": "done", "attempts": 0} for i in range(15)]
+        + [{"description": "Still pending", "status": "pending", "attempts": 0}]
+    )
+
+    lines = _task_progress_lines(task_queue, recent_done_limit=10)
+
+    assert len(lines) == 11
+    assert lines[:10] == [
+        f"[done] Old done task {i} (attempts: 0)" for i in range(5, 15)
+    ]
+    assert lines[10] == "[pending] Still pending (attempts: 0)"
+
+
 # -- Reviewer node tests -------------------------------------------------------
 
 _APPROVE_REVIEW = structured(ReviewResult(verdict="approve", findings=[]))

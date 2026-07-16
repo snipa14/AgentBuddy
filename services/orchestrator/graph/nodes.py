@@ -110,12 +110,21 @@ def _with_cost(state: ProjectState, update: dict[str, Any], cost_usd: float) -> 
     return update
 
 
-def _task_progress_lines(task_queue: list[dict]) -> list[str]:
+def _task_progress_lines(task_queue: list[dict], recent_done_limit: int = 10) -> list[str]:
     """Renders each task_queue item as a one-line status summary for the
-    Memory Curator's input, e.g. "[done] Add a User model (attempts: 1)"."""
+    Memory Curator's input, e.g. "[done] Add a User model (attempts: 1)".
+    Every non-done task is kept (always actionable/interesting); done tasks
+    are capped to the most recent `recent_done_limit` so a long-lived
+    project's curator prompt doesn't grow with total completed-task count
+    forever."""
+    done_indices = [i for i, task in enumerate(task_queue) if task["status"] == "done"]
+    keep_done = set(done_indices[-recent_done_limit:])
+    kept = [
+        task for i, task in enumerate(task_queue) if task["status"] != "done" or i in keep_done
+    ]
     return [
         f"[{task['status']}] {task['description']} (attempts: {task['attempts']})"
-        for task in task_queue
+        for task in kept
     ]
 
 
