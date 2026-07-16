@@ -60,6 +60,10 @@ def _tool_call(name: str, args: dict, call_id: str = "call_1"):
     )
 
 
+def _write_then_done(path: str) -> list:
+    return [_tool_call("write_file", {"path": path, "content": "x"}), CODER_DONE]
+
+
 class _RecordingExecutorClient:
     """Minimal fake matching ExecutorClient's async surface, recording calls."""
 
@@ -291,6 +295,51 @@ def test_node_coder_keeps_implementing_when_more_tasks_remain():
         {"description": "Second task", "status": "pending", "attempts": 0},
     ]
     assert update["phase"] == "implementing"
+
+
+def test_node_coder_accumulates_changed_files_across_tasks():
+    router = FakeRouter(_write_then_done("models.py") + _write_then_done("views.py"))
+    state = new_project_state("proj-1")
+    state["task_queue"] = [
+        {"description": "First task", "status": "pending", "attempts": 0},
+        {"description": "Second task", "status": "pending", "attempts": 0},
+    ]
+
+    first_update = node_coder(state, router, executor_client=_RecordingExecutorClient())
+    state.update(first_update)
+    second_update = node_coder(state, router, executor_client=_RecordingExecutorClient())
+
+    assert second_update["changed_files"] == ["models.py", "views.py"]
+
+
+def test_node_coder_dedupes_changed_files_across_retries():
+    router = FakeRouter(_write_then_done("models.py"))
+    state = new_project_state("proj-1")
+    state["changed_files"] = ["models.py"]
+    state["task_queue"] = [
+        {"description": "Do the trivial thing", "status": "pending", "attempts": 0}
+    ]
+
+    update = node_coder(state, router, executor_client=_RecordingExecutorClient())
+
+    assert update["changed_files"] == ["models.py"]
+
+
+def test_node_coder_records_changed_files_even_when_task_blocks():
+    router = FakeRouter(_write_then_done("partial.py")[:1] * 10)
+    state = new_project_state("proj-1")
+    state["task_queue"] = [
+        {
+            "description": "Do the trivial thing",
+            "status": "in_progress",
+            "attempts": MAX_TASK_ATTEMPTS - 1,
+        }
+    ]
+
+    update = node_coder(state, router, executor_client=_RecordingExecutorClient())
+
+    assert update["phase"] == "blocked"
+    assert update["changed_files"] == ["partial.py"]
 
 
 def test_node_coder_resumes_the_in_progress_task_rather_than_the_first_pending_one():

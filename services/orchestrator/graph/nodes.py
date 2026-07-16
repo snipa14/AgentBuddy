@@ -308,6 +308,7 @@ def node_coder(
             stack=state["stack"],
         )
     )
+    new_changed_files = list(dict.fromkeys(state["changed_files"] + result.written_files))
 
     if result.success:
         active_task["status"] = "done"
@@ -321,6 +322,7 @@ def node_coder(
             {
                 "task_queue": new_queue,
                 "phase": "implementing" if remaining else "reviewing",
+                "changed_files": new_changed_files,
             },
             result.cost_usd,
         )
@@ -336,7 +338,12 @@ def node_coder(
         new_queue = _replace_task(task_queue, active_index, active_task)
         return _with_cost(
             state,
-            {"task_queue": new_queue, "phase": "blocked", "curator_source": "coder"},
+            {
+                "task_queue": new_queue,
+                "phase": "blocked",
+                "curator_source": "coder",
+                "changed_files": new_changed_files,
+            },
             result.cost_usd,
         )
 
@@ -347,7 +354,9 @@ def node_coder(
     )
     new_queue = _replace_task(task_queue, active_index, active_task)
     return _with_cost(
-        state, {"task_queue": new_queue, "phase": "implementing"}, result.cost_usd
+        state,
+        {"task_queue": new_queue, "phase": "implementing", "changed_files": new_changed_files},
+        result.cost_usd,
     )
 
 
