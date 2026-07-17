@@ -11,6 +11,7 @@ volume isn't a host path, and it's only ever used for that cache directory.
 """
 
 import concurrent.futures
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -22,6 +23,8 @@ from docker.models.containers import Container
 from services.executor.config import ExecutorConfig, image_for_stack
 from services.executor.errors import CommandTimeoutError, ContainerExecutionError
 from services.executor.schemas import CommandResult
+
+logger = logging.getLogger(__name__)
 
 WORKSPACE_MOUNT_TARGET = "/workspace"
 WORKSPACE_UID = 1000
@@ -120,7 +123,11 @@ def workspace_container(
             try:
                 container.remove(force=True)
             except APIError:
-                pass
+                logger.warning(
+                    "failed to remove workspace container %s -- it may be orphaned",
+                    container.id,
+                    exc_info=True,
+                )
 
 
 def _install_dependencies_if_present(container: Container, stack: str, timeout: int) -> None:

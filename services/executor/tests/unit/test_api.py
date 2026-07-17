@@ -71,6 +71,41 @@ def test_run_command_returns_500_on_container_error(client, monkeypatch):
     assert response.status_code == 500
 
 
+def test_run_tests_returns_504_on_timeout(client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise CommandTimeoutError("timed out")
+
+    monkeypatch.setattr(api_module, "tool_run_tests", _raise)
+
+    response = client.post("/run_tests", json={"project_id": "proj-1"})
+
+    assert response.status_code == 504
+
+
+def test_write_file_returns_500_on_container_error(client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise ContainerExecutionError("mkdir failed")
+
+    monkeypatch.setattr(api_module, "tool_write_file", _raise)
+
+    response = client.post(
+        "/write_file", json={"project_id": "proj-1", "path": "a.py", "content": "x"}
+    )
+
+    assert response.status_code == 500
+
+
+def test_take_screenshot_returns_504_on_timeout(client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise CommandTimeoutError("timed out")
+
+    monkeypatch.setattr(api_module, "tool_take_screenshot", _raise)
+
+    response = client.post("/take_screenshot", json={"project_id": "proj-1"})
+
+    assert response.status_code == 504
+
+
 def test_read_file_returns_content(client, monkeypatch):
     monkeypatch.setattr(api_module, "tool_read_file", lambda *args, **kwargs: "file contents")
 

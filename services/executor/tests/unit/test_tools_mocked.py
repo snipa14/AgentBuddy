@@ -128,11 +128,23 @@ def test_tool_read_file_raises_file_not_found_error_when_missing(
 def test_tool_write_file_creates_parent_directory_and_puts_archive(
     mock_client, mock_container, config
 ):
+    mock_container.exec_run.return_value = (0, (b"", b""))
+
     tool_write_file(mock_client, config, "proj-1", "src/app.py", "print('hi')")
 
-    mock_container.exec_run.assert_called_once_with(["mkdir", "-p", "/workspace/src"])
+    mkdir_command = mock_container.exec_run.call_args.args[0]
+    assert mkdir_command == ["mkdir", "-p", "/workspace/src"]
     put_args, _ = mock_container.put_archive.call_args
     assert put_args[0] == "/workspace/src"
+
+
+def test_tool_write_file_raises_when_mkdir_fails(mock_client, mock_container, config):
+    mock_container.exec_run.return_value = (1, (b"", b"mkdir: read-only file system\n"))
+
+    with pytest.raises(ContainerExecutionError, match="mkdir"):
+        tool_write_file(mock_client, config, "proj-1", "src/app.py", "print('hi')")
+
+    mock_container.put_archive.assert_not_called()
 
 
 def test_tool_read_file_returns_content_from_get_archive_tar_stream(

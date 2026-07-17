@@ -138,6 +138,10 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except CommandTimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except ContainerExecutionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return ReadFileResponse(content=content)
 
     @app.post("/write_file", response_model=WriteFileResponse)
@@ -153,6 +157,10 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except CommandTimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except ContainerExecutionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return WriteFileResponse(ok=ok)
 
     @app.post("/list_files", response_model=ListFilesResponse)
@@ -175,6 +183,10 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except CommandTimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except ContainerExecutionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     class TakeScreenshotRequest(BaseModel):
         """Payload for POST /take_screenshot."""
@@ -199,6 +211,10 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except CommandTimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except ContainerExecutionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/clear_project_cache", response_model=ClearProjectCacheResponse)
     def clear_project_cache(request: ClearProjectCacheRequest) -> ClearProjectCacheResponse:

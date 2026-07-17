@@ -133,8 +133,16 @@ def tool_write_file(
     container_path = _container_path(path)
     directory = os.path.dirname(container_path)
     project_host_path = _project_host_path(config, project_id)
-    with workspace_container(client, config, project_host_path, stack=stack, project_id=project_id) as container:
-        container.exec_run(["mkdir", "-p", directory])
+    with workspace_container(
+        client, config, project_host_path, stack=stack, project_id=project_id
+    ) as container:
+        mkdir_result = exec_in_container(
+            container, ["mkdir", "-p", directory], config.command_timeout_seconds
+        )
+        if mkdir_result.exit_code != 0:
+            raise ContainerExecutionError(
+                f"mkdir failed for '{path}': {mkdir_result.stderr}"
+            )
         container.put_archive(
             directory, _build_single_file_tar(os.path.basename(container_path), content)
         )
