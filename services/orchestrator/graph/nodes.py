@@ -722,10 +722,11 @@ def node_memory_curator(
         router: A ModelRouter to resolve the "memory_curator" role from.
 
     Returns:
-        A dict with the accumulated cost_usd_session/cost_usd_weekly delta
-        when curation actually ran and succeeded; otherwise an empty dict
-        (the curator's other side effects are on disk and in sqlite, not in
-        the returned state update).
+        A dict with the accumulated cost_usd_session/cost_usd_weekly delta,
+        plus messages_summary and messages_curated_through, when curation
+        actually ran and succeeded; otherwise an empty dict (the curator's
+        other side effects are on disk and in sqlite, not in the returned
+        state update).
     """
     source = state.get("curator_source")
     if not source:
@@ -734,7 +735,7 @@ def node_memory_curator(
     project_id = state["project_id"]
     cursor = state["messages_curated_through"]
     phase_events = [msg.content for msg in state["messages"][cursor:]]
-    if phase_events:
+    if state["messages"]:
         phase_events = phase_events + _task_progress_lines(state["task_queue"])
     if not phase_events:
         logger.info("project %s: nothing to curate (no events)", project_id)

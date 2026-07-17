@@ -86,7 +86,9 @@ def test_node_memory_curator_runs_curation_and_stores(tmp_path):
 
     assert update["cost_usd_session"] > state["cost_usd_session"]
     assert update["cost_usd_weekly"] > state["cost_usd_weekly"]
-    assert update["messages_summary"] == "Completed implementation and testing for proj-cross-project.\n"
+    assert update["messages_summary"] == (
+        "Completed implementation and testing for proj-cross-project.\n"
+    )
     assert update["messages_curated_through"] == 2
     # Check LEARNINGS.md was written
     learnings = (projects_root / "proj-curate" / "LEARNINGS.md").read_text()
@@ -152,6 +154,59 @@ def test_node_memory_curator_includes_all_events_since_cursor_not_just_last_20(t
 
     phase_events = mock_curate.call_args.args[4]
     assert len(phase_events) == 25
+
+
+def test_node_memory_curator_still_curates_task_progress_when_no_new_messages_since_cursor(
+    tmp_path,
+):
+    """Regression test: once messages_curated_through has caught up to
+    len(messages) (nothing new since the last checkpoint), the curator must
+    still fire if task_queue has content worth reporting -- task progress is
+    an independent signal from new messages, not gated behind them."""
+    router = _curator_router()
+    from services.orchestrator.memory.global_store import build_global_memory_connection
+
+    conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir()
+
+    state = new_project_state("proj-curate", initial_message="build a thing")
+    state["curator_source"] = "testing"
+    state["messages_curated_through"] = len(state["messages"])
+    state["task_queue"] = [
+        {"description": "Do the trivial thing", "status": "done", "attempts": 0}
+    ]
+
+    update = node_memory_curator(state, projects_root, conn, router)
+
+    assert update != {}
+    assert update["messages_curated_through"] == len(state["messages"])
+    conn.close()
+
+
+def test_node_memory_curator_skips_when_messages_never_seeded_even_with_task_progress(
+    tmp_path,
+):
+    """Preserves the invariant test_concurrency.py depends on: a project that
+    never seeds `messages` (messages stays permanently empty) must keep the
+    curator silent throughout, even once task_queue has content -- task
+    progress alone, without messages ever having been seeded, is not
+    curation-worthy."""
+    router = _curator_router()
+    conn = sqlite3.connect(":memory:")
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir()
+
+    state = new_project_state("proj-1")
+    state["curator_source"] = "testing"
+    state["messages"] = []
+    state["task_queue"] = [
+        {"description": "Do the trivial thing", "status": "done", "attempts": 0}
+    ]
+
+    update = node_memory_curator(state, projects_root, conn, router)
+
+    assert update == {}
 
 
 def test_node_memory_curator_continues_on_failure():
