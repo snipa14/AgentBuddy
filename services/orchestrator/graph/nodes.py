@@ -371,15 +371,19 @@ def route_after_coder(state: ProjectState) -> str:
 
 
 def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: ExecutorClient) -> dict[str, Any]:
-    """Reviews all project files after the Coder finishes implementing.
+    """Reviews project files after the Coder finishes implementing.
 
-    Reads every file in the workspace container via the Executor client,
-    sends them to an LLM with a review prompt, and gets back a schema-forced
-    verdict (approve / changes-requested). Changes-requested routes back
-    to the Coder with findings attached; approve advances to frontend_review.
+    Reads only changed files (from state["changed_files"]) when populated,
+    otherwise falls back to reading every file in the workspace container
+    via the Executor client. Sends files to an LLM with a review prompt
+    and gets back a schema-forced verdict (approve / changes-requested).
+    Changes-requested routes back to the Coder with findings attached;
+    approve advances to frontend_review.
     """
     result, ai_message = asyncio.run(
-        review_changes(router, executor_client, state["project_id"], changed_files=state["changed_files"])
+        review_changes(
+            router, executor_client, state["project_id"], changed_files=state["changed_files"]
+        )
     )
     cost = router.cost_usd(REVIEWER_ROLE, ai_message.usage_metadata)
 

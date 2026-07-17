@@ -742,7 +742,9 @@ def test_node_reviewer_reads_only_changed_files_when_populated():
     router = FakeRouter([_APPROVE_REVIEW])
     state = new_project_state("proj-1")
     state["changed_files"] = ["models.py"]
-    executor = _RecordingExecutorClient(files={"models.py": "class User: pass", "unrelated.py": "x = 1"})
+    executor = _RecordingExecutorClient(
+        files={"models.py": "class User: pass", "unrelated.py": "x = 1"}
+    )
 
     node_reviewer(state, router, executor)
 
