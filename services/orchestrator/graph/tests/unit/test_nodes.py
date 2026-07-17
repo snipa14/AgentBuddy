@@ -738,6 +738,17 @@ def test_node_reviewer_requests_changes_and_routes_back_to_coder():
     assert "models.py:15 [critical] hardcoded password in source code" in update["messages"][0].content
 
 
+def test_node_reviewer_reads_only_changed_files_when_populated():
+    router = FakeRouter([_APPROVE_REVIEW])
+    state = new_project_state("proj-1")
+    state["changed_files"] = ["models.py"]
+    executor = _RecordingExecutorClient(files={"models.py": "class User: pass", "unrelated.py": "x = 1"})
+
+    node_reviewer(state, router, executor)
+
+    assert executor.calls == [("read_file", "proj-1", "models.py")]
+
+
 def test_route_after_reviewer_advances_to_frontend_review_when_approved():
     state = new_project_state("proj-1")
     state["phase"] = "testing"

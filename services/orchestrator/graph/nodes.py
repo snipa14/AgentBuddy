@@ -378,7 +378,9 @@ def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: Exe
     verdict (approve / changes-requested). Changes-requested routes back
     to the Coder with findings attached; approve advances to frontend_review.
     """
-    result, ai_message = asyncio.run(review_changes(router, executor_client, state["project_id"]))
+    result, ai_message = asyncio.run(
+        review_changes(router, executor_client, state["project_id"], changed_files=state["changed_files"])
+    )
     cost = router.cost_usd(REVIEWER_ROLE, ai_message.usage_metadata)
 
     if result.verdict == "changes-requested":
