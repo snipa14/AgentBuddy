@@ -423,7 +423,7 @@ def tool_take_screenshot(
 
     command = [
         "python3", "-c", _TOOL_TAKE_SCREENSHOT_PY,
-        url, str(project_host_path), auto_start_flag, str(breakpoint_width),
+        url, WORKSPACE_MOUNT_TARGET, auto_start_flag, str(breakpoint_width),
     ]
 
     with workspace_container(

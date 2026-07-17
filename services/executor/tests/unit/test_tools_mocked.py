@@ -214,3 +214,15 @@ def test_tool_take_screenshot_passes_auto_start_flag_to_the_container_command(
 
     command = mock_container.exec_run.call_args.args[0]
     assert "true" in command
+
+
+def test_tool_take_screenshot_passes_the_container_workspace_path_not_the_host_path(
+    mock_client, mock_container, config
+):
+    mock_container.exec_run.return_value = (0, (b"iVBORw0KGgo=\n", b""))
+
+    tool_take_screenshot(mock_client, config, "proj-1", auto_start_server=True)
+
+    command = mock_container.exec_run.call_args.args[0]
+    assert "/workspace" in command
+    assert str(config.projects_host_path / "proj-1") not in command
