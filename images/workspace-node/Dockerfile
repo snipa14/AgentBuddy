@@ -35,8 +35,13 @@ RUN playwright install --with-deps chromium \
 # how it's later run.
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
-RUN groupadd --gid 1000 sandbox \
-    && useradd --uid 1000 --gid sandbox --create-home --shell /usr/sbin/nologin sandbox
+# node:20-slim already ships a `node` user/group at UID/GID 1000, so a plain
+# groupadd/useradd (the python image's approach) fails on the collision --
+# rename the existing pair to `sandbox` instead, keeping UID/GID 1000 (which
+# services/executor/containers.py's WORKSPACE_UID assumes).
+RUN groupmod --new-name sandbox node \
+    && usermod --login sandbox --home /home/sandbox --move-home \
+       --shell /usr/sbin/nologin node
 
 WORKDIR /workspace
 USER 1000:1000
