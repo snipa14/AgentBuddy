@@ -54,6 +54,13 @@ def test_handle_webhook_with_explicit_project_id_starts_that_project(service):
     assert result["phase"] == "awaiting_plan_approval"
 
 
+def test_handle_webhook_rejects_a_path_traversal_project_id(service):
+    from services.orchestrator.registry.errors import InvalidProjectIdError
+
+    with pytest.raises(InvalidProjectIdError):
+        service.handle_webhook("../../etc", "build me a thing")
+
+
 def test_handle_webhook_is_idempotent_status_echo_for_known_project(service):
     first = service.handle_webhook("my-project", "hello")
     second = service.handle_webhook("my-project", "hello again")

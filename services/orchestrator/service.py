@@ -23,6 +23,7 @@ from services.orchestrator.graph.build import DEFAULT_GLOBAL_COST_THRESHOLD_USD,
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.progress_buffer import clear_progress
+from services.orchestrator.registry.validation import validate_project_id
 
 _TERMINAL_PHASES = frozenset({"done", "blocked"})
 
@@ -85,8 +86,18 @@ class OrchestratorService:
 
         Returns:
             The resulting project's status dict (see `status()`).
+
+        Raises:
+            InvalidProjectIdError: If a caller-supplied project_id for a new
+                project isn't a safe, single path-segment slug. The registry
+                validates IDs it creates, but this entrypoint accepts
+                arbitrary caller input that later becomes a filesystem path
+                component (the Memory Curator's `projects/<id>/memory/`
+                writes), so it must apply the same allow-list itself.
         """
         if project_id is None or not self._project_exists(project_id):
+            if project_id is not None:
+                validate_project_id(project_id)
             project_id = project_id or uuid.uuid4().hex[:12]
             initial_state = new_project_state(project_id, initial_message=text)
             self._graph.invoke(initial_state, config=self._config(project_id))

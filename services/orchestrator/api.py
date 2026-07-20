@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from services.orchestrator.progress_buffer import get_chunks_since
+from services.orchestrator.registry.errors import InvalidProjectIdError
 from services.orchestrator.service import OrchestratorService, UnknownProjectError
 
 
@@ -62,7 +63,10 @@ def build_app(service: OrchestratorService) -> FastAPI:
 
     @app.post("/webhook", response_model=ProjectStatusResponse)
     def webhook(request: WebhookRequest) -> ProjectStatusResponse:
-        result = service.handle_webhook(request.project_id, request.text)
+        try:
+            result = service.handle_webhook(request.project_id, request.text)
+        except InvalidProjectIdError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return ProjectStatusResponse(**result)
 
     @app.post("/resume/{thread_id}", response_model=ProjectStatusResponse)
