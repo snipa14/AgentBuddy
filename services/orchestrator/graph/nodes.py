@@ -576,8 +576,7 @@ def node_testing(state: ProjectState, executor_client: ExecutorClient) -> dict[s
         failures = _parse_failing_tests(outcome.report)
         if failures:
             feedback_lines = ["Test failures:"] + [f"- {f.message}" for f in failures]
-        else:
-            # Coverage shortfall — no test failures, just low coverage
+        elif outcome.coverage_pct is not None:
             feedback_lines = [
                 f"Coverage {outcome.coverage_pct:.1f}% below threshold "
                 f"{state['coverage_threshold']}% (gate mode: {gate_mode})"
@@ -586,6 +585,12 @@ def node_testing(state: ProjectState, executor_client: ExecutorClient) -> dict[s
             if uncovered:
                 feedback_lines.append("Uncovered lines:")
                 feedback_lines.extend(f"- {entry}" for entry in uncovered)
+        else:
+            feedback_lines = [
+                "Test run failed with no parseable FAILED lines -- likely a "
+                "collection or import error. Report tail:",
+                outcome.report[-2000:],
+            ]
 
         return {
             "phase": "implementing",

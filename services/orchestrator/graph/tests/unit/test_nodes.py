@@ -519,6 +519,24 @@ def test_node_testing_routes_back_to_coder_on_test_failure():
     assert "Test failures:" in update["messages"][0].content
 
 
+def test_node_testing_reports_collection_errors_without_crashing():
+    """A collection/import error yields failed>0 with no FAILED lines and no
+    coverage percentage -- the feedback path must not assume either exists."""
+    executor = _RecordingExecutorClient()
+    executor.test_result = ExecutorTestResult(
+        passed=0, failed=2, coverage_pct=None,
+        report="ERROR tests/test_x.py - ImportError: boom\n2 errors",
+    )
+    state = new_project_state("proj-1")
+
+    update = node_testing(state, executor)
+
+    assert update["phase"] == "implementing"
+    assert update["curator_source"] == "testing"
+    assert "no parseable FAILED lines" in update["messages"][0].content
+    assert "ImportError: boom" in update["messages"][0].content
+
+
 def test_node_testing_coverage_failure_attaches_uncovered_lines():
     executor = _RecordingExecutorClient()
     executor.test_result = ExecutorTestResult(
