@@ -255,6 +255,32 @@ class TestIntegratorClient:
         cmd_calls = [c for c in executor.calls if c[0] == "run_command"]
         assert not any(c[2][:2] == ("git", "commit") for c in cmd_calls)
 
+    def test_commit_and_push_never_forces_and_branches_before_committing(self):
+        """The push must be a plain fast-forward (git.md forbids force
+        pushes), and checkout -B must precede commit so the commit lands on
+        the feature branch, never on main."""
+        executor = _RecordingExecutorClient()
+        client = IntegratorClient(executor)
+
+        asyncio.run(
+            client.commit_and_push(
+                "proj-1",
+                branch_name="feature/test",
+                remote_url="git@github.com:user/repo.git",
+            )
+        )
+
+        cmd_calls = [c[2] for c in executor.calls if c[0] == "run_command"]
+        push_commands = [c for c in cmd_calls if c[:2] == ("git", "push")]
+        assert push_commands and all("--force" not in c for c in push_commands)
+        checkout_index = next(
+            i for i, c in enumerate(cmd_calls) if c[:2] == ("git", "checkout")
+        )
+        commit_index = next(
+            i for i, c in enumerate(cmd_calls) if c[:2] == ("git", "commit")
+        )
+        assert checkout_index < commit_index
+
     def test_commit_and_push_uses_argv_lists_not_shell_strings(self):
         """Every run_command call must be an argv list -- run_command execs
         directly with no shell, so a single '&&'-joined string would never work."""

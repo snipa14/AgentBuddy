@@ -45,6 +45,19 @@ class IntegratorClient:
         tracked files, commits with the given message, creates (or checks out) the
         target branch, and pushes it to ``remote_url``.
 
+        The commit is created on ``branch_name`` (checked out *before*
+        committing), never on main -- .claude/rules/git.md's "all work
+        happens on a branch" applies to generated projects too. The push is
+        a plain fast-forward push, never forced.
+
+        Pushing requires the *project's own* git configuration to carry
+        working credentials (an SSH deploy key or a credential helper
+        configured in the cloned repo): workspace containers deliberately
+        receive no Foundry-level secrets (.claude/rules/security.md -- the
+        GitHub token must never reach an agent-reachable surface, and
+        run_command inside the workspace is one). A remote without such
+        credentials fails the push and leaves the local commit intact.
+
         Args:
             project_id: The project identifier used to address the Executor.
             branch_name: Feature-branch name. Auto-generated from ``project_id``
@@ -80,8 +93,8 @@ class IntegratorClient:
             logger.info("project %s: nothing to commit, skipping", project_id)
             return branch_name, ""
 
-        await self._executor.run_command(project_id, ["git", "commit", "-m", message])
         await self._executor.run_command(project_id, ["git", "checkout", "-B", branch_name])
+        await self._executor.run_command(project_id, ["git", "commit", "-m", message])
 
         if not remote_url:
             logger.info("project %s: committed to %s (no remote)", project_id, branch_name)
@@ -97,7 +110,7 @@ class IntegratorClient:
                 project_id, ["git", "remote", "set-url", "origin", remote_url]
             )
         await self._executor.run_command(
-            project_id, ["git", "push", "-u", "origin", branch_name, "--force"]
+            project_id, ["git", "push", "-u", "origin", branch_name]
         )
         logger.info("project %s: pushed to %s/%s", project_id, remote_url, branch_name)
         return branch_name, remote_url
