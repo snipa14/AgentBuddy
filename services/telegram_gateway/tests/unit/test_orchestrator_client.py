@@ -66,3 +66,13 @@ def test_get_status_gets_the_project_specific_url():
 
     args, _ = client.get.call_args
     assert args[0] == "http://orchestrator:8000/status/project-1"
+
+
+def test_get_projects_gets_the_projects_url():
+    client = _mock_httpx_client()
+    orchestrator = OrchestratorClient("http://orchestrator:8000", client)
+
+    asyncio.run(orchestrator.get_projects())
+
+    args, _ = client.get.call_args
+    assert args[0] == "http://orchestrator:8000/projects"

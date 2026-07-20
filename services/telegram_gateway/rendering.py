@@ -42,6 +42,39 @@ def render_approval(pending_approval: dict[str, Any]) -> tuple[str, InlineKeyboa
     return text, keyboard
 
 
+def render_project_status(body: dict[str, Any]) -> str:
+    """Renders a ProjectStatusResponse body as a short status message.
+
+    Args:
+        body: The decoded GET /status/{project_id} response
+            (services/orchestrator/api.py's ProjectStatusResponse shape).
+
+    Returns:
+        "<project_id>: <phase>", plus render_task_progress's lines when the
+        project has a task_queue.
+    """
+    lines = [f"{body['project_id']}: {body['phase']}"]
+    task_progress = body.get("task_progress")
+    if task_progress:
+        lines.append(render_task_progress(task_progress))
+    return "\n".join(lines)
+
+
+def render_project_list(project_ids: list[str]) -> str:
+    """Renders the GET /projects id list as a Telegram message.
+
+    Args:
+        project_ids: Every known project_id, already sorted by the
+            Orchestrator.
+
+    Returns:
+        One project per line, or a hint when none exist yet.
+    """
+    if not project_ids:
+        return "No projects yet. Send /new <description> to start one."
+    return "Projects:\n" + "\n".join(f"- {project_id}" for project_id in project_ids)
+
+
 def render_task_progress(task_progress: dict[str, Any]) -> str:
     """Renders a ProjectStatusResponse's task_progress field as a status line.
 

@@ -4,7 +4,7 @@ import httpx
 
 
 class OrchestratorClient:
-    """Wraps the two Orchestrator endpoints the Gateway calls (ARCHITECTURE.md §4.2).
+    """Wraps the Orchestrator endpoints the Gateway calls (ARCHITECTURE.md §4.2).
 
     Holds no retry/caching logic of its own for v1 -- a thin, typed wrapper
     kept deliberately narrow so the Gateway stays free of business logic.
@@ -42,3 +42,7 @@ class OrchestratorClient:
     async def get_status(self, project_id: str) -> httpx.Response:
         """Reads a project's current phase via GET /status/{project_id}."""
         return await self._client.get(f"{self._base_url}/status/{project_id}")
+
+    async def get_projects(self) -> httpx.Response:
+        """Lists every known project_id via GET /projects."""
+        return await self._client.get(f"{self._base_url}/projects")

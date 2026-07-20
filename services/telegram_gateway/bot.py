@@ -4,6 +4,13 @@ Handlers declare `orchestrator: OrchestratorClient` as a parameter; aiogram
 injects it from the Dispatcher's workflow data (set once in main.py), so
 these stay plain, directly callable functions -- no closures to unwrap in
 tests.
+
+Only `/new` and free text reach `POST /webhook` (both can legitimately start
+or address a project's intake conversation). `/status` and `/projects` are
+read-only lookups against `GET /status/{id}` / `GET /projects` -- forwarding
+them to the webhook, as this module originally did, silently started a new
+junk project (with the literal command text as its intake message, and a
+real Planner LLM call) on every status check.
 """
 
 import logging
@@ -19,12 +26,20 @@ from services.telegram_gateway.rendering import (
     CALLBACK_EDIT,
     CALLBACK_REJECT,
     render_approval,
+    render_project_list,
+    render_project_status,
     render_task_progress,
 )
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="foundry_gateway")
+
+_DECISION_ACKNOWLEDGMENTS = {
+    CALLBACK_APPROVE: "Approved.",
+    CALLBACK_REJECT: "Rejected.",
+    CALLBACK_EDIT: "Edit requested.",
+}
 
 
 def _start_poller_from_response(poller: ProgressPoller, response, chat_id: int) -> None:
@@ -59,6 +74,10 @@ async def _relay_webhook_result(message: Message, response) -> None:
     if task_progress:
         await message.answer(render_task_progress(task_progress))
         return
+    phase = body.get("phase")
+    if phase in ("done", "blocked"):
+        await message.answer(f"Project {body.get('project_id')} is {phase}.")
+        return
     await message.answer("Got it -- working on that.")
 
 
@@ -68,14 +87,45 @@ async def handle_start(message: Message) -> None:
     await message.answer("Foundry is online. Send /new to start a project.")
 
 
-@router.message(Command("new", "status", "projects"))
-async def handle_command(
+@router.message(Command("new"))
+async def handle_new(
     message: Message, orchestrator: OrchestratorClient, poller: ProgressPoller
 ) -> None:
-    """Forwards a /new, /status, or /projects command to the Orchestrator."""
+    """Forwards a /new command to the Orchestrator to start a project."""
     response = await orchestrator.send_webhook(message.from_user.id, message.text)
     _start_poller_from_response(poller, response, message.chat.id)
     await _relay_webhook_result(message, response)
+
+
+@router.message(Command("status"))
+async def handle_status(message: Message, orchestrator: OrchestratorClient) -> None:
+    """Reports one project's phase via GET /status/{project_id}.
+
+    `/status <project_id>` looks that project up; a bare `/status` lists the
+    known project ids to pick from instead of guessing.
+    """
+    parts = (message.text or "").split(maxsplit=1)
+    project_id = parts[1].strip() if len(parts) > 1 else ""
+    if not project_id:
+        projects_response = await orchestrator.get_projects()
+        project_ids = projects_response.json().get("project_ids", [])
+        await message.answer(
+            "Usage: /status <project_id>\n" + render_project_list(project_ids)
+        )
+        return
+
+    response = await orchestrator.get_status(project_id)
+    if response.status_code == 404:
+        await message.answer(f"Unknown project '{project_id}'. Try /projects.")
+        return
+    await message.answer(render_project_status(response.json()))
+
+
+@router.message(Command("projects"))
+async def handle_projects(message: Message, orchestrator: OrchestratorClient) -> None:
+    """Lists every known project id via GET /projects."""
+    response = await orchestrator.get_projects()
+    await message.answer(render_project_list(response.json().get("project_ids", [])))
 
 
 @router.message(F.text)
@@ -92,9 +142,17 @@ async def handle_free_text(
 async def handle_approval_callback(
     callback: CallbackQuery, orchestrator: OrchestratorClient
 ) -> None:
-    """Resolves an Approve/Reject/Edit button press via POST /resume/{thread_id}."""
+    """Resolves an Approve/Reject/Edit button press via POST /resume/{thread_id}.
+
+    The resume response is relayed back into the chat: a project that
+    advances straight to its next gate (plan approval -> merge approval)
+    gets that gate's keyboard pushed immediately, instead of stalling
+    silently until the user happens to send another message.
+    """
     decision, thread_id = callback.data.split(":", 1)
-    await orchestrator.resume(thread_id, decision)
-    await callback.answer(f"{decision.capitalize()}d.")
-    if callback.message is not None:
-        await callback.message.edit_reply_markup(reply_markup=None)
+    response = await orchestrator.resume(thread_id, decision)
+    await callback.answer(_DECISION_ACKNOWLEDGMENTS.get(decision, "Done."))
+    if callback.message is None:
+        return
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _relay_webhook_result(callback.message, response)
