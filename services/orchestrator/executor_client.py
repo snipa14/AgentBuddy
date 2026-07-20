@@ -47,16 +47,30 @@ class ScreenshotResult(BaseModel):
     error: str | None = None
 
 
+DEFAULT_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=60.0, pool=60.0)
+"""Generous read timeout: run_command/run_tests legitimately run for minutes
+(the Executor's own command timeout defaults to 300s), so httpx's 5s default
+would abort every long tool call client-side before the Executor finished."""
+
+
 class ExecutorClient:
     """Wraps the Executor's five typed tool endpoints."""
 
-    def __init__(self, base_url: str, client: httpx.AsyncClient) -> None:
+    def __init__(self, base_url: str, client: httpx.AsyncClient | None = None) -> None:
         """Initializes the client.
 
         Args:
             base_url: The Executor's base URL (e.g. http://executor:8000).
             client: An httpx.AsyncClient, injected so tests can substitute a
-                mocked transport instead of hitting the network.
+                mocked transport instead of hitting the network. When None
+                (every real deployment), each request opens its own
+                short-lived AsyncClient instead: graph nodes each bridge to
+                async code via their own asyncio.run() (ADR-019), and a
+                single shared AsyncClient's keep-alive connections would be
+                created on one node's event loop and reused on another,
+                already-closed loop -- httpx's classic "Event loop is
+                closed" failure mode. A per-request client trades connection
+                reuse for correctness across loops.
         """
         self._base_url = base_url.rstrip("/")
         self._client = client
@@ -196,7 +210,11 @@ class ExecutorClient:
         return data["ok"]
 
     async def _post(self, path: str, payload: dict) -> dict:
-        response = await self._client.post(f"{self._base_url}{path}", json=payload)
+        if self._client is not None:
+            response = await self._client.post(f"{self._base_url}{path}", json=payload)
+        else:
+            async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
+                response = await client.post(f"{self._base_url}{path}", json=payload)
         if response.is_error:
             raise ExecutorClientError(
                 f"POST {path} -> {response.status_code}: {response.text}"

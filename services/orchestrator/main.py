@@ -3,7 +3,6 @@
 import logging
 from pathlib import Path
 
-import httpx
 import uvicorn
 
 from services.orchestrator.api import build_app
@@ -31,7 +30,7 @@ def main() -> None:
     config = OrchestratorConfig.from_env()
     checkpointer = build_sqlite_checkpointer(config.memory_db_path)
     memory_conn = build_global_memory_connection(config.memory_db_path)
-    executor_client = ExecutorClient(config.executor_url, httpx.AsyncClient())
+    executor_client = ExecutorClient(config.executor_url)
     service = OrchestratorService(
         checkpointer,
         _build_router(),

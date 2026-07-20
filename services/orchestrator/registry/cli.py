@@ -62,8 +62,6 @@ def _start_intake(project_id: str, description: str) -> None:
             Telegram `/new` message would, so this is built from the
             registration's own --name/--stack arguments.
     """
-    import httpx
-
     from services.orchestrator.config import OrchestratorConfig
     from services.orchestrator.executor_client import ExecutorClient
     from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
@@ -78,7 +76,7 @@ def _start_intake(project_id: str, description: str) -> None:
     config = OrchestratorConfig.from_env()
     checkpointer = build_sqlite_checkpointer(config.memory_db_path)
     memory_conn = build_global_memory_connection(config.memory_db_path)
-    executor_client = ExecutorClient(config.executor_url, httpx.AsyncClient())
+    executor_client = ExecutorClient(config.executor_url)
     OrchestratorService(
         checkpointer,
         router,

@@ -18,6 +18,17 @@ def _client_with(handler) -> ExecutorClient:
     return ExecutorClient("http://executor:8000", httpx.AsyncClient(transport=transport))
 
 
+def test_client_survives_calls_across_separate_event_loops():
+    """Every graph node runs its own asyncio.run() (ADR-019); a client built
+    without an injected AsyncClient must work across those separate loops
+    rather than reusing loop-bound pooled connections."""
+    client = ExecutorClient("http://executor:0")
+
+    for _ in range(2):
+        with pytest.raises((ExecutorClientError, httpx.HTTPError)):
+            asyncio.run(client.run_command("proj-1", ["true"]))
+
+
 def test_run_command_parses_response():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/run_command"
