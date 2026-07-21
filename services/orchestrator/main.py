@@ -1,6 +1,7 @@
 """Entrypoint: runs the Orchestrator's FastAPI app."""
 
 import logging
+import os
 from pathlib import Path
 
 import uvicorn
@@ -14,12 +15,15 @@ from services.orchestrator.model_router.config import load_models_config
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.service import OrchestratorService
 
-DEFAULT_MODELS_CONFIG_PATH = Path("config/models.yaml")
+DEFAULT_MODELS_CONFIG_PATH = "config/models.yaml"
 DEFAULT_SECRETS_DIR = Path("/run/secrets")
 
 
 def _build_router() -> ModelRouter:
-    models_config = load_models_config(DEFAULT_MODELS_CONFIG_PATH)
+    models_config_path = Path(
+        os.environ.get("MODELS_CONFIG_PATH", DEFAULT_MODELS_CONFIG_PATH)
+    )
+    models_config = load_models_config(models_config_path)
     anthropic_api_key = (DEFAULT_SECRETS_DIR / "claude_api_key").read_text().strip()
     return ModelRouter(models_config, anthropic_api_key=anthropic_api_key)
 

@@ -25,10 +25,11 @@ services:
     restart: unless-stopped
 
   executor:
-    # TODO(Phase 3): replace with images/executor built from a real Dockerfile.
-    image: python:3.12-slim
+    build:
+      context: .
+      dockerfile: services/executor/Dockerfile
+    image: foundry/executor:latest
     container_name: foundry-executor
-    command: ["sleep", "infinity"]
     environment:
       DOCKER_HOST: tcp://docker-socket-proxy:2375
       # Absolute *host* path of ./projects -- see services/executor/SECURITY.md
@@ -42,19 +43,23 @@ services:
     restart: unless-stopped
 
   orchestrator:
-    # TODO(Phase 5): replace with services/orchestrator built from a real Dockerfile.
-    image: python:3.12-slim
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    image: foundry/orchestrator:latest
     container_name: foundry-orchestrator
-    command: ["sleep", "infinity"]
     environment:
       OLLAMA_ENABLED: "false"
       EXECUTOR_URL: http://executor:8000
       MEMORY_DB_PATH: /data/memory/foundry_memory.db
+      PROJECTS_ROOT: /data/projects
+      MODELS_CONFIG_PATH: /app/config/models.yaml
     secrets:
       - claude_api_key
       - github_token
     volumes:
       - ./projects:/data/projects
+      - ./config:/app/config:ro
       - foundry_memory:/data/memory
     depends_on:
       - executor
@@ -63,10 +68,11 @@ services:
     restart: unless-stopped
 
   telegram-gateway:
-    # TODO(Phase 4): replace with services/telegram_gateway built from a real Dockerfile.
-    image: python:3.12-slim
+    build:
+      context: .
+      dockerfile: services/telegram_gateway/Dockerfile
+    image: foundry/telegram-gateway:latest
     container_name: foundry-telegram-gateway
-    command: ["sleep", "infinity"]
     environment:
       ORCHESTRATOR_URL: http://orchestrator:8000
     secrets:

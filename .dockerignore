@@ -1,0 +1,14 @@
+# Keep the build context minimal -- and above all keep real secrets and
+# project workspaces out of the context tarball sent to the Docker daemon
+# (COPY never references them, but they must not even leave the checkout).
+secrets/
+projects/
+.env
+.git/
+.venv/
+**/__pycache__/
+.pytest_cache/
+.coverage
+docs/
+.superpowers/
+.claude/

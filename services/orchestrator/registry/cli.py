@@ -16,6 +16,7 @@ isn't installed -- the same fix Phase 6 applied to
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -70,7 +71,9 @@ def _start_intake(project_id: str, description: str) -> None:
     from services.orchestrator.model_router.router import ModelRouter
     from services.orchestrator.service import OrchestratorService
 
-    models_config = load_models_config(Path("config/models.yaml"))
+    models_config = load_models_config(
+        Path(os.environ.get("MODELS_CONFIG_PATH", "config/models.yaml"))
+    )
     anthropic_api_key = Path("/run/secrets/claude_api_key").read_text().strip()
     router = ModelRouter(models_config, anthropic_api_key=anthropic_api_key)
     config = OrchestratorConfig.from_env()
