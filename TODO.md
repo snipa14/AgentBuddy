@@ -28,6 +28,8 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 
 **Definition of Done:** `git log` shows an initial commit; `./foundry --help` prints subcommands; the pre-commit hook runs on `git commit`.
 
+**Post-audit note (2026-07):** `up`/`down`/`status`/`logs` originally shipped as `not_implemented` stubs despite the checked box above -- a whole-project audit caught the gap and they're now real wrappers over `scripts/start.sh`/`stop.sh`/`docker compose ps`/`docker compose logs`.
+
 ---
 
 ## Phase 1 — Secrets & Compose Skeleton
@@ -44,6 +46,8 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 - [x] `docker-socket-proxy` configured per ARCHITECTURE.md §4.3 (`CONTAINERS=1 EXEC=1 IMAGES=1 POST=1`, everything else `0`), with the real host socket mounted into **this container only**
 
 **Definition of Done:** fresh clone → `./scripts/start.sh` prompts for secrets once → `docker compose ps` shows all core services `Up`. Running it a second time does not re-prompt.
+
+**Post-audit note (2026-07):** the fresh-clone flow actually failed at `docker compose up` because docker-compose.yml hard-requires `PROJECTS_HOST_PATH` and nothing created a `.env` -- `start.sh` now writes one (and creates `projects/`) on first run. The three placeholder service images were also replaced with real per-service Dockerfiles in the same audit pass (ADR-044), so "all core services Up" now means running services, not `sleep infinity`.
 
 ---
 
@@ -95,6 +99,8 @@ This file is the execution plan for ARCHITECTURE.md. It is meant to be worked th
 
 **Definition of Done:** a message from an unauthorized user ID produces no bot response (but is logged); an authorized message reaches a stub Orchestrator endpoint in an integration test.
 **Verification status:** `aiogram` is not yet installed in this sandbox, so none of this has been executed — code and both test suites are written but unverified. Install `aiogram` and run `pytest services/telegram_gateway -v` (unit) and `pytest -m integration services/telegram_gateway/tests/integration -v` (the stub-forwarding proof) before treating this phase as done.
+
+**Post-audit note (2026-07):** the "Commands: /start, /new, /status, /projects" box above was only half-true as shipped -- `/status` and `/projects` were forwarded as free text to `POST /webhook`, which *started a new junk project* (plus a real Planner LLM call) on every status check. Both are now read-only lookups against `GET /status/{id}` / `GET /projects` (ADR-039), approval button presses now relay the next gate's keyboard from the resume response, and `telegram_gateway/__init__.py` was stripped of eager aiogram re-exports so the aiogram-free suites (`test_orchestrator_client.py`, `test_config.py`) now run for real in this sandbox (9 passed).
 
 ---
 
@@ -149,7 +155,7 @@ Along the way, fixed a cross-phase regression this phase's tests exposed: `servi
 
 **Definition of Done:** `./foundry new-project` (and the Telegram `/new` flow) produces a correctly structured project directory and registry entry for both modes.
 
-**Verification status:** fully verified for real -- `services/orchestrator/registry` needs only the standard library, pydantic, pyyaml, and a real `git` binary (used for the brownfield-from-git tests via a real local repo, no network). `pytest services/orchestrator/registry -v`: 29 passed, 97% coverage, including a real `git clone` round trip and both `git clone`/symlink failure paths. `./foundry new-project` itself is wired to `docker compose exec orchestrator python3 -m services.orchestrator.registry.cli`, but that can't actually run yet -- the orchestrator service in docker-compose.yml is still the `python:3.12-slim` / `sleep infinity` placeholder with no `services/` code or dependencies inside it, pending whichever later phase gives it a real Dockerfile. The Telegram `/new` flow mentioned in the Definition of Done isn't wired at all yet -- `services/telegram_gateway/bot.py`'s `/new` handler just forwards free text to `POST /webhook` (Phase 4), and nothing in the Orchestrator's webhook handler (Phase 5) calls into this phase's registration functions yet; that integration is left for whichever phase builds out the Planner/Intake agent's real conversational flow (Phase 8), since a real `/new` needs to gather `name`/`stack`/mode/source from conversation, not just a project_id.
+**Verification status:** fully verified for real -- `services/orchestrator/registry` needs only the standard library, pydantic, pyyaml, and a real `git` binary (used for the brownfield-from-git tests via a real local repo, no network). `pytest services/orchestrator/registry -v`: 29 passed, 97% coverage, including a real `git clone` round trip and both `git clone`/symlink failure paths. `./foundry new-project` itself is wired to `docker compose exec orchestrator python3 -m services.orchestrator.registry.cli`, but that can't actually run yet -- the orchestrator service in docker-compose.yml is still the `python:3.12-slim` / `sleep infinity` placeholder with no `services/` code or dependencies inside it, pending whichever later phase gives it a real Dockerfile *(since closed: the 2026-07 audit pass gave all three services real Dockerfiles, ADR-044)*. The Telegram `/new` flow mentioned in the Definition of Done isn't wired at all yet -- `services/telegram_gateway/bot.py`'s `/new` handler just forwards free text to `POST /webhook` (Phase 4), and nothing in the Orchestrator's webhook handler (Phase 5) calls into this phase's registration functions yet; that integration is left for whichever phase builds out the Planner/Intake agent's real conversational flow (Phase 8), since a real `/new` needs to gather `name`/`stack`/mode/source from conversation, not just a project_id.
 
 ---
 
@@ -294,6 +300,8 @@ A validation pass on the uncommitted first implementation found and fixed severa
 7. **`route_after_plan_wait`/`route_after_cost_wait`/`route_after_merge_wait` all short-circuited straight to `END` on a rejected/blocked approval**, bypassing the `memory_curator` node entirely -- meaning "any transition into blocked" (Phase 14's own stated requirement, see below) never actually triggered curation for these three gates. Fixed to always route to `memory_curator` regardless of the decision; `route_after_memory_curator`'s own blocked-phase check now does the halting, *after* curation has a chance to run.
 8. `route_after_memory_curator`'s return type annotation (`str | Literal["END"]`) used `Literal` without importing it from `typing` -- a `NameError` at `graph/nodes.py`'s import time, meaning literally nothing in the module (or anything importing it) could load. Fixed to `-> str`, matching every other `route_*` function's annotation in the file (`END` is a sentinel object, not the literal string `"END"`).
 
+**Post-audit note (2026-07):** two more defects found and fixed by a whole-project audit (ADR-042): `commit_and_push` force-pushed unconditionally (git.md forbids force pushes) and committed *before* `git checkout -B`, landing every commit on main first. It now branches before committing and pushes plain. The push credential stance is also now documented: workspace containers deliberately get no Foundry secrets, so pushing requires the target project's own git config to carry credentials -- a credential-less remote fails the push cleanly and keeps the local commit.
+
 ---
 
 ## Phase 14 — Memory Curator Integration
@@ -308,6 +316,8 @@ A validation pass on the uncommitted first implementation found and fixed severa
 **Definition of Done:** the cross-project recall test passes — this is the concrete proof the global memory layer is actually useful, not just present.
 
 **Verification status:** same sandbox limitation as Phase 13 -- `services/orchestrator/graph/tests/unit/test_memory_curator.py` is written and hand-traced but unverified by actually running it here (`langgraph` not installed, host-install hook correctly blocks installing it). `services/orchestrator/memory`'s own suite (no LangGraph dependency) is verified for real -- `pytest services/orchestrator/memory -v` passes as part of this session's `pytest services/executor --ignore=services/executor/tests/unit/test_api.py services/orchestrator/memory services/orchestrator/registry` run (79 passed, 6 skipped).
+
+**Post-audit note (2026-07):** the "second project's Coder has access to the first one's recorded fix" item was only test-deep as shipped -- `recall()` had **zero production callers**, making the global store write-only in the live system (the DoD test called `recall()` directly rather than through any agent). Closed by ADR-041: `node_coder` now recalls lessons matching the active task's description via the sanitizing `recall_for_task()` (raw task text through FTS5 MATCH would crash on quotes/parens/operators) and feeds them into the Coder's prompt; memory-store tests for the new path run green for real here (16 passed).
 
 A validation pass found and fixed real defects beyond the shared `route_after_*`/`Literal`-import bugs already listed under Phase 13 (both phases' graph wiring landed in the same working tree, per this session's git.md-noted bundling):
 1. **`node_coder`'s exhausted-retries transition into `blocked` never went through the curator at all** -- `route_after_coder` routed straight to `END`, and `node_coder` never set `curator_source`. This is exactly the "any transition into blocked" case Phase 14's own task list calls out, but the Coder's blocked path was the one transition into `blocked` this phase's original implementation missed (`node_plan_wait`/`node_cost_wait`/`node_merge_wait` all correctly set `curator_source` on rejection, just couldn't reach the curator node due to bug #7 above). Fixed: `node_coder` now sets `curator_source="coder"` when blocking, and `route_after_coder` routes to `memory_curator` instead of `END` directly.
