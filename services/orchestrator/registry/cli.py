@@ -2,11 +2,9 @@
 
 Runs inside the Orchestrator container -- per .claude/rules/security.md the
 host only has Docker installed, so `./foundry new-project` shells out to
-this module via `docker compose exec orchestrator`. That only actually
-works once a later phase gives the orchestrator service a real Dockerfile
-(it's currently the `python:3.12-slim` / `sleep infinity` placeholder in
-docker-compose.yml); until then this module is exercised directly by tests
-and by running it locally, not through the CLI wrapper.
+this module via `docker compose exec orchestrator python3 -m
+services.orchestrator.registry.cli` (ADR-044 gave the orchestrator service
+a real Dockerfile, so this now works through the CLI wrapper end to end).
 
 `_start_intake` imports LangGraph-dependent modules lazily, inside the
 function body rather than at module load time, so this module (and its

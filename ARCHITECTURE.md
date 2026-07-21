@@ -2,7 +2,7 @@
 
 A self-hosted, Docker Compose–native multi-agent software development platform. Foundry plans, builds, reviews, and tests software autonomously, supervised through Telegram, running entirely on local hardware (RTX 3090 / 6750XT via Ollama or LM Studio) with optional Claude API for roles that need stronger reasoning, tool-calling reliability, or vision.
 
-> Status: v1 design. This document is the source of truth for architecture decisions. Update it whenever a decision in §10 changes.
+> Status: v1 built. Phases 0–20 of `TODO.md` are complete against this design (Phase 21's security hardening pass is next). This document is the source of truth for architecture decisions. Update it whenever a decision in §10 changes.
 
 ---
 
@@ -153,7 +153,7 @@ Each task gets a fresh **workspace container**:
 - Built from a per-language base image, selected by the project's `stack` (`foundry/workspace-python:3.12` for v1; `foundry/workspace-node` from Phase 17 onward — see ADR-028). No agent-reachable code path may build or customize an image; only a fixed, operator-maintained set of pre-built images exists.
 - The target project's directory bind-mounted, read-write, plus (from Phase 17) one Docker-managed named volume per project holding that project's package-manager cache (`~/.cache/pip`, `~/.npm`) — nothing else from the host, and never a second host path.
 - Runs as a non-root user, `--cap-drop=ALL`, `--security-opt=no-new-privileges`.
-- Attached to an isolated bridge network with an explicit egress allowlist (package registries only, by default).
+- Attached to an isolated bridge network (`foundry_workspace`), separate from the core services network and never `host` networking. No egress allowlist is enforced yet — the eventual goal is restricting outbound traffic to package registries only, but that needs a forward-proxy or NAT/iptables component that isn't built; see `services/executor/SECURITY.md`'s accepted residual risk.
 - CPU/memory limits set per project (sane defaults, overridable in `projects.yaml`).
 - Torn down after the task completes; nothing persists in the container itself, and no image is ever built or modified — anything that should persist goes through `write_file` into the bind-mounted project directory, and the only thing that persists in the cache volume is downloaded packages, never application state or credentials.
 
@@ -271,10 +271,10 @@ Full-text recall uses SQLite FTS5 — proven at this scale (Hermes uses the same
 | **Planner / Intake** | Structured interview, then a self-adversarial "roast the plan" critique pass before presenting a final plan for approval. | tool-calling, long context |
 | **Coder** | Implements tasks inside a workspace container via the Executor. | tool-calling |
 | **Reviewer** | Reviews diffs for correctness, style, security smells before tests are even run. | tool-calling |
-| **Tester** | Runs the test suite, computes coverage, compares to the project's configured threshold. | tool-calling |
+| **Tester** | Runs the test suite, computes coverage, compares to the project's configured threshold. | none required — deterministic code (`agents/tester.py`), no LLM role in `config/models.yaml` |
 | **Frontend Reviewer** | Visual review of UI changes (screenshots via Playwright). | vision — routes to Claude by default per §4.4 |
-| **Docs Writer** | Keeps README/architecture docs in sync with what was actually built. | tool-calling |
-| **Git/GitHub Integrator** | Commits to feature branches, opens PRs (if `pr_mode` allows), never touches `main` without approval. | tool-calling |
+| **Docs Writer** | Keeps README/architecture docs in sync with what was actually built. | Not yet a wired LangGraph node — ships as a standalone `skills/docs-writer/SKILL.md` (Phase 19) invoked manually, no `docs_writer` role in `config/models.yaml` |
+| **Git/GitHub Integrator** | Commits to feature branches, opens PRs (if `pr_mode` allows), never touches `main` without approval. | none required — deterministic code (`IntegratorClient`, invoked from `node_done`), no LLM role in `config/models.yaml` |
 | **Memory Curator** | Distills session events into project + global memory after each phase. | none required |
 
 ### 4.8 Skills
@@ -468,7 +468,7 @@ Started on demand via `./foundry up` (not 24/7 — see ADR-010). `docker-socket-
 
 1. **No host execution.** Agents never get a shell on the host. The only host-side artifact is the Docker Compose stack itself and the bind-mounted project directories under `projects/`.
 2. **Docker socket is never directly exposed to agent-reachable code.** `docker-socket-proxy` sits between the real socket and the Executor, with `BUILD`, `NETWORKS`, `VOLUMES`, `SWARM`, and `SYSTEM` denied (§4.3). Mount decisions are made by Executor code, never by an LLM tool call.
-3. **Workspace containers are least-privilege**: non-root, `cap-drop=ALL`, `no-new-privileges`, isolated network with an explicit egress allowlist, CPU/memory limits, and torn down after each task.
+3. **Workspace containers are least-privilege**: non-root, `cap-drop=ALL`, `no-new-privileges`, isolated network (no egress allowlist enforced yet — accepted residual risk, see `services/executor/SECURITY.md`), CPU/memory limits, and torn down after each task.
 4. **Secrets via Docker Compose secrets**, populated once by `./scripts/setup.sh` on first run (Telegram bot token, Claude API key, GitHub token). Never logged, never interpolated directly into prompts — referenced by name and injected only at the tool layer that needs them.
 5. **Single-operator authentication.** The Telegram Gateway only responds to one allow-listed Telegram user ID, set during setup.
 6. **Hard-to-undo actions are gated.** Per the decision log: merging into `main` always pauses for approval. Everything else (feature-branch commits, file deletes within the project mount, dependency installs inside workspace containers) runs autonomously, with the Claude API weekly cost threshold as the other explicit gate.
