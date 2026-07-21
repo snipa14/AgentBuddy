@@ -361,6 +361,34 @@ def test_node_coder_resumes_the_in_progress_task_rather_than_the_first_pending_o
     assert update["phase"] == "implementing"
 
 
+def test_node_coder_recalls_lessons_from_a_seeded_global_store(memory_conn):
+    """Phase 14's cross-project loop, closed: a lesson recorded by project A's
+    curator is recalled and fed to project B's Coder via memory_conn --
+    the node completes normally with recall active."""
+    from services.orchestrator.memory.global_store import record_memory
+
+    record_memory(
+        memory_conn,
+        project_id="proj-a",
+        type_="fix",
+        content="Escape quotes before writing YAML values.",
+        tags="yaml quoting",
+        created_at="2026-07-01T00:00:00Z",
+    )
+    router = FakeRouter([CODER_DONE])
+    state = new_project_state("proj-b")
+    state["task_queue"] = [
+        {"description": "Fix the yaml quoting bug", "status": "pending", "attempts": 0}
+    ]
+
+    update = node_coder(
+        state, router, executor_client=_RecordingExecutorClient(), memory_conn=memory_conn
+    )
+
+    assert update["phase"] == "reviewing"
+    assert update["task_queue"][0]["status"] == "done"
+
+
 def test_node_coder_retries_a_failed_task_below_the_attempt_limit():
     router = FakeRouter([_tool_call("read_file", {"path": "missing.py"})] * 10)
     state = new_project_state("proj-1")

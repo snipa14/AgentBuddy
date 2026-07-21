@@ -7,10 +7,17 @@ also needs normal column access (project_id, type, created_at) that FTS5
 itself doesn't support querying on.
 """
 
+import logging
+import re
 import sqlite3
 from pathlib import Path
 
 from services.orchestrator.memory.schemas import Memory, MemoryType
+
+logger = logging.getLogger(__name__)
+
+_RECALL_TOKEN_RE = re.compile(r"[a-zA-Z0-9]{3,}")
+_MAX_RECALL_TOKENS = 8
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
@@ -87,6 +94,47 @@ def record_memory(
     )
     conn.commit()
     return cursor.lastrowid
+
+
+def recall_for_task(
+    conn: sqlite3.Connection, task_description: str, limit: int = 5
+) -> list[str]:
+    """Recalls cross-project lessons relevant to a free-text task description.
+
+    `recall()` takes a raw FTS5 MATCH expression, where quotes, parens, and
+    bare uppercase AND/OR/NOT are syntax -- passing arbitrary task text
+    through would raise sqlite3.OperationalError on the first hostile
+    string. This entrypoint sanitizes instead: it extracts plain
+    alphanumeric word tokens (lowercased, so none can collide with FTS5's
+    case-sensitive uppercase operators), deduplicates them, and ORs the
+    first few together.
+
+    Args:
+        conn: An open connection from build_global_memory_connection().
+        task_description: The task's free-text description (a task_queue
+            item's `description`).
+        limit: Maximum number of lesson strings to return, best-ranked first.
+
+    Returns:
+        Up to `limit` matching memories' content strings, ordered by FTS5
+        rank. Empty if the description yields no usable tokens, nothing
+        matches, or the query fails (logged, never raised -- recall is an
+        enrichment, not a dependency).
+    """
+    tokens = list(
+        dict.fromkeys(
+            token.lower() for token in _RECALL_TOKEN_RE.findall(task_description)
+        )
+    )[:_MAX_RECALL_TOKENS]
+    if not tokens:
+        return []
+    query = " OR ".join(tokens)
+    try:
+        memories = recall(conn, query)
+    except sqlite3.OperationalError:
+        logger.warning("recall_for_task query failed for %r", query, exc_info=True)
+        return []
+    return [memory.content for memory in memories[:limit]]
 
 
 def recall(conn: sqlite3.Connection, query: str, project_id: str | None = None) -> list[Memory]:

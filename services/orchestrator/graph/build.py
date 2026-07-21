@@ -99,7 +99,10 @@ def build_project_graph(
         "task_decomposition", functools.partial(node_task_decomposition, router=router)
     )
     builder.add_node(
-        "coder", functools.partial(node_coder, router=router, executor_client=executor_client)
+        "coder",
+        functools.partial(
+            node_coder, router=router, executor_client=executor_client, memory_conn=memory_conn
+        ),
     )
     builder.add_node(
         "reviewer", functools.partial(node_reviewer, router=router, executor_client=executor_client)

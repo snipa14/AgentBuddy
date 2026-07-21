@@ -161,6 +161,7 @@ async def run_coder_task(
     task_description: str,
     max_steps: int = 10,
     stack: str = "python",
+    recalled_lessons: list[str] | None = None,
 ) -> CoderTaskResult:
     """Runs a single task to completion (or exhausts max_steps) via native tool-calling.
 
@@ -173,6 +174,11 @@ async def run_coder_task(
         max_steps: Safety cap on model turns before giving up.
         stack: The project's declared stack (ADR-028) -- selects the
             Executor's workspace image and cache volume for every tool call.
+        recalled_lessons: Cross-project lessons from the global memory store
+            (memory/global_store.recall_for_task), appended to the task
+            prompt when non-empty so a fix recorded on one project actually
+            reaches the next project's Coder (TODO.md Phase 14's goal --
+            previously the store was write-only in production).
 
     Returns:
         A CoderTaskResult: success=True once the model returns a turn with no
@@ -190,9 +196,15 @@ async def run_coder_task(
     llm_with_tools = llm.bind_tools(tools)
     tools_by_name = {tool_fn.name: tool_fn for tool_fn in tools}
 
+    task_prompt = f"Task: {task_description}"
+    if recalled_lessons:
+        lessons_text = "\n".join(f"- {lesson}" for lesson in recalled_lessons)
+        task_prompt += (
+            f"\n\nLessons recorded from previous projects that may be relevant:\n{lessons_text}"
+        )
     messages: list[BaseMessage] = [
         SystemMessage(content=_CODER_SYSTEM_PROMPT),
-        HumanMessage(content=f"Task: {task_description}"),
+        HumanMessage(content=task_prompt),
     ]
     transcript: list[str] = []
     written_files: list[str] = []

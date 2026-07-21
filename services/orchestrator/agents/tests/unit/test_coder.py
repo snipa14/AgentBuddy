@@ -204,6 +204,35 @@ def test_run_coder_task_finishes_immediately_when_model_makes_no_tool_calls():
     assert executor.calls == []
 
 
+def test_run_coder_task_includes_recalled_lessons_in_the_prompt():
+    router = FakeRouter([_done_message()])
+    executor = RecordingExecutorClient()
+
+    asyncio.run(
+        run_coder_task(
+            router,
+            executor,
+            "proj-1",
+            "Add a login endpoint",
+            recalled_lessons=["Use transactional rollbacks in auth fixtures."],
+        )
+    )
+
+    sent = router.model.requests[0]
+    assert "Task: Add a login endpoint" in sent[1].content
+    assert "Use transactional rollbacks in auth fixtures." in sent[1].content
+
+
+def test_run_coder_task_prompt_is_unchanged_without_recalled_lessons():
+    router = FakeRouter([_done_message()])
+    executor = RecordingExecutorClient()
+
+    asyncio.run(run_coder_task(router, executor, "proj-1", "trivial task"))
+
+    sent = router.model.requests[0]
+    assert sent[1].content == "Task: trivial task"
+
+
 def test_run_coder_task_streams_partial_content_into_the_progress_buffer():
     router = FakeRouter([AIMessage(content="working on it", tool_calls=[], usage_metadata=usage())])
     executor = RecordingExecutorClient()

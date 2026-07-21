@@ -88,6 +88,7 @@ from services.orchestrator.agents.tester import run_tests
 from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.cost_aggregator import other_projects_cost_usd_weekly
 from services.orchestrator.graph.state import ProjectState
+from services.orchestrator.memory.global_store import recall_for_task
 from services.orchestrator.integrator_client import IntegratorClient
 from services.orchestrator.model_router.router import ModelRouter
 
@@ -275,7 +276,10 @@ def _replace_task(task_queue: list[dict], index: int, task: dict) -> list[dict]:
 
 
 def node_coder(
-    state: ProjectState, router: ModelRouter, executor_client: ExecutorClient
+    state: ProjectState,
+    router: ModelRouter,
+    executor_client: ExecutorClient,
+    memory_conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     """Implements one task-or-retry-attempt per execution.
 
@@ -286,6 +290,14 @@ def node_coder(
     own `status` and `attempts` count (ADR-034); the active task is whichever
     item has status "in_progress" (promoted from the first "pending" item if
     none is active yet), rather than a separate `current_task` field.
+
+    When `memory_conn` is given (every real deployment -- graph/build.py
+    wires the global memory connection through), cross-project lessons
+    matching the active task's description are recalled and fed into the
+    Coder's prompt, closing Phase 14's loop: a fix recorded while working on
+    project A actually reaches project B's Coder, instead of the global
+    store being write-only in production. None keeps recall off for tests
+    that only exercise task/queue mechanics.
     """
     task_queue = state["task_queue"]
     active_index = next(
@@ -299,6 +311,11 @@ def node_coder(
             return {"phase": "reviewing"}
 
     active_task = {**task_queue[active_index], "status": "in_progress"}
+    recalled_lessons = (
+        recall_for_task(memory_conn, active_task["description"])
+        if memory_conn is not None
+        else []
+    )
     result = asyncio.run(
         run_coder_task(
             router,
@@ -306,6 +323,7 @@ def node_coder(
             state["project_id"],
             active_task["description"],
             stack=state["stack"],
+            recalled_lessons=recalled_lessons,
         )
     )
     new_changed_files = list(dict.fromkeys(state["changed_files"] + result.written_files))
