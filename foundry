@@ -1,39 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 usage() {
     cat <<'EOF'
 Usage: foundry <command> [args]
 
 Commands:
-  up            Start the Foundry stack
+  up            Start the Foundry stack (accepts --local-llm)
   down          Stop the Foundry stack
   status        Show status of Foundry services
   new-project   Register a new project (greenfield or brownfield)
-  logs          Tail logs from Foundry services
+  logs          Tail logs from Foundry services (accepts service names)
 
   -h, --help    Show this help message
 EOF
 }
 
-not_implemented() {
-    echo "foundry: '$1' is not implemented yet — see TODO.md for the phase that adds it." >&2
-    exit 1
-}
-
 command="${1:-}"
 
 case "$command" in
+    up)
+        shift
+        exec "$ROOT_DIR/scripts/start.sh" "$@"
+        ;;
+    down)
+        exec "$ROOT_DIR/scripts/stop.sh"
+        ;;
+    status)
+        exec docker compose -f "$ROOT_DIR/docker-compose.yml" ps
+        ;;
+    logs)
+        shift
+        exec docker compose -f "$ROOT_DIR/docker-compose.yml" logs -f "$@"
+        ;;
     new-project)
         shift
-        # Requires the orchestrator container to actually contain
-        # services/ and its dependencies -- currently a python:3.12-slim /
-        # `sleep infinity` placeholder (docker-compose.yml), pending the
-        # phase that adds its real Dockerfile. See TODO.md Phase 7.
-        exec docker compose exec orchestrator python3 -m services.orchestrator.registry.cli "$@"
-        ;;
-    up|down|status|logs)
-        not_implemented "$command"
+        exec docker compose -f "$ROOT_DIR/docker-compose.yml" exec orchestrator \
+            python3 -m services.orchestrator.registry.cli "$@"
         ;;
     -h|--help|"")
         usage

@@ -18,6 +18,18 @@ for name in "${REQUIRED_SECRETS[@]}"; do
   fi
 done
 
+# docker-compose.yml hard-requires PROJECTS_HOST_PATH (the Executor needs the
+# *host* absolute path of projects/ -- see services/executor/SECURITY.md), so
+# a fresh clone must get a .env before `docker compose up` can succeed.
+if [[ ! -f .env ]]; then
+  mkdir -p projects
+  {
+    echo "COMPOSE_PROJECT_NAME=foundry"
+    echo "PROJECTS_HOST_PATH=$ROOT_DIR/projects"
+  } > .env
+  echo "[start] Wrote .env with PROJECTS_HOST_PATH=$ROOT_DIR/projects"
+fi
+
 compose_files=(-f docker-compose.yml)
 if [[ "${1:-}" == "--local-llm" ]]; then
   compose_files+=(-f docker-compose.local-llm.yml)
