@@ -86,8 +86,31 @@ class ProgressPoller:
         self._tasks[project_id] = asyncio.create_task(self._poll_loop(project_id, chat_id))
 
     async def _poll_loop(self, project_id: str, chat_id: int) -> None:
-        while await self._poll_once(project_id, chat_id):
+        while await self._poll_once_resilient(project_id, chat_id):
             await asyncio.sleep(self._poll_interval_seconds)
+
+    async def _poll_once_resilient(self, project_id: str, chat_id: int) -> bool:
+        """Runs one poll cycle, surviving transient failures.
+
+        A momentarily-unreachable Orchestrator or a rejected Telegram edit
+        must not kill the poll task silently (an asyncio.Task's exception is
+        only ever seen at GC time) -- a failed cycle logs, counts as an idle
+        poll, and lets the loop try again, so the idle budget still bounds
+        how long a persistently-broken project keeps polling.
+
+        Returns:
+            True if polling should continue, False once this project's poll
+            loop should stop (terminal phase reached, or idle timeout hit).
+        """
+        try:
+            return await self._poll_once(project_id, chat_id)
+        except Exception:
+            logger.warning("project %s: progress poll failed, retrying", project_id, exc_info=True)
+            self._idle_polls[project_id] = self._idle_polls.get(project_id, 0) + 1
+            if self._idle_polls[project_id] >= self._max_idle_polls:
+                self._stop(project_id)
+                return False
+            return True
 
     async def _poll_once(self, project_id: str, chat_id: int) -> bool:
         """Runs one poll cycle for project_id.

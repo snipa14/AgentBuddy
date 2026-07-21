@@ -126,6 +126,33 @@ def test_poll_once_stops_after_idle_timeout():
     assert should_continue is False
 
 
+def test_poll_once_resilient_survives_a_transient_orchestrator_error():
+    """A momentarily-unreachable Orchestrator must count as an idle poll and
+    keep the loop alive, not kill the asyncio task silently."""
+    orchestrator = MagicMock()
+    orchestrator.stream = AsyncMock(side_effect=RuntimeError("connection refused"))
+    poller = ProgressPoller(orchestrator, _fake_bot())
+    poller._since_seq["proj-1"] = -1
+    poller._idle_polls["proj-1"] = 0
+
+    should_continue = asyncio.run(poller._poll_once_resilient("proj-1", chat_id=7))
+
+    assert should_continue is True
+    assert poller._idle_polls["proj-1"] == 1
+
+
+def test_poll_once_resilient_gives_up_after_idle_budget_of_failures():
+    orchestrator = MagicMock()
+    orchestrator.stream = AsyncMock(side_effect=RuntimeError("connection refused"))
+    poller = ProgressPoller(orchestrator, _fake_bot(), max_idle_polls=2)
+    poller._since_seq["proj-1"] = -1
+    poller._idle_polls["proj-1"] = 1
+
+    should_continue = asyncio.run(poller._poll_once_resilient("proj-1", chat_id=7))
+
+    assert should_continue is False
+
+
 def test_poll_once_truncates_the_telegram_message_but_keeps_the_full_text_internally():
     first_chunk = "a" * (TELEGRAM_MESSAGE_LIMIT - 10)
     second_chunk = "b" * 100
