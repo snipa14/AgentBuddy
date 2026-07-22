@@ -447,7 +447,52 @@ A validation pass found and fixed real defects beyond the shared `route_after_*`
 
 ---
 
-## Phase 22 — Stretch / Future Work
+## Phase 22 — Stack Registry & Templated Workspace Images
+
+**Goal:** adding a language from the operator's shortlist (Go first; Rust/Java as demanded) is one `config/stacks.yaml` entry plus one operator-run image build — zero `.py` edits, zero security-boundary change (`docker-socket-proxy` `BUILD` stays `0`, no agent-reachable image customization, per ADR-028/ADR-045).
+**Decisions:** ADR-045
+
+- [ ] `config/stacks.yaml`: one entry per stack declaring upstream base image + pinned tag, extra apt packages, manifest filenames (`requirements.txt`/`pyproject.toml`, `package.json`, `go.mod`), dependency-install command, package-cache directory (for the Phase 17 per-project cache volume), and static-check commands (consumed by Phase 24) — validated by a Pydantic schema at Executor and Orchestrator startup, same pattern as `models.yaml`
+- [ ] `images/workspace.template.Dockerfile` + `scripts/gen_workspace_images.py`: render each stack's Dockerfile from one shared template carrying the common hardening blocks (non-root `sandbox` UID 1000, setuid/setgid strip, Python3 + Playwright/Chromium layer the Executor's tools require in every image) — regenerate the existing python and node Dockerfiles from the template and diff against the shipped ones to prove the template reproduces today's security posture before adding any new stack
+- [ ] `services/executor/config.py`: `STACK_IMAGES`/`image_for_stack()`, install-command selection, and cache-dir paths sourced from `stacks.yaml` instead of hardcoded dicts (keep the existing default-image fallback for unknown stacks)
+- [ ] `registry/schemas.py` + `registry/cli.py`: `stack` validated against `stacks.yaml` keys instead of the hardcoded `Literal["python", "node"]`
+- [ ] Add Go as the first template-born stack: `go.mod` manifest, `go mod download` install, `GOMODCACHE` cache dir, `go vet` + `go build ./...` checks
+- [ ] Tests: `stacks.yaml` schema validation, generator golden-file tests (template output for python/node matches shipped Dockerfiles), per-stack lookup unit tests; real-Docker integration test proving a Go-stack project resolves a module dependency and builds inside its generated image
+
+**Definition of Done:** a Go project round-trips Coder → dependency install → `run_tests` on a template-generated image; adding a hypothetical further stack touches only `stacks.yaml` and an image build; the `docker-socket-proxy` env in `docker-compose.yml` is byte-identical before and after the phase.
+
+---
+
+## Phase 23 — Loop Engineering: Deterministic Checks Before LLM Review
+
+**Goal:** Reviewer (LLM) tokens are only spent on code that already passes the free deterministic checks — lint/typecheck/build failures loop straight back to the Coder with tool output as feedback, per the verification-loop principle in ADR-046.
+**Decisions:** ADR-046
+
+- [ ] `node_static_checks` between `coder` and `reviewer` in `graph/build.py`: runs the project's stack-specific check commands from `stacks.yaml` inside the workspace container via the existing `tool_run_command` — no new Executor surface, no new tool
+- [ ] Failure routing: back to `coder` with the raw check output appended as feedback, incrementing the active task's `attempts` so `MAX_TASK_ATTEMPTS` and the `blocked` semantics are unchanged; pass routing: on to `reviewer` exactly as today
+- [ ] Skip-if-absent semantics: a check whose tool or config file is not present in the project is skipped (logged), never failed — a Node project without a `tsconfig.json` doesn't fail typechecking
+- [ ] Tests: routing unit tests (all-pass → `reviewer`, any-fail → `coder` with attempts incremented, exhaustion → `blocked`), skip semantics per stack, and structure-not-content assertions per `.claude/rules/testing.md`
+
+**Definition of Done:** a deliberately lint-broken diff never reaches `node_reviewer` (asserted via a mocked router that fails the test if the Reviewer's LLM boundary is called); a clean diff reaches `node_reviewer` exactly as before the phase.
+
+---
+
+## Phase 24 — Loop Engineering: Human-Gated Replan Route
+
+**Goal:** the loop can recover from a wrong plan instead of burning its attempt budget and stranding the project — with the human, not the agents, deciding that the plan changes (ADR-047; promotes the Phase 22 stretch item).
+**Decisions:** ADR-047
+
+- [ ] Reviewer verdict schema gains `replan_needed` + `replan_reason` alongside the existing approve/revise outcomes
+- [ ] A task exhausting `MAX_TASK_ATTEMPTS` routes to `replan_wait` instead of the current terminal halt (the `blocked` status itself is unchanged)
+- [ ] `replan_wait` `interrupt()` node: Telegram approval → Planner redrafts with the failure context (blocked task, attempt history, reviewer reason) injected and completed tasks preserved, then the existing plan-approval interrupt fires again on the new plan; rejection → today's halt behavior
+- [ ] `replan_count` field on `ProjectState`, capped at 2 per project — at the cap, `replan_wait` is bypassed and the project halts as today
+- [ ] Tests: the standard interrupt contract from `.claude/rules/testing.md` (fires → checkpointer state survives a simulated process restart → resumes to the correct next node) for `replan_wait`, both trigger paths (reviewer verdict, blocked exhaustion), cap enforcement, and preservation of completed tasks across a replan
+
+**Definition of Done:** a project whose plan rests on a false assumption reaches `replan_wait`, survives a restart there, and — on human approval — produces a new plan that goes through normal plan approval, with previously completed tasks still marked `done`; on the third replan attempt it halts.
+
+---
+
+## Phase 25 — Stretch / Future Work
 
 Not required for v1. Each item should get an `ARCHITECTURE.md` update (new ADR) before implementation starts.
 
@@ -455,9 +500,7 @@ Not required for v1. Each item should get an `ARCHITECTURE.md` update (new ADR) 
 - [ ] Neo4j-backed cross-project pattern memory, layered under — not replacing — the markdown files
 - [ ] Prometheus `/metrics` + Grafana dashboard for the platform itself
 - [ ] A2A Agent Card exposure, if Foundry ever needs to interoperate with another agent system -- verified against the real A2A spec (Linux-Foundation-governed as of mid-2025: HTTP/JSON-RPC/SSE transport, capability-discovery "Agent Cards", OAuth2/JWT mutual auth): this item is correctly scoped as *external* interop only. Foundry's own agents (Planner/Coder/Reviewer/Tester/Frontend Reviewer) are in-process LangGraph node functions sharing one `ProjectState` dict, not separate networked services with their own identity -- there is no internal "agent-to-agent" protocol to build, and there shouldn't be one until Foundry needs to talk to an agent system it doesn't own
-- [ ] Workspace images for languages beyond Python and Node/npm (Phase 17), as real projects demand them -- Go is the natural next target (a single static-binary toolchain, no separate package-manager-install-on-startup complexity beyond `go mod download`)
 - [ ] AMD 6750XT / ROCm-specific tuning for secondary agent roles
-- [ ] Mid-implementation re-planning path: once a project passes `awaiting_plan_approval`, `plan`/`task_queue` are effectively frozen -- Reviewer and Tester can only send "fix this diff" feedback back to the Coder, never "the plan itself was wrong." If the Coder or Reviewer discovers a task rests on a false assumption partway through implementation, there is currently no route back to the Planner short of a human manually rejecting and restarting the whole project. Needs a `replan` phase/interrupt any implementation-side node can trigger
 - [x] Context management / compaction strategy: `ProjectState` gains `messages_summary`/`messages_curated_through` (a rolling curator-maintained summary + cursor, replacing a hardcoded `messages[-20:]` window) and `changed_files` (Coder-tracked `write_file` paths, wired into the Reviewer's existing but previously-unused `changed_files` scoping instead of always reading the whole repo); `task_queue`'s curator rendering is capped to non-done tasks plus the 10 most recent done ones (ADR-037)
 - [ ] Deployment-target tooling (Kubernetes, Docker Compose multi-service apps, etc.): the Coder's `run_command` action can invoke any binary present in the workspace image, but the only shipped image has no `kubectl`, no Docker CLI (deliberately -- ARCHITECTURE.md §4.3 and `.claude/rules/security.md` forbid Docker access outside the Executor itself), and no cluster-credentials story. A Coder agent with real `kubectl`/cluster access is a materially different trust boundary than one bind-mounted to a single project directory with no network egress and all capabilities dropped -- needs its own ADR and threat-model pass before any of this is added, not a workspace-image tweak
 - [x] Per-task structured progress tracking: `task_queue` items carry an explicit `status` ("pending"/"in_progress"/"done"/"blocked") and `attempts` count, never removed from the list on completion (ADR-034). Surfaced via `GET /status/{project_id}`'s new `task_progress` field and rendered by the Telegram Gateway; also fed into the Memory Curator's input alongside the chat-message excerpt.
