@@ -36,6 +36,9 @@ services:
       # ("The Docker-outside-of-Docker (DooD) detail") for why this can't be
       # derived from the container's own filesystem.
       PROJECTS_HOST_PATH: ${PROJECTS_HOST_PATH:?set PROJECTS_HOST_PATH to the absolute host path of ./projects, see .env.example}
+      STACKS_CONFIG_PATH: /app/config/stacks.yaml
+    volumes:
+      - ./config:/app/config:ro
     depends_on:
       - docker-socket-proxy
     networks:
@@ -54,6 +57,7 @@ services:
       MEMORY_DB_PATH: /data/memory/foundry_memory.db
       PROJECTS_ROOT: /data/projects
       MODELS_CONFIG_PATH: /app/config/models.yaml
+      STACKS_CONFIG_PATH: /app/config/stacks.yaml
     secrets:
       - claude_api_key
       - github_token
