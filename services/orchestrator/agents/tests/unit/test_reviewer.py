@@ -122,3 +122,19 @@ def test_review_changes_sends_system_and_user_messages():
     sent_messages = router.model.requests[0]
     assert sent_messages[0].content.lower().count("security") >= 1
     assert "models.py" in sent_messages[1].content
+
+
+def test_review_result_defaults_to_no_replan():
+    result = ReviewResult(verdict="approve")
+    assert result.replan_needed is False
+    assert result.replan_reason == ""
+
+
+def test_review_result_carries_replan_signal():
+    result = ReviewResult(
+        verdict="changes-requested",
+        replan_needed=True,
+        replan_reason="Task 3 assumes an API endpoint the plan never provisions",
+    )
+    assert result.replan_needed is True
+    assert result.replan_reason

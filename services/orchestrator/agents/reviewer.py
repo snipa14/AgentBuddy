@@ -30,7 +30,12 @@ _REVIEW_SYSTEM_PROMPT = (
     "- Scope creep (code outside the stated plan goals)\n\n"
     "For each issue found, report the file, an approximate line number, a "
     "severity ('critical' or 'warning'), and a concise message. If there are "
-    "no issues, the verdict must be 'approve' and findings must be empty."
+    "no issues, the verdict must be 'approve' and findings must be empty.\n\n"
+    "If an issue is not fixable by editing the current diff—because a task's "
+    "premise is false, a dependency the plan assumed doesn't exist, or the "
+    "approach is structurally wrong—set replan_needed to true with a concrete "
+    "replan_reason, and still report the findings. Otherwise leave replan_needed "
+    "false and replan_reason empty."
 )
 
 
@@ -44,12 +49,27 @@ class ReviewFinding(BaseModel):
 
 
 class ReviewResult(BaseModel):
-    """The reviewer's verdict and structured findings."""
+    """The reviewer's verdict, structured findings, and optional replan signal.
+
+    When a finding cannot be fixed by editing the diff because the underlying plan
+    task rests on a false assumption, set replan_needed to True with a concrete
+    reason. Otherwise leave both replan fields at their defaults.
+    """
 
     verdict: str = Field(
         description="'approve' if no issues; 'changes-requested' if at least one finding"
     )
     findings: list[ReviewFinding] = Field(default_factory=list)
+    replan_needed: bool = Field(
+        default=False,
+        description=(
+            "True only when a finding cannot be fixed by editing the diff "
+            "because the underlying plan task rests on a false assumption"
+        ),
+    )
+    replan_reason: str = Field(
+        default="", description="Why the plan itself is wrong, when replan_needed"
+    )
 
 
 def _build_user_prompt(project_id: str, files: dict[str, str]) -> str:
