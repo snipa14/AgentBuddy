@@ -14,8 +14,10 @@ from services.orchestrator.memory.global_store import build_global_memory_connec
 from services.orchestrator.model_router.config import load_models_config
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.service import OrchestratorService
+from services.orchestrator.stacks import load_stacks_config
 
 DEFAULT_MODELS_CONFIG_PATH = "config/models.yaml"
+DEFAULT_STACKS_CONFIG_PATH = "config/stacks.yaml"
 DEFAULT_SECRETS_DIR = Path("/run/secrets")
 
 
@@ -35,12 +37,16 @@ def main() -> None:
     checkpointer = build_sqlite_checkpointer(config.memory_db_path)
     memory_conn = build_global_memory_connection(config.memory_db_path)
     executor_client = ExecutorClient(config.executor_url)
+    stacks_config = load_stacks_config(
+        Path(os.environ.get("STACKS_CONFIG_PATH", DEFAULT_STACKS_CONFIG_PATH))
+    )
     service = OrchestratorService(
         checkpointer,
         _build_router(),
         executor_client,
         memory_conn,
         config.projects_root,
+        stacks_config,
         config.global_cost_threshold_usd,
     )
     app = build_app(service)

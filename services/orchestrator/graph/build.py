@@ -24,6 +24,7 @@ from services.orchestrator.graph.nodes import (
     node_planner_draft,
     node_planner_wait,
     node_reviewer,
+    node_static_checks,
     node_task_decomposition,
     node_testing,
     route_after_coder,
@@ -35,9 +36,11 @@ from services.orchestrator.graph.nodes import (
     route_after_plan_wait,
     route_after_planner_ask,
     route_after_reviewer,
+    route_after_static_checks,
 )
 from services.orchestrator.graph.state import ProjectState
 from services.orchestrator.model_router.router import ModelRouter
+from services.orchestrator.stacks import StacksConfig
 
 DEFAULT_GLOBAL_COST_THRESHOLD_USD = 50.0
 
@@ -48,6 +51,7 @@ def build_project_graph(
     executor_client: ExecutorClient,
     memory_conn: sqlite3.Connection,
     projects_root: Path,
+    stacks_config: StacksConfig,
     global_cost_threshold_usd: float = DEFAULT_GLOBAL_COST_THRESHOLD_USD,
 ) -> CompiledStateGraph:
     """Builds and compiles the per-project subgraph.
@@ -55,18 +59,20 @@ def build_project_graph(
     Node chain: intake -> planner_ask <-> [planner_wait self-loop] ->
     planner_draft -> planner_critique -> plan_wait -> memory_curator ->
     task_decomposition -> coder [self-loop: next task or retry, exhausted
-    retries -> memory_curator -> END] -> reviewer [changes-requested loops
-    back to coder; approve advances] -> frontend_review -> cost_check ->
-    [cost_wait -> memory_curator] -> testing -> memory_curator [tests failed
-    -> coder; tests passed -> merge_wait] -> memory_curator -> done, with
-    every human-in-the-loop gate implemented as a real `interrupt()` call
-    (ADR-009 for cost/merge; the Planner's interview and final approval gate
-    are Phase 8; the Coder's retry budget, Phase 9, never interrupts at all
-    -- see graph/nodes.py's module docstring). `memory_curator` (Phase 14)
-    sits on every phase-transition edge and approval resolution, routing
-    onward based on `curator_source`/`phase` (route_after_memory_curator) --
-    it is the single point every one of those paths passes through, not a
-    per-transition special case.
+    retries -> memory_curator -> END] -> static_checks [failure loops back
+    to coder, exhausted retries -> memory_curator -> END] -> reviewer
+    [changes-requested loops back to coder; approve advances] ->
+    frontend_review -> cost_check -> [cost_wait -> memory_curator] ->
+    testing -> memory_curator [tests failed -> coder; tests passed ->
+    merge_wait] -> memory_curator -> done, with every human-in-the-loop gate
+    implemented as a real `interrupt()` call (ADR-009 for cost/merge; the
+    Planner's interview and final approval gate are Phase 8; the Coder's
+    retry budget, Phase 9, and static_checks' (ADR-046), never interrupt at
+    all -- see graph/nodes.py's module docstring). `memory_curator`
+    (Phase 14) sits on every phase-transition edge and approval resolution,
+    routing onward based on `curator_source`/`phase`
+    (route_after_memory_curator) -- it is the single point every one of
+    those paths passes through, not a per-transition special case.
 
     Args:
         checkpointer: The checkpoint saver backing thread persistence.
@@ -78,6 +84,11 @@ def build_project_graph(
             inside a workspace container.
         memory_conn: An open global memory connection for the Memory Curator.
         projects_root: The projects/ root directory for per-project LEARNINGS.md.
+        stacks_config: The loaded stack registry (ADR-045) static_checks runs
+            its deterministic commands from. An empty registry (no stacks
+            declared) means every stack's check_commands resolve to nothing
+            to run, so static_checks always passes through to the Reviewer
+            unchanged -- the node degrades to a no-op rather than blocking.
         global_cost_threshold_usd: The global weekly USD threshold
             node_cost_check gates on (TODO.md Phase 18) -- summed across
             every active project's checkpointed cost_usd_weekly, not just
@@ -102,6 +113,14 @@ def build_project_graph(
         "coder",
         functools.partial(
             node_coder, router=router, executor_client=executor_client, memory_conn=memory_conn
+        ),
+    )
+    builder.add_node(
+        "static_checks",
+        functools.partial(
+            node_static_checks,
+            executor_client=executor_client,
+            stacks_config=stacks_config,
         ),
     )
     builder.add_node(
@@ -156,7 +175,20 @@ def build_project_graph(
     builder.add_conditional_edges(
         "coder",
         route_after_coder,
-        {"coder": "coder", "reviewer": "reviewer", "memory_curator": "memory_curator"},
+        {
+            "coder": "coder",
+            "static_checks": "static_checks",
+            "memory_curator": "memory_curator",
+        },
+    )
+    builder.add_conditional_edges(
+        "static_checks",
+        route_after_static_checks,
+        {
+            "coder": "coder",
+            "reviewer": "reviewer",
+            "memory_curator": "memory_curator",
+        },
     )
     builder.add_conditional_edges(
         "reviewer",

@@ -78,6 +78,7 @@ def _start_intake(project_id: str, description: str) -> None:
     from services.orchestrator.model_router.config import load_models_config
     from services.orchestrator.model_router.router import ModelRouter
     from services.orchestrator.service import OrchestratorService
+    from services.orchestrator.stacks import load_stacks_config
 
     models_config = load_models_config(
         Path(os.environ.get("MODELS_CONFIG_PATH", "config/models.yaml"))
@@ -88,12 +89,16 @@ def _start_intake(project_id: str, description: str) -> None:
     checkpointer = build_sqlite_checkpointer(config.memory_db_path)
     memory_conn = build_global_memory_connection(config.memory_db_path)
     executor_client = ExecutorClient(config.executor_url)
+    stacks_config = load_stacks_config(
+        Path(os.environ.get("STACKS_CONFIG_PATH", "config/stacks.yaml"))
+    )
     OrchestratorService(
         checkpointer,
         router,
         executor_client,
         memory_conn,
         config.projects_root,
+        stacks_config,
         config.global_cost_threshold_usd,
     ).handle_webhook(project_id, description)
 

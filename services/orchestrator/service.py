@@ -24,6 +24,7 @@ from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.progress_buffer import clear_progress
 from services.orchestrator.registry.validation import validate_project_id
+from services.orchestrator.stacks import StacksConfig
 
 _TERMINAL_PHASES = frozenset({"done", "blocked"})
 
@@ -42,6 +43,7 @@ class OrchestratorService:
         executor_client: ExecutorClient,
         memory_conn: sqlite3.Connection,
         projects_root: Path,
+        stacks_config: StacksConfig,
         global_cost_threshold_usd: float = DEFAULT_GLOBAL_COST_THRESHOLD_USD,
     ) -> None:
         """Builds the service.
@@ -54,6 +56,8 @@ class OrchestratorService:
                 read_file/write_file/run_command actions through.
             memory_conn: An open global memory connection for the Memory Curator.
             projects_root: The projects/ root directory for per-project LEARNINGS.md.
+            stacks_config: The loaded stack registry (ADR-045) static_checks
+                runs its deterministic commands from.
             global_cost_threshold_usd: The global weekly USD cost-gate
                 threshold (TODO.md Phase 18); defaults to
                 DEFAULT_GLOBAL_COST_THRESHOLD_USD. A real deployment passes
@@ -62,7 +66,7 @@ class OrchestratorService:
         self._checkpointer = checkpointer
         self._graph = build_project_graph(
             checkpointer, router, executor_client, memory_conn, projects_root,
-            global_cost_threshold_usd,
+            stacks_config, global_cost_threshold_usd,
         )
 
     def handle_webhook(self, project_id: str | None, text: str) -> dict[str, Any]:

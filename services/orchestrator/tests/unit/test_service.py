@@ -10,6 +10,7 @@ from services.orchestrator.graph.tests.unit.planner_fakes import (
 )
 from services.orchestrator.memory.global_store import build_global_memory_connection
 from services.orchestrator.service import OrchestratorService, UnknownProjectError
+from services.orchestrator.stacks import StacksConfig
 
 
 class _StubExecutorClient:
@@ -37,6 +38,7 @@ def service(tmp_path):
         _StubExecutorClient(),
         memory_conn,
         tmp_path / "projects",
+        StacksConfig(stacks={}),
     )
 
 
@@ -120,7 +122,12 @@ def test_list_projects_returns_known_ids(tmp_path):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
     memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
     service = OrchestratorService(
-        checkpointer, start_only_router(projects=2), _StubExecutorClient(), memory_conn, tmp_path / "projects"
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
     )
 
     service.handle_webhook("project-a", "hello")
