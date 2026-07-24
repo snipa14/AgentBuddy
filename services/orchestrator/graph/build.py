@@ -23,6 +23,7 @@ from services.orchestrator.graph.nodes import (
     node_planner_critique,
     node_planner_draft,
     node_planner_wait,
+    node_replan_wait,
     node_reviewer,
     node_static_checks,
     node_task_decomposition,
@@ -35,6 +36,7 @@ from services.orchestrator.graph.nodes import (
     route_after_memory_curator,
     route_after_plan_wait,
     route_after_planner_ask,
+    route_after_replan_wait,
     route_after_reviewer,
     route_after_static_checks,
 )
@@ -68,11 +70,17 @@ def build_project_graph(
     implemented as a real `interrupt()` call (ADR-009 for cost/merge; the
     Planner's interview and final approval gate are Phase 8; the Coder's
     retry budget, Phase 9, and static_checks' (ADR-046), never interrupt at
-    all -- see graph/nodes.py's module docstring). `memory_curator`
-    (Phase 14) sits on every phase-transition edge and approval resolution,
-    routing onward based on `curator_source`/`phase`
-    (route_after_memory_curator) -- it is the single point every one of
-    those paths passes through, not a per-transition special case.
+    all -- see graph/nodes.py's module docstring). When the Coder exhausts a
+    task's retry budget or the Reviewer decides the plan itself is wrong
+    (ADR-047), both route through memory_curator to replan_wait -- the
+    replan gate's own producer/wait pair -- which on approval sends control
+    back to planner_draft for a redraft that goes through the normal
+    critique and plan-approval gates again, rather than re-entering the
+    interview. `memory_curator` (Phase 14) sits on every phase-transition
+    edge and approval resolution, routing onward based on
+    `curator_source`/`phase` (route_after_memory_curator) -- it is the
+    single point every one of those paths passes through, not a
+    per-transition special case.
 
     Args:
         checkpointer: The checkpoint saver backing thread persistence.
@@ -143,6 +151,7 @@ def build_project_graph(
         "testing", functools.partial(node_testing, executor_client=executor_client)
     )
     builder.add_node("merge_wait", node_merge_wait)
+    builder.add_node("replan_wait", node_replan_wait)
     builder.add_node(
         "memory_curator",
         functools.partial(
@@ -193,7 +202,11 @@ def build_project_graph(
     builder.add_conditional_edges(
         "reviewer",
         route_after_reviewer,
-        {"coder": "coder", "frontend_review": "frontend_review"},
+        {
+            "coder": "coder",
+            "frontend_review": "frontend_review",
+            "memory_curator": "memory_curator",
+        },
     )
     builder.add_conditional_edges(
         "frontend_review",
@@ -211,6 +224,9 @@ def build_project_graph(
         "merge_wait", route_after_merge_wait, {"memory_curator": "memory_curator"}
     )
     builder.add_conditional_edges(
+        "replan_wait", route_after_replan_wait, {"memory_curator": "memory_curator"}
+    )
+    builder.add_conditional_edges(
         "memory_curator",
         route_after_memory_curator,
         {
@@ -218,6 +234,8 @@ def build_project_graph(
             "coder": "coder",
             "testing": "testing",
             "merge_wait": "merge_wait",
+            "replan_wait": "replan_wait",
+            "planner_draft": "planner_draft",
             "done": "done",
             END: END,
         },
