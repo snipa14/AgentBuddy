@@ -42,7 +42,12 @@ replayed.
 at all (fully autonomous within their own retry budgets), so they're single
 self-looping nodes with no "wait" counterpart, looping back to themselves via
 `route_after_coder`/`route_after_reviewer` for either the next task or a
-revision of the current one.
+revision of the current one. Both retry budgets are capped -- `MAX_TASK_ATTEMPTS`
+per task, `MAX_REPLANS` per project -- and when a task exhausts its attempts or
+the Reviewer decides the plan itself is wrong, the trigger proposes a replan
+rather than immediately halting: `node_replan_wait` (ADR-047) is that
+budget's own producer/wait gate, structurally identical to `node_plan_wait`
+et al., pausing for a human decision before the Planner is ever re-entered.
 
 LLM calls happen inside `services.orchestrator.agents.planner`/`coder`/
 `reviewer`/`frontend_reviewer`/`memory_curator`, which are plain `async def`
@@ -88,7 +93,7 @@ from services.orchestrator.agents.planner import (
     critique_plan,
     draft_plan,
 )
-from services.orchestrator.agents.reviewer import REVIEWER_ROLE, review_changes
+from services.orchestrator.agents.reviewer import REVIEWER_ROLE, ReviewFinding, review_changes
 from services.orchestrator.agents.static_checks import run_static_checks
 from services.orchestrator.agents.tester import run_tests
 from services.orchestrator.executor_client import ExecutorClient
@@ -102,6 +107,7 @@ from services.orchestrator.stacks import StacksConfig
 logger = logging.getLogger(__name__)
 
 MAX_TASK_ATTEMPTS = 3
+MAX_REPLANS = 2
 
 
 def _with_cost(state: ProjectState, update: dict[str, Any], cost_usd: float) -> dict[str, Any]:
@@ -263,12 +269,27 @@ def route_after_plan_wait(state: ProjectState) -> str:
 
 
 def node_task_decomposition(state: ProjectState, router: ModelRouter) -> dict[str, Any]:
-    """Breaks the approved plan into task_queue, once, right after plan approval."""
-    tasks, ai_message = asyncio.run(decompose_plan_into_tasks(router, state["plan"]))
+    """Breaks the approved plan into task_queue, once, right after plan approval.
+
+    On a replan (ADR-047), previously completed tasks are carried forward as
+    ``done`` and every blocked/pending entry from the failed plan is dropped
+    -- the redrafted plan's decomposition starts fresh only for the
+    remaining work, so completed work is never re-planned or re-implemented.
+    On first decomposition ``task_queue`` is empty, so this is a no-op.
+    """
+    done_tasks = [task for task in state["task_queue"] if task["status"] == "done"]
+    tasks, ai_message = asyncio.run(
+        decompose_plan_into_tasks(
+            router,
+            state["plan"],
+            completed_task_descriptions=[task["description"] for task in done_tasks],
+        )
+    )
     cost = router.cost_usd(CODER_ROLE, ai_message.usage_metadata)
-    task_queue = [
+    new_tasks = [
         {"description": task.description, "status": "pending", "attempts": 0} for task in tasks
     ]
+    task_queue = done_tasks + new_tasks
     logger.info("project %s: decomposed into %d task(s)", state["project_id"], len(task_queue))
     return _with_cost(
         state,
@@ -280,6 +301,32 @@ def node_task_decomposition(state: ProjectState, router: ModelRouter) -> dict[st
 def _replace_task(task_queue: list[dict], index: int, task: dict) -> list[dict]:
     """Returns a new task_queue list with the item at `index` replaced by `task`."""
     return [task if i == index else existing for i, existing in enumerate(task_queue)]
+
+
+def _replan_payload(state: ProjectState, reason: str, source: str) -> dict[str, Any]:
+    """Builds the replan_wait interrupt payload (ADR-047).
+
+    Args:
+        state: The current project state.
+        reason: Why a replan is being proposed (reviewer reason or the
+            blocked task's description and attempt history).
+        source: Which trigger produced this -- "reviewer" or "coder".
+
+    Returns:
+        A pending_approval dict for the Gateway's generic renderer.
+    """
+    return {
+        "kind": "replan_approval",
+        "thread_id": state["project_id"],
+        "project_id": state["project_id"],
+        "trigger": source,
+        "reason": reason,
+        "replan_count": state["replan_count"],
+        "summary": (
+            f"Plan appears broken ({source}): {reason} -- approve a replan? "
+            f"({state['replan_count']}/{MAX_REPLANS} replans used)"
+        ),
+    }
 
 
 def node_coder(
@@ -355,12 +402,31 @@ def node_coder(
     active_task["attempts"] += 1
     if active_task["attempts"] >= MAX_TASK_ATTEMPTS:
         active_task["status"] = "blocked"
-        logger.warning(
-            "project %s: task exhausted %d attempts, blocking",
-            state["project_id"],
-            active_task["attempts"],
-        )
         new_queue = _replace_task(task_queue, active_index, active_task)
+        if state["replan_count"] < MAX_REPLANS:
+            logger.warning(
+                "project %s: task exhausted %d attempts, proposing replan",
+                state["project_id"], active_task["attempts"],
+            )
+            reason = (
+                f"task {active_task['description']!r} failed "
+                f"{active_task['attempts']} attempts"
+            )
+            return _with_cost(
+                state,
+                {
+                    "task_queue": new_queue,
+                    "phase": "awaiting_replan_approval",
+                    "curator_source": "coder",
+                    "changed_files": new_changed_files,
+                    "pending_approval": _replan_payload(state, reason, "coder"),
+                },
+                result.cost_usd,
+            )
+        logger.warning(
+            "project %s: task exhausted %d attempts at replan cap, blocking",
+            state["project_id"], active_task["attempts"],
+        )
         return _with_cost(
             state,
             {
@@ -387,8 +453,11 @@ def node_coder(
 
 def route_after_coder(state: ProjectState) -> str:
     """Loops back for the next task/retry, curates then halts if blocked, routes
-    to the deterministic checks gate when done."""
+    to the deterministic checks gate when done, or to the Memory Curator on
+    the way to the replan gate when a task exhaustion proposed one (ADR-047)."""
     if state["phase"] == "blocked":
+        return "memory_curator"
+    if state["phase"] == "awaiting_replan_approval":
         return "memory_curator"
     if state["phase"] == "reviewing":
         return "static_checks"
@@ -504,6 +573,14 @@ def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: Exe
     and gets back a schema-forced verdict (approve / changes-requested).
     Changes-requested routes back to the Coder with findings attached;
     approve advances to frontend_review.
+
+    When the result also carries `replan_needed` (ADR-047), the plan itself
+    -- not just the diff -- is treated as broken: under the replan cap this
+    arms the replan gate (`awaiting_replan_approval`) instead of routing back
+    to Coder for another edit the Reviewer already said won't help; at the
+    cap it degrades back to the ordinary changes-requested path, with a
+    critical finding appended documenting that the cap was hit, so the
+    project keeps moving on its existing plan rather than looping forever.
     """
     result, ai_message = asyncio.run(
         review_changes(
@@ -511,6 +588,40 @@ def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: Exe
         )
     )
     cost = router.cost_usd(REVIEWER_ROLE, ai_message.usage_metadata)
+
+    if result.replan_needed and state["replan_count"] < MAX_REPLANS:
+        logger.warning(
+            "project %s: reviewer proposes replan: %s",
+            state["project_id"], result.replan_reason,
+        )
+        return _with_cost(
+            state,
+            {
+                "phase": "awaiting_replan_approval",
+                "curator_source": "reviewer",
+                "pending_approval": _replan_payload(
+                    state, result.replan_reason, "reviewer"
+                ),
+            },
+            cost,
+        )
+    if result.replan_needed:
+        logger.warning(
+            "project %s: reviewer proposed replan at cap, degrading to revision",
+            state["project_id"],
+        )
+        result = result.model_copy(
+            update={
+                "verdict": "changes-requested",
+                "findings": list(result.findings)
+                + [
+                    ReviewFinding(
+                        file="(plan)", line=0, severity="critical",
+                        message=f"replan cap reached: {result.replan_reason}",
+                    )
+                ],
+            }
+        )
 
     if result.verdict == "changes-requested":
         logger.info(
@@ -534,7 +645,11 @@ def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: Exe
 
 
 def route_after_reviewer(state: ProjectState) -> str:
-    """Routes back to Coder for revisions, or onward to frontend review."""
+    """Routes back to Coder for revisions, onward to frontend review, or --
+    when the Reviewer proposed a replan under the cap (ADR-047) -- to the
+    Memory Curator on the way to the replan gate."""
+    if state["phase"] == "awaiting_replan_approval":
+        return "memory_curator"
     if state["phase"] == "implementing":
         return "coder"
     return "frontend_review"
@@ -763,6 +878,45 @@ def route_after_merge_wait(state: ProjectState) -> str:
     return "memory_curator"
 
 
+def node_replan_wait(state: ProjectState) -> dict[str, Any]:
+    """Pauses for a human decision on redrafting the plan (ADR-047).
+
+    Approve sends the graph back to the Planner's draft step with the
+    failure context injected into messages -- the redrafted plan then goes
+    through the normal critique and plan-approval gates again, so a human
+    still signs off on the actual new plan. Anything else halts exactly as
+    a blocked project does today. replan_count is incremented here, the
+    single place a replan is actually granted.
+    """
+    decision = interrupt(state["pending_approval"])
+    if decision != "approve":
+        return {
+            "phase": "blocked",
+            "curator_source": "replan_wait",
+            "pending_approval": None,
+        }
+    payload = state["pending_approval"] or {}
+    context = (
+        "Replan approved. The previous plan failed: "
+        f"{payload.get('reason', 'unknown reason')} (trigger: "
+        f"{payload.get('trigger', 'unknown')}). Draft a corrected plan; "
+        "completed tasks will be preserved and must not be re-planned."
+    )
+    return {
+        "phase": "planning",
+        "curator_source": "replan_wait",
+        "replan_count": state["replan_count"] + 1,
+        "messages": [HumanMessage(content=context)],
+        "pending_approval": None,
+    }
+
+
+def route_after_replan_wait(state: ProjectState) -> str:
+    """Always routes through memory_curator -- see route_after_plan_wait's
+    docstring for why blocked isn't short-circuited here."""
+    return "memory_curator"
+
+
 def node_done(
     state: ProjectState,
     executor_client: ExecutorClient,
@@ -915,6 +1069,11 @@ def route_after_memory_curator(state: ProjectState) -> str:
       (phase=implementing) → back to ``coder``.
     - **plan_wait / cost_wait / merge_wait** (approval resolved): routes to the
       phase set by the wait node (task_decomposition, testing, or done).
+    - **coder / reviewer** (source, phase=awaiting_replan_approval, ADR-047):
+      routes to ``replan_wait`` for a human decision on the proposed replan.
+    - **replan_wait** (source, approval resolved): phase=planning (approved)
+      routes to ``planner_draft`` to redraft; blocked (rejected) is already
+      handled by the phase=="blocked" check above.
 
     Args:
         state: The current project state with ``curator_source`` and ``phase``.
@@ -931,6 +1090,11 @@ def route_after_memory_curator(state: ProjectState) -> str:
         if state["phase"] == "awaiting_merge_approval":
             return "merge_wait"
         return "coder"
+
+    if state["phase"] == "awaiting_replan_approval":
+        return "replan_wait"
+    if source == "replan_wait" and state["phase"] == "planning":
+        return "planner_draft"
 
     if state["phase"] == "implementing":
         return "task_decomposition"

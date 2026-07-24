@@ -5,8 +5,14 @@ call `interrupt()`, which relies on LangGraph's runtime context and can't be
 exercised by calling the bare function directly -- they're covered end to
 end in `test_graph_end_to_end.py` instead. `node_coder` never calls
 `interrupt()` at all, so it's fully testable directly like any other node.
+`node_replan_wait`'s tests below take a third approach: `interrupt` is
+imported by name into `graph.nodes`' module namespace, so monkeypatching
+`services.orchestrator.graph.nodes.interrupt` to a plain stub sidesteps the
+runtime-context requirement entirely and lets the bare function run to
+completion, exercising both branches directly without a real graph.
 """
 
+from services.orchestrator.agents.coder import CoderTask, _TaskList
 from services.orchestrator.agents.frontend_reviewer import FrontendFinding, FrontendReviewResult
 from services.orchestrator.agents.planner import InterviewTurn
 from services.orchestrator.agents.reviewer import ReviewFinding, ReviewResult
@@ -18,6 +24,7 @@ from services.orchestrator.executor_client import (
 )
 from services.orchestrator.executor_client import TestResult as ExecutorTestResult
 from services.orchestrator.graph.nodes import (
+    MAX_REPLANS,
     MAX_TASK_ATTEMPTS,
     node_coder,
     node_done,
@@ -27,6 +34,7 @@ from services.orchestrator.graph.nodes import (
     node_planner_ask,
     node_planner_critique,
     node_planner_draft,
+    node_replan_wait,
     node_reviewer,
     node_static_checks,
     node_task_decomposition,
@@ -34,8 +42,10 @@ from services.orchestrator.graph.nodes import (
     route_after_coder,
     route_after_cost_check,
     route_after_frontend_review,
+    route_after_memory_curator,
     route_after_plan_wait,
     route_after_planner_ask,
+    route_after_replan_wait,
     route_after_reviewer,
     route_after_static_checks,
 )
@@ -247,6 +257,38 @@ def test_node_task_decomposition_populates_task_queue():
     ]
 
 
+def test_task_decomposition_preserves_done_tasks():
+    """On a replan (ADR-047), done tasks from the failed plan are carried
+    forward and everything else (blocked/pending) is dropped in favor of
+    the redrafted plan's fresh decomposition."""
+    two_new_tasks = structured(
+        _TaskList(
+            tasks=[
+                CoderTask(description="New task A"),
+                CoderTask(description="New task B"),
+            ]
+        )
+    )
+    router = FakeRouter([two_new_tasks])
+    state = new_project_state("proj-1")
+    state["plan"] = {"summary": "A corrected test project."}
+    state["task_queue"] = [
+        {"description": "keep me", "status": "done", "attempts": 1},
+        {"description": "drop me", "status": "blocked", "attempts": 3},
+    ]
+
+    update = node_task_decomposition(state, router)
+
+    assert update["task_queue"][0] == {
+        "description": "keep me", "status": "done", "attempts": 1,
+    }
+    assert update["task_queue"][1:] == [
+        {"description": "New task A", "status": "pending", "attempts": 0},
+        {"description": "New task B", "status": "pending", "attempts": 0},
+    ]
+    assert not any(task["description"] == "drop me" for task in update["task_queue"])
+
+
 def test_node_coder_returns_reviewing_phase_when_queue_already_empty():
     state = new_project_state("proj-1")
     state["task_queue"] = []
@@ -328,8 +370,11 @@ def test_node_coder_dedupes_changed_files_across_retries():
 
 
 def test_node_coder_records_changed_files_even_when_task_blocks():
+    """At the replan cap (ADR-047), exhaustion still blocks outright -- this
+    test pins that changed_files is preserved on that path specifically."""
     router = FakeRouter(_write_then_done("partial.py")[:1] * 10)
     state = new_project_state("proj-1")
+    state["replan_count"] = MAX_REPLANS
     state["task_queue"] = [
         {
             "description": "Do the trivial thing",
@@ -407,8 +452,12 @@ def test_node_coder_retries_a_failed_task_below_the_attempt_limit():
 
 
 def test_node_coder_blocks_after_exhausting_the_attempt_budget():
+    """At the replan cap (ADR-047), exhaustion blocks outright, same as
+    before this phase; the under-cap case is covered separately by
+    test_coder_exhaustion_routes_to_replan_when_under_cap."""
     router = FakeRouter([_tool_call("read_file", {"path": "missing.py"})] * 10)
     state = new_project_state("proj-1")
+    state["replan_count"] = MAX_REPLANS
     state["task_queue"] = [
         {
             "description": "Do the trivial thing",
@@ -450,6 +499,57 @@ def test_route_after_coder_sends_reviewing_to_static_checks():
     state["phase"] = "reviewing"
 
     assert route_after_coder(state) == "static_checks"
+
+
+def test_route_after_coder_sends_replan_proposal_to_memory_curator():
+    state = new_project_state("proj-1")
+    state["phase"] = "awaiting_replan_approval"
+
+    assert route_after_coder(state) == "memory_curator"
+
+
+# -- Replan trigger tests (ADR-047) ---------------------------------------------
+
+
+def test_coder_exhaustion_routes_to_replan_when_under_cap():
+    """Third failed attempt: task blocked, but phase becomes
+    awaiting_replan_approval with a replan payload, not a terminal halt."""
+    router = FakeRouter([_tool_call("read_file", {"path": "missing.py"})] * 10)
+    state = new_project_state("proj-1")
+    state["replan_count"] = 0
+    state["task_queue"] = [
+        {
+            "description": "Do the trivial thing",
+            "status": "in_progress",
+            "attempts": MAX_TASK_ATTEMPTS - 1,
+        }
+    ]
+
+    update = node_coder(state, router, executor_client=_RecordingExecutorClient())
+
+    assert update["phase"] == "awaiting_replan_approval"
+    assert update["task_queue"][0]["status"] == "blocked"
+    assert update["curator_source"] == "coder"
+    assert update["pending_approval"]["kind"] == "replan_approval"
+    assert "summary" in update["pending_approval"]
+
+
+def test_coder_exhaustion_at_replan_cap_blocks_as_before():
+    router = FakeRouter([_tool_call("read_file", {"path": "missing.py"})] * 10)
+    state = new_project_state("proj-1")
+    state["replan_count"] = MAX_REPLANS
+    state["task_queue"] = [
+        {
+            "description": "Do the trivial thing",
+            "status": "in_progress",
+            "attempts": MAX_TASK_ATTEMPTS - 1,
+        }
+    ]
+
+    update = node_coder(state, router, executor_client=_RecordingExecutorClient())
+
+    assert update["phase"] == "blocked"
+    assert update.get("pending_approval") is None
 
 
 # -- Static checks node tests (ADR-046) -----------------------------------------
@@ -931,6 +1031,49 @@ def test_route_after_reviewer_loops_back_to_coder_on_changes_requested():
     assert route_after_reviewer(state) == "coder"
 
 
+def test_route_after_reviewer_sends_replan_to_curator():
+    state = new_project_state("proj-1")
+    state["phase"] = "awaiting_replan_approval"
+
+    assert route_after_reviewer(state) == "memory_curator"
+
+
+# -- Reviewer replan trigger tests (ADR-047) ------------------------------------
+
+_REPLAN_REVIEW = structured(
+    ReviewResult(
+        verdict="changes-requested",
+        findings=[],
+        replan_needed=True,
+        replan_reason="false assumption",
+    )
+)
+
+
+def test_reviewer_replan_needed_arms_replan_gate():
+    router = FakeRouter([_REPLAN_REVIEW])
+    state = new_project_state("proj-1")
+    state["replan_count"] = 0
+
+    update = node_reviewer(state, router, _RecordingExecutorClient())
+
+    assert update["phase"] == "awaiting_replan_approval"
+    assert update["curator_source"] == "reviewer"
+    assert update["pending_approval"]["kind"] == "replan_approval"
+    assert "false assumption" in update["pending_approval"]["summary"]
+
+
+def test_reviewer_replan_needed_at_cap_degrades_to_changes_requested():
+    router = FakeRouter([_REPLAN_REVIEW])
+    state = new_project_state("proj-1")
+    state["replan_count"] = MAX_REPLANS
+
+    update = node_reviewer(state, router, _RecordingExecutorClient())
+
+    assert update["phase"] == "implementing"
+    assert "false assumption" in update["messages"][0].content
+
+
 # -- Frontend Reviewer node tests -----------------------------------------------
 
 _APPROVE_FRONTEND = structured(FrontendReviewResult(verdict="approve", findings=[]))
@@ -991,3 +1134,73 @@ def test_route_after_frontend_review_loops_back_to_coder_on_changes_requested():
     state["phase"] = "implementing"
 
     assert route_after_frontend_review(state) == "coder"
+
+
+# -- node_replan_wait / route_after_replan_wait tests (ADR-047) -----------------
+
+
+def _replan_pending_approval() -> dict:
+    return {
+        "kind": "replan_approval",
+        "thread_id": "proj-1",
+        "project_id": "proj-1",
+        "trigger": "coder",
+        "reason": "task 'Do the trivial thing' failed 3 attempts",
+        "replan_count": 0,
+        "summary": "Plan appears broken (coder): task failed -- approve a replan? "
+        "(0/2 replans used)",
+    }
+
+
+def test_replan_wait_approve_returns_to_planning_and_increments_count(monkeypatch):
+    monkeypatch.setattr(
+        "services.orchestrator.graph.nodes.interrupt", lambda payload: "approve"
+    )
+    state = new_project_state("proj-1")
+    state["replan_count"] = 0
+    state["pending_approval"] = _replan_pending_approval()
+
+    update = node_replan_wait(state)
+
+    assert update["phase"] == "planning"
+    assert update["replan_count"] == 1
+    assert update["curator_source"] == "replan_wait"
+    assert update["pending_approval"] is None
+    assert "replan" in update["messages"][0].content.lower()
+
+
+def test_replan_wait_reject_blocks(monkeypatch):
+    monkeypatch.setattr(
+        "services.orchestrator.graph.nodes.interrupt", lambda payload: "reject"
+    )
+    state = new_project_state("proj-1")
+    state["pending_approval"] = _replan_pending_approval()
+
+    update = node_replan_wait(state)
+
+    assert update["phase"] == "blocked"
+    assert update["curator_source"] == "replan_wait"
+    assert update["pending_approval"] is None
+
+
+def test_route_after_replan_wait_always_advances_to_memory_curator():
+    state = new_project_state("proj-1")
+    state["phase"] = "blocked"
+
+    assert route_after_replan_wait(state) == "memory_curator"
+
+
+# -- route_after_memory_curator replan routes (ADR-047) -------------------------
+
+
+def test_route_after_memory_curator_replan_routes():
+    state = new_project_state("proj-1")
+    state["phase"] = "awaiting_replan_approval"
+    state["curator_source"] = "coder"
+
+    assert route_after_memory_curator(state) == "replan_wait"
+
+    state["phase"] = "planning"
+    state["curator_source"] = "replan_wait"
+
+    assert route_after_memory_curator(state) == "planner_draft"

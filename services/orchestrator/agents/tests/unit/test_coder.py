@@ -89,6 +89,22 @@ def test_decompose_plan_into_tasks_raises_on_no_tasks():
         asyncio.run(decompose_plan_into_tasks(router, {"summary": "x"}))
 
 
+def test_decompose_plan_into_tasks_includes_completed_bullets_when_provided():
+    router = FakeRouter([structured(TASK_LIST)])
+
+    asyncio.run(
+        decompose_plan_into_tasks(
+            router,
+            {"summary": "An auth service"},
+            completed_task_descriptions=["Add a User model"],
+        )
+    )
+
+    sent_messages = router.model.requests[-1]
+    prompt_text = sent_messages[-1].content
+    assert "Add a User model" in prompt_text
+
+
 def test_run_coder_task_reads_then_writes_then_finishes():
     router = FakeRouter(
         [

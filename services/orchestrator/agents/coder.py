@@ -120,7 +120,9 @@ def _build_tools(executor_client: ExecutorClient, project_id: str, stack: str) -
 
 
 async def decompose_plan_into_tasks(
-    router: ModelRouter, plan: dict
+    router: ModelRouter,
+    plan: dict,
+    completed_task_descriptions: list[str] | None = None,
 ) -> tuple[list[CoderTask], AIMessage]:
     """Breaks an approved plan into an ordered list of concrete implementation tasks.
 
@@ -128,6 +130,11 @@ async def decompose_plan_into_tasks(
         router: A ModelRouter to resolve the "coder" role from.
         plan: The approved plan dict (a DraftPlan.model_dump(), per
             services.orchestrator.agents.planner).
+        completed_task_descriptions: Descriptions of tasks already finished
+            on a prior pass, e.g. before a replan (ADR-047). When non-empty,
+            appended to the prompt as a block the model must not re-plan.
+            None or empty leaves the prompt unchanged from before this
+            parameter existed.
 
     Returns:
         A tuple of (ordered CoderTasks, raw AIMessage) -- the raw message
@@ -144,6 +151,12 @@ async def decompose_plan_into_tasks(
         f"Goals: {plan.get('goals', [])}\n"
         f"Milestones: {plan.get('milestones', [])}"
     )
+    if completed_task_descriptions:
+        completed_bullets = "\n".join(f"- {desc}" for desc in completed_task_descriptions)
+        plan_text += (
+            "\n\nThe following tasks are already complete and must not be "
+            f"re-planned:\n{completed_bullets}"
+        )
     messages = [
         SystemMessage(content=_DECOMPOSE_SYSTEM_PROMPT),
         HumanMessage(content=plan_text),
