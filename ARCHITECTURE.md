@@ -272,6 +272,7 @@ Full-text recall uses SQLite FTS5 — proven at this scale (Hermes uses the same
 |---|---|---|
 | **Planner / Intake** | Structured interview, then a self-adversarial "roast the plan" critique pass before presenting a final plan for approval. | tool-calling, long context |
 | **Coder** | Implements tasks inside a workspace container via the Executor. | tool-calling |
+| **Static Checks** | Deterministic lint/typecheck/build commands from `stacks.yaml`, run between Coder and Reviewer (ADR-046) — failure loops back to Coder with the raw tool output as feedback, never spending a Reviewer token on output a linter would have caught for free. | none required — deterministic code (`agents/static_checks.py`), no LLM role in `config/models.yaml` |
 | **Reviewer** | Reviews diffs for correctness, style, security smells before tests are even run. | tool-calling |
 | **Tester** | Runs the test suite, computes coverage, compares to the project's configured threshold. | none required — deterministic code (`agents/tester.py`), no LLM role in `config/models.yaml` |
 | **Frontend Reviewer** | Visual review of UI changes (screenshots via Playwright). | vision — routes to Claude by default per §4.4 |
@@ -380,6 +381,7 @@ sequenceDiagram
     EXE->>EXE: spawn ephemeral workspace container
     EXE-->>C: stdout/stderr/exit_code
     C->>O: diff ready
+    O->>O: static checks (deterministic, ADR-046) -- failure loops back to C
     O->>R: review diff
     R->>O: comments / approved
     O->>T: run_tests()
