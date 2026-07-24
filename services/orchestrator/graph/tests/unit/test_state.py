@@ -47,3 +47,14 @@ def test_new_project_state_defaults_compaction_fields_to_empty():
     assert state["messages_summary"] == ""
     assert state["messages_curated_through"] == 0
     assert state["changed_files"] == []
+
+
+def test_new_project_state_starts_with_zero_replans():
+    state = new_project_state("proj1")
+    assert state["replan_count"] == 0
+
+
+def test_awaiting_replan_approval_is_a_valid_phase():
+    state = new_project_state("proj1")
+    state["phase"] = "awaiting_replan_approval"
+    assert state["phase"] == "awaiting_replan_approval"

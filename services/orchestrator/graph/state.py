@@ -15,6 +15,7 @@ Phase = Literal[
     "testing",
     "awaiting_cost_approval",
     "awaiting_merge_approval",
+    "awaiting_replan_approval",
     "pr_pending",
     "done",
     "blocked",
@@ -56,6 +57,7 @@ class ProjectState(TypedDict):
     messages_summary: str
     messages_curated_through: int
     changed_files: list[str]
+    replan_count: int
     pending_approval: dict | None
 
 
@@ -105,7 +107,9 @@ def new_project_state(
             empty, for tests that don't exercise the Planner.
 
     Returns:
-        A fully populated ProjectState with phase "intake".
+        A fully populated ProjectState with phase "intake" and replan_count
+        initialized to 0. The counter is capped at MAX_REPLANS (see
+        graph/nodes.py) per ADR-047.
     """
     return ProjectState(
         project_id=project_id,
@@ -127,5 +131,6 @@ def new_project_state(
         messages_summary="",
         messages_curated_through=0,
         changed_files=[],
+        replan_count=0,
         pending_approval=None,
     )
