@@ -14,7 +14,7 @@ import services.orchestrator.registry.cli as cli
 
 
 def test_build_parser_parses_minimal_greenfield_args():
-    args = cli.build_parser().parse_args(
+    args = cli.build_parser(["python", "node", "go"]).parse_args(
         ["my-project", "--name", "My Project", "--stack", "python"]
     )
 
@@ -29,7 +29,7 @@ def test_build_parser_parses_minimal_greenfield_args():
 
 
 def test_build_parser_rejects_both_from_path_and_git_remote():
-    parser = cli.build_parser()
+    parser = cli.build_parser(["python", "node", "go"])
 
     with pytest.raises(SystemExit):
         parser.parse_args(
@@ -45,6 +45,21 @@ def test_build_parser_rejects_both_from_path_and_git_remote():
                 "url",
             ]
         )
+
+
+def test_build_parser_rejects_unregistered_stack():
+    parser = cli.build_parser(["python", "node"])
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["proj1", "--name", "P", "--stack", "go"])
+
+
+def test_build_parser_accepts_registered_stack():
+    parser = cli.build_parser(["python", "node", "go"])
+
+    args = parser.parse_args(["proj1", "--name", "P", "--stack", "go"])
+
+    assert args.stack == "go"
 
 
 def test_main_registers_greenfield_project_and_starts_intake(tmp_path, monkeypatch):

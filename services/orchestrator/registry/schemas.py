@@ -10,13 +10,17 @@ ProjectMode = Literal["greenfield", "brownfield"]
 PrMode = Literal["auto", "manual", "configurable"]
 CoverageGateMode = Literal["hard", "soft", "configurable"]
 ProjectStatus = Literal["active", "archived"]
-Stack = Literal["python", "node"]
+Stack = str
 
 DEFAULT_COVERAGE_GATE_MODE: CoverageGateMode = "hard"
 
 
 class ProjectRecord(BaseModel):
-    """A single project's entry in `projects.yaml`."""
+    """A single project's entry in `projects.yaml`.
+
+    Valid `stack` values are the keys of `config/stacks.yaml`, enforced at
+    the CLI boundary (`registry/cli.py`), not by this schema.
+    """
 
     id: str
     name: str

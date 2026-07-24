@@ -16,6 +16,7 @@ isn't installed -- the same fix Phase 6 applied to
 import argparse
 import os
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from services.orchestrator.registry.errors import RegistryError
@@ -29,12 +30,21 @@ DEFAULT_PROJECTS_ROOT = Path("/data/projects")
 DEFAULT_REGISTRY_PATH = DEFAULT_PROJECTS_ROOT / "projects.yaml"
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Builds the `new-project` argument parser."""
+def build_parser(stack_choices: Sequence[str]) -> argparse.ArgumentParser:
+    """Builds the `new-project` argument parser.
+
+    Args:
+        stack_choices: Valid --stack values -- the keys of config/stacks.yaml,
+            loaded by main() (ADR-045). Passed in rather than loaded here so
+            the parser stays constructible in tests without pyyaml.
+
+    Returns:
+        An argparse.ArgumentParser configured for the `new-project` CLI.
+    """
     parser = argparse.ArgumentParser(prog="new-project")
     parser.add_argument("project_id")
     parser.add_argument("--name", required=True)
-    parser.add_argument("--stack", required=True, choices=["python", "node"])
+    parser.add_argument("--stack", required=True, choices=sorted(stack_choices))
     parser.add_argument("--coverage-threshold", type=int, default=80)
     parser.add_argument(
         "--pr-mode", choices=["auto", "manual", "configurable"], default="manual"
@@ -98,7 +108,11 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         0 on success, 1 if registration failed.
     """
-    args = build_parser().parse_args(argv)
+    from services.orchestrator.stacks import load_stacks_config
+
+    stacks_path = Path(os.environ.get("STACKS_CONFIG_PATH", "config/stacks.yaml"))
+    stack_choices = sorted(load_stacks_config(stacks_path).stacks)
+    args = build_parser(stack_choices).parse_args(argv)
     description = f"{args.name}: a {args.stack} project"
 
     def on_registered(project_id: str) -> None:

@@ -23,7 +23,7 @@ Phase = Literal[
 Mode = Literal["greenfield", "brownfield"]
 PrMode = Literal["auto", "manual", "configurable"]
 CoverageGateMode = Literal["hard", "soft", "configurable"]
-Stack = Literal["python", "node"]
+Stack = str
 TaskStatus = Literal["pending", "in_progress", "done", "blocked"]
 
 
@@ -32,7 +32,9 @@ class ProjectState(TypedDict):
 
     `pending_approval` is what gets attached to an `interrupt()` payload --
     the Gateway reads it to render the right Telegram message (plan text
-    plus approve/reject buttons, or a cost-threshold alert).
+    plus approve/reject buttons, or a cost-threshold alert). Valid `stack`
+    values are the keys of `config/stacks.yaml`, enforced at the CLI
+    boundary (`registry/cli.py`), not by this schema.
     """
 
     project_id: str
