@@ -69,11 +69,12 @@ def build_project_graph(
     merge_wait] -> memory_curator -> done, with every human-in-the-loop gate
     implemented as a real `interrupt()` call (ADR-009 for cost/merge; the
     Planner's interview and final approval gate are Phase 8; the Coder's
-    retry budget, Phase 9, and static_checks' (ADR-046), never interrupt at
-    all -- see graph/nodes.py's module docstring). When the Coder exhausts a
-    task's retry budget or the Reviewer decides the plan itself is wrong
-    (ADR-047), both route through memory_curator to replan_wait -- the
-    replan gate's own producer/wait pair -- which on approval sends control
+    retry budget (Phase 9) and the static_checks gate (ADR-046) never
+    interrupt at all -- see graph/nodes.py's module docstring). When the
+    Coder exhausts a task's retry budget or the Reviewer decides the plan
+    itself is wrong (ADR-047), both route through memory_curator to
+    replan_wait -- the replan gate's own producer/wait pair -- which on
+    approval sends control
     back to planner_draft for a redraft that goes through the normal
     critique and plan-approval gates again, rather than re-entering the
     interview. `memory_curator` (Phase 14) sits on every phase-transition

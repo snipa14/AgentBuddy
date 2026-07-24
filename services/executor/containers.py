@@ -128,7 +128,7 @@ def workspace_container(
 def _install_dependencies_if_present(
     container: Container, stack_entry: StackConfig, timeout: int
 ) -> None:
-    """Runs stack_entry's package-manager install command for the first manifest file found.
+    """Runs the stack's package-manager install command for the first manifest file found.
 
     Both the presence check and the install itself run *inside* the
     container, never via the Executor's own filesystem -- the Executor's own

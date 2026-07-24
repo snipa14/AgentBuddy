@@ -352,6 +352,12 @@ def node_coder(
     project A actually reaches project B's Coder, instead of the global
     store being write-only in production. None keeps recall off for tests
     that only exercise task/queue mechanics.
+
+    At exhaustion -- the active task's `attempts` reaching `MAX_TASK_ATTEMPTS`
+    -- the task's status becomes "blocked"; if the project is still under the
+    replan cap this also proposes a replan approval (ADR-047) instead of
+    retrying the same task again, otherwise the project phase itself goes to
+    "blocked".
     """
     task_queue = state["task_queue"]
     active_index = next(
@@ -579,8 +585,13 @@ def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: Exe
     arms the replan gate (`awaiting_replan_approval`) instead of routing back
     to Coder for another edit the Reviewer already said won't help; at the
     cap it degrades back to the ordinary changes-requested path, with a
-    critical finding appended documenting that the cap was hit, so the
-    project keeps moving on its existing plan rather than looping forever.
+    critical finding appended documenting that the cap was hit. That
+    degraded verdict routes to Coder as usual, but termination isn't
+    guaranteed: if every task_queue item is already "done", node_coder finds
+    nothing pending/in_progress and no-ops back to "reviewing" without acting
+    on the finding, so the cycle only ends once the Reviewer approves -- a
+    pre-existing Phase-10-era gap this cap doesn't close (tracked as a Phase
+    25 follow-up).
     """
     result, ai_message = asyncio.run(
         review_changes(

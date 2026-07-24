@@ -305,7 +305,7 @@ Each skill's `eval/` directory holds `cases.yaml` (>=2 fixture cases, each plant
 class ProjectState(TypedDict):
     project_id: str
     mode: Literal["greenfield", "brownfield"]
-    stack: Literal["python", "node"]
+    stack: str
     phase: Literal[
         "intake", "planning", "roasting", "awaiting_plan_approval",
         "implementing", "reviewing", "testing", "awaiting_cost_approval",
@@ -327,6 +327,8 @@ class ProjectState(TypedDict):
     replan_count: int
     pending_approval: dict | None
 ```
+
+`stack` is a plain `str`, not a closed `Literal` — Phase 22 widened it so the registry can grow without a code change; the actual set of valid values is whatever keys `config/stacks.yaml` defines, enforced at the registry CLI boundary rather than by the type checker.
 
 `pending_approval` is what gets attached to the `interrupt()` payload — the Gateway reads it to render the right Telegram message (plan text + approve/reject buttons, or "cost threshold reached: $42.10 of $50/week — continue?").
 
