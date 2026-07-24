@@ -309,7 +309,8 @@ class ProjectState(TypedDict):
     phase: Literal[
         "intake", "planning", "roasting", "awaiting_plan_approval",
         "implementing", "reviewing", "testing", "awaiting_cost_approval",
-        "awaiting_merge_approval", "pr_pending", "done", "blocked",
+        "awaiting_merge_approval", "awaiting_replan_approval", "pr_pending",
+        "done", "blocked",
     ]
     plan: dict
     messages: Annotated[list[BaseMessage], add]
@@ -323,12 +324,15 @@ class ProjectState(TypedDict):
     git_branch: str | None
     git_remote_url: str | None
     curator_source: str | None
+    replan_count: int
     pending_approval: dict | None
 ```
 
 `pending_approval` is what gets attached to the `interrupt()` payload — the Gateway reads it to render the right Telegram message (plan text + approve/reject buttons, or "cost threshold reached: $42.10 of $50/week — continue?").
 
 Each `task_queue` item is `{"description": str, "status": "pending" | "in_progress" | "done" | "blocked", "attempts": int}` (ADR-034). Every task for the current implementation phase stays in the list for its lifetime — nothing is removed on completion — so a resumed session or a `/status` query can see the full per-task history, not just whichever task is currently active. There is no separate `current_task` field: the active task (at most one at a time) is whichever item has `status == "in_progress"`.
+
+`replan_count` (ADR-047) counts how many times the human has approved a redraft after a task exhausted `MAX_TASK_ATTEMPTS` or the Reviewer flagged the plan itself as broken (`replan_needed`); it starts at 0 and is incremented only by `node_replan_wait` on approval, never elsewhere. Once it reaches `MAX_REPLANS` (2), the same trigger that would have armed `replan_wait` instead blocks the project outright — `awaiting_replan_approval` and its `replan_approval`-kind `pending_approval` are never produced at the cap.
 
 ---
 
@@ -402,12 +406,20 @@ sequenceDiagram
     TG->>O: Command(resume="approve")
 ```
 
-Every interrupt gate in the per-project subgraph -- cost, merge-to-main, and
-the Planner's plan-approval gate (§6.1) -- shares the same "approve"/
-"reject"/"edit" decision vocabulary and the same generic Telegram renderer
-(one Approve/Reject/Edit inline keyboard), rather than each gate defining
-its own button labels/values. "Edit" isn't handled as a distinct revision
-path yet in any gate; today it's treated the same as "reject".
+Every interrupt gate in the per-project subgraph -- cost, merge-to-main,
+the Planner's plan-approval gate (§6.1), and the replan gate (`replan_wait`,
+ADR-047) -- shares the same "approve"/"reject"/"edit" decision vocabulary
+and the same generic Telegram renderer (one Approve/Reject/Edit inline
+keyboard), rather than each gate defining its own button labels/values.
+"Edit" isn't handled as a distinct revision path yet in any gate; today it's
+treated the same as "reject". `replan_wait` sits between a task exhausting
+`MAX_TASK_ATTEMPTS` (or the Reviewer setting `replan_needed`) and the
+Planner: approval routes back to `planner_draft` with the failure context
+injected into `messages` and every already-`done` task preserved, so the
+redrafted plan goes through the ordinary plan-approval gate again rather
+than being applied unilaterally; rejection halts exactly like every other
+reject path. It is bypassed once `replan_count` reaches `MAX_REPLANS` --
+the triggering condition blocks the project directly instead.
 
 ### 6.3 Merge-to-Main Gate
 
