@@ -20,6 +20,7 @@ test run and successful git commands for any test that reaches node_testing/
 node_done without caring about the specifics.
 """
 
+import pytest
 from langgraph.types import Command
 
 from services.orchestrator.agents.planner import InterviewTurn
@@ -28,9 +29,12 @@ from services.orchestrator.graph.build import DEFAULT_GLOBAL_COST_THRESHOLD_USD,
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.graph.tests.unit.planner_fakes import (
+    CODER_DONE,
     EMPTY_DRAFT,
     NO_FINDINGS_CRITIQUE,
+    ONE_TASK,
     READY_TURN,
+    REVIEWER_APPROVE,
     FakeRouter,
     fast_track_router,
     structured,
@@ -343,3 +347,140 @@ def test_cost_interrupt_fires_from_a_lower_configured_global_threshold(
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "awaiting_cost_approval"
     assert snapshot.values["pending_approval"]["threshold_usd"] == 1.0
+
+
+# -- Definition-of-Done: static_checks gates the Reviewer (ADR-046) ---------------
+
+
+class _RoleTrackingRouter:
+    """Wraps a FakeRouter, recording every `resolve()` call by role and --
+    when `forbidden_role` is given -- raising `AssertionError` instead of
+    returning a model for that one role, rather than silently letting it
+    through.
+
+    Used by the two static_checks DoD tests below to prove the Reviewer LLM
+    is (test 1) never reached, or (test 2) reached exactly once, depending
+    on whether the deterministic check passes -- resolving the role is the
+    earliest observable point a call "would have happened," before any
+    response is even popped off the shared FakeChatModel queue.
+    """
+
+    def __init__(self, responses: list, forbidden_role: str | None = None):
+        self._router = FakeRouter(responses)
+        self.resolved_roles: list[str] = []
+        self._forbidden_role = forbidden_role
+
+    def resolve(self, role):
+        self.resolved_roles.append(role)
+        if role == self._forbidden_role:
+            raise AssertionError(f"{role} must not be called")
+        return self._router.resolve(role)
+
+    def cost_usd(self, role, usage_metadata):
+        return self._router.cost_usd(role, usage_metadata)
+
+
+class _StaticCheckExecutorClient(_StubExecutorClient):
+    """Reuses `_StubExecutorClient`'s always-passing `run_tests`/git behavior
+    (only relevant to the clean-diff test, which drives far enough to reach
+    `node_testing`) but returns a caller-chosen exit code for every
+    `run_command` call.
+
+    static_checks (ADR-046) is the only thing that calls `run_command` along
+    either of these two tests' driven paths -- the Coder's scripted
+    `CODER_DONE` response carries no `tool_calls`, so `run_coder_task` never
+    dispatches a tool -- so one canned exit code is all either test needs.
+    """
+
+    def __init__(self, check_exit_code: int, check_output: str = ""):
+        self.check_exit_code = check_exit_code
+        self.check_output = check_output
+        self.calls: list[tuple] = []
+
+    async def run_command(
+        self, project_id: str, command, timeout=None, stack: str = "python"
+    ) -> CommandResult:
+        self.calls.append((project_id, tuple(command)))
+        return CommandResult(
+            stdout=self.check_output, stderr="", exit_code=self.check_exit_code
+        )
+
+
+def test_lint_broken_diff_never_reaches_reviewer(
+    tmp_path, memory_conn, projects_root, two_stack_registry
+):
+    """DoD (ADR-046): a failing check must route back to coder without any
+    Reviewer LLM call. The router stub raises AssertionError if the graph
+    resolves the 'reviewer' role.
+
+    Scripts exactly the five LLM-shaped responses this driven path can
+    legitimately consume: READY_TURN (planner_ask), EMPTY_DRAFT
+    (planner_draft), NO_FINDINGS_CRITIQUE (planner_critique), ONE_TASK
+    (task_decomposition), CODER_DONE (the Coder's one successful attempt on
+    its only task) -- then deliberately leaves the queue empty. static_checks
+    itself makes no LLM call; when its failure reopens the just-finished task
+    and route_after_static_checks sends control back to "coder" for a second
+    attempt, that second attempt's first `.astream()` call pops an empty
+    list and raises IndexError -- proof that no sixth LLM call, reviewer or
+    otherwise, was ever reached. Per nodes.py's module docstring, a node's
+    state update only commits once the node function fully returns, so the
+    IndexError raised inside this second (never-returning) node_coder call
+    leaves static_checks' committed update -- the reopened task, phase
+    "implementing" -- as the last persisted checkpoint.
+    """
+    router = _RoleTrackingRouter(
+        [READY_TURN, EMPTY_DRAFT, NO_FINDINGS_CRITIQUE, ONE_TASK, CODER_DONE],
+        forbidden_role="reviewer",
+    )
+    executor = _StaticCheckExecutorClient(
+        check_exit_code=1, check_output="app.py:1:1: F821 undefined name"
+    )
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    graph = build_project_graph(
+        checkpointer, router, executor, memory_conn, projects_root, two_stack_registry
+    )
+    config = _config("proj-lint-broken")
+
+    graph.invoke(new_project_state("proj-lint-broken"), config=config)
+    snapshot = graph.get_state(config)
+    assert snapshot.next == ("plan_wait",)
+
+    with pytest.raises(IndexError):
+        graph.invoke(Command(resume="approve"), config=config)
+
+    snapshot = graph.get_state(config)
+    assert snapshot.values["phase"] == "implementing"
+    assert snapshot.values["task_queue"][0]["status"] == "in_progress"
+    assert snapshot.values["task_queue"][0]["attempts"] == 1
+    assert "reviewer" not in router.resolved_roles
+
+
+def test_clean_diff_reaches_reviewer_exactly_as_before(
+    tmp_path, memory_conn, projects_root, two_stack_registry
+):
+    """A passing check set must leave the pre-static_checks behavior intact:
+    the Reviewer's resolve() is called exactly once and the graph proceeds
+    past "reviewing".
+
+    Scripts the same six responses fast_track_router() always has -- adding
+    static_checks (ADR-046) between coder and reviewer changes nothing about
+    LLM call count or order when every applicable check passes, so this
+    reuses the exact fast_track_router() shape rather than a bespoke one.
+    """
+    router = _RoleTrackingRouter(
+        [READY_TURN, EMPTY_DRAFT, NO_FINDINGS_CRITIQUE, ONE_TASK, CODER_DONE, REVIEWER_APPROVE]
+    )
+    executor = _StaticCheckExecutorClient(check_exit_code=0)
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    graph = build_project_graph(
+        checkpointer, router, executor, memory_conn, projects_root, two_stack_registry
+    )
+    config = _config("proj-lint-clean")
+
+    graph.invoke(new_project_state("proj-lint-clean"), config=config)
+    graph.invoke(Command(resume="approve"), config=config)
+
+    snapshot = graph.get_state(config)
+    assert snapshot.values["phase"] == "awaiting_merge_approval"
+    assert snapshot.next == ("merge_wait",)
+    assert router.resolved_roles.count("reviewer") == 1
