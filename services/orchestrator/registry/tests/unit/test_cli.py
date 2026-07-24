@@ -82,7 +82,9 @@ def test_build_parser_accepts_registered_stack():
     assert args.stack == "go"
 
 
-def test_main_registers_greenfield_project_and_starts_intake(tmp_path, monkeypatch, stacks_config_env):
+def test_main_registers_greenfield_project_and_starts_intake(
+    tmp_path, monkeypatch, stacks_config_env
+):
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path)
     monkeypatch.setattr(cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
     started = []
@@ -97,7 +99,9 @@ def test_main_registers_greenfield_project_and_starts_intake(tmp_path, monkeypat
     assert (tmp_path / "my-project").is_dir()
 
 
-def test_main_registers_brownfield_project_from_local_path(tmp_path, monkeypatch, stacks_config_env):
+def test_main_registers_brownfield_project_from_local_path(
+    tmp_path, monkeypatch, stacks_config_env
+):
     source = tmp_path / "existing-code"
     source.mkdir()
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path / "projects")
@@ -123,7 +127,9 @@ def test_main_registers_brownfield_project_from_local_path(tmp_path, monkeypatch
     assert started == ["my-project"]
 
 
-def test_main_registers_brownfield_project_from_git_remote(tmp_path, monkeypatch, stacks_config_env):
+def test_main_registers_brownfield_project_from_git_remote(
+    tmp_path, monkeypatch, stacks_config_env
+):
     source = tmp_path / "source-repo"
     source.mkdir()
     subprocess.run(["git", "init", "-q", str(source)], check=True)
@@ -157,7 +163,9 @@ def test_main_registers_brownfield_project_from_git_remote(tmp_path, monkeypatch
     assert started == ["my-project"]
 
 
-def test_main_returns_error_code_and_message_on_duplicate(tmp_path, monkeypatch, capsys, stacks_config_env):
+def test_main_returns_error_code_and_message_on_duplicate(
+    tmp_path, monkeypatch, capsys, stacks_config_env
+):
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path)
     monkeypatch.setattr(cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
     monkeypatch.setattr(cli, "_start_intake", lambda project_id, description: None)
