@@ -35,6 +35,7 @@ from services.orchestrator.graph.tests.unit.planner_fakes import (
     FakeRouter,
     structured,
 )
+from services.orchestrator.stacks import StacksConfig
 
 
 class _StubExecutorClient:
@@ -94,7 +95,12 @@ def test_two_interleaved_projects_do_not_bleed_plan_or_task_queue(
         + _resume_script("Beta-only task")
     )
     graph = build_project_graph(
-        checkpointer, router, _StubExecutorClient(), memory_conn, projects_root
+        checkpointer,
+        router,
+        _StubExecutorClient(),
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
     )
     config_a = _config("proj-alpha")
     config_b = _config("proj-beta")

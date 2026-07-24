@@ -17,6 +17,7 @@ from services.orchestrator.graph.nodes import node_done, route_after_merge_wait
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.graph.tests.unit.planner_fakes import fast_track_router
 from services.orchestrator.integrator_client import IntegratorClient
+from services.orchestrator.stacks import StacksConfig
 
 
 # -- Recording executor client (real ExecutorClient.run_command contract: an
@@ -75,7 +76,12 @@ class TestBlockedWithoutApproval:
         executor = _RecordingExecutorClient()
         checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
         graph = build_project_graph(
-            checkpointer, fast_track_router(), executor, memory_conn, projects_root
+            checkpointer,
+            fast_track_router(),
+            executor,
+            memory_conn,
+            projects_root,
+            StacksConfig(stacks={}),
         )
         config = {"configurable": {"thread_id": "proj-blocked"}}
 

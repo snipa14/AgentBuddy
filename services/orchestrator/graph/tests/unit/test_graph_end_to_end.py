@@ -35,6 +35,7 @@ from services.orchestrator.graph.tests.unit.planner_fakes import (
     fast_track_router,
     structured,
 )
+from services.orchestrator.stacks import StacksConfig
 
 
 class _StubExecutorClient:
@@ -73,7 +74,14 @@ def test_planner_interview_asks_a_question_before_reaching_plan_approval(
         ]
     )
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, router, _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
+    graph = build_project_graph(
+        checkpointer,
+        router,
+        _UNUSED_EXECUTOR_CLIENT,
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
+    )
     config = _config("proj-interview")
 
     graph.invoke(
@@ -104,7 +112,14 @@ def test_project_below_cost_threshold_reaches_plan_approval_then_merge_gate(
     tmp_path, memory_conn, projects_root
 ):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
+    graph = build_project_graph(
+        checkpointer,
+        fast_track_router(),
+        _UNUSED_EXECUTOR_CLIENT,
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
+    )
     config = _config("proj-under-budget")
 
     graph.invoke(new_project_state("proj-under-budget"), config=config)
@@ -129,7 +144,14 @@ def test_project_below_cost_threshold_reaches_plan_approval_then_merge_gate(
 
 def test_cost_interrupt_fires_at_threshold(tmp_path, memory_conn, projects_root):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
+    graph = build_project_graph(
+        checkpointer,
+        fast_track_router(),
+        _UNUSED_EXECUTOR_CLIENT,
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
+    )
     config = _config("proj-over-budget")
     graph.invoke(
         new_project_state("proj-over-budget", cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
@@ -148,7 +170,14 @@ def test_resume_approve_after_cost_interrupt_reaches_merge_gate(
     tmp_path, memory_conn, projects_root
 ):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
+    graph = build_project_graph(
+        checkpointer,
+        fast_track_router(),
+        _UNUSED_EXECUTOR_CLIENT,
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
+    )
     config = _config("proj-resume-continue")
     graph.invoke(
         new_project_state("proj-resume-continue", cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
@@ -167,7 +196,14 @@ def test_resume_reject_after_cost_interrupt_blocks_and_halts_the_run(
     tmp_path, memory_conn, projects_root
 ):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
+    graph = build_project_graph(
+        checkpointer,
+        fast_track_router(),
+        _UNUSED_EXECUTOR_CLIENT,
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
+    )
     config = _config("proj-resume-pause")
     graph.invoke(
         new_project_state("proj-resume-pause", cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
@@ -186,7 +222,14 @@ def test_resume_reject_at_merge_gate_blocks_and_halts_the_run(
     tmp_path, memory_conn, projects_root
 ):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
+    graph = build_project_graph(
+        checkpointer,
+        fast_track_router(),
+        _UNUSED_EXECUTOR_CLIENT,
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
+    )
     config = _config("proj-reject-merge")
     graph.invoke(new_project_state("proj-reject-merge"), config=config)
     graph.invoke(Command(resume="approve"), config=config)
@@ -202,7 +245,14 @@ def test_resume_approve_at_merge_gate_reaches_done(
     tmp_path, memory_conn, projects_root
 ):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
-    graph = build_project_graph(checkpointer, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root)
+    graph = build_project_graph(
+        checkpointer,
+        fast_track_router(),
+        _UNUSED_EXECUTOR_CLIENT,
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
+    )
     config = _config("proj-approve-merge")
     graph.invoke(new_project_state("proj-approve-merge"), config=config)
     graph.invoke(Command(resume="approve"), config=config)
@@ -232,7 +282,12 @@ def test_pending_interrupt_survives_a_simulated_restart(
 
     checkpointer_before_restart = build_sqlite_checkpointer(db_path)
     graph_before_restart = build_project_graph(
-        checkpointer_before_restart, fast_track_router(), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root
+        checkpointer_before_restart,
+        fast_track_router(),
+        _UNUSED_EXECUTOR_CLIENT,
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
     )
     graph_before_restart.invoke(
         new_project_state(project_id, cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
@@ -245,7 +300,12 @@ def test_pending_interrupt_survives_a_simulated_restart(
 
     checkpointer_after_restart = build_sqlite_checkpointer(db_path)
     graph_after_restart = build_project_graph(
-        checkpointer_after_restart, FakeRouter([]), _UNUSED_EXECUTOR_CLIENT, memory_conn, projects_root
+        checkpointer_after_restart,
+        FakeRouter([]),
+        _UNUSED_EXECUTOR_CLIENT,
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
     )
 
     snapshot_after_restart = graph_after_restart.get_state(config)
@@ -272,6 +332,7 @@ def test_cost_interrupt_fires_from_a_lower_configured_global_threshold(
         _UNUSED_EXECUTOR_CLIENT,
         memory_conn,
         projects_root,
+        StacksConfig(stacks={}),
         global_cost_threshold_usd=1.0,
     )
     config = _config("proj-tiny-budget")
