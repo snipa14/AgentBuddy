@@ -198,22 +198,27 @@ def tool_run_tests(
         client: A Docker SDK client.
         config: The Executor's runtime configuration.
         project_id: The project whose directory gets bind-mounted.
-        framework: "pytest" (default, coverage-parsed) or "npm" (runs
-            `npm test`; TestResult.coverage_pct is always None, since no
-            Node coverage report format is parsed yet).
+        framework: The legacy fallback test command selector, used only when
+            stack has no registered test_command in config.stacks: "pytest"
+            (default, coverage-parsed) or "npm" (runs `npm test`).
         stack: The project's declared stack -- selects the workspace image
-            and cache volume (ADR-028); also runs that stack's dependency
+            and cache volume (ADR-028) and, when registered, the test
+            command to run (ADR-045); also runs that stack's dependency
             manifest check/install before the test command executes.
 
     Returns:
         A TestResult with passed/failed counts, coverage percentage (if
-        parseable from the report -- pytest only), and the raw combined
-        output.
+        parseable from the report -- coverage.py output only), and the raw
+        combined output.
 
     Raises:
-        ValueError: If framework isn't "pytest" or "npm".
+        ValueError: If stack has no registered test_command and framework
+            isn't "pytest" or "npm".
     """
-    if framework == "pytest":
+    entry = config.stacks.stacks.get(stack)
+    if entry is not None and entry.test_command is not None:
+        command = entry.test_command
+    elif framework == "pytest":
         command = ["python3", "-m", "pytest", "--cov=.", "--cov-report=term-missing", "-q"]
     elif framework == "npm":
         command = ["npm", "test"]
@@ -231,7 +236,7 @@ def tool_run_tests(
     return TestResult(
         passed=passed,
         failed=failed,
-        coverage_pct=_parse_coverage_pct(combined_output) if framework == "pytest" else None,
+        coverage_pct=_parse_coverage_pct(combined_output),
         report=combined_output,
     )
 

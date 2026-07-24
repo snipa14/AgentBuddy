@@ -8,6 +8,9 @@ Phase 17 onward a container may also get a second mount: a per-project,
 per-stack named cache volume for its package manager (`pip`/`npm`) --
 still zero host paths outside `projects/<id>/`, since a Docker-managed named
 volume isn't a host path, and it's only ever used for that cache directory.
+Which stacks get a cache volume, and which manifest/install commands run,
+is driven entirely by the registry loaded from config/stacks.yaml (ADR-045)
+rather than by anything hardcoded in this module.
 """
 
 import concurrent.futures
@@ -23,25 +26,13 @@ from docker.models.containers import Container
 from services.executor.config import ExecutorConfig, image_for_stack
 from services.executor.errors import CommandTimeoutError, ContainerExecutionError
 from services.executor.schemas import CommandResult
+from services.executor.stacks import StackConfig
 
 logger = logging.getLogger(__name__)
 
 WORKSPACE_MOUNT_TARGET = "/workspace"
 WORKSPACE_UID = 1000
 WORKSPACE_IDLE_COMMAND = ["sleep", "infinity"]
-
-CACHE_VOLUME_TARGET_FOR_STACK: dict[str, str] = {
-    "python": "/home/sandbox/.cache/pip",
-    "node": "/home/sandbox/.npm",
-}
-
-MANIFEST_INSTALL_COMMANDS_FOR_STACK: dict[str, list[tuple[str, list[str]]]] = {
-    "python": [
-        ("requirements.txt", ["pip", "install", "--user", "-r", "requirements.txt"]),
-        ("pyproject.toml", ["pip", "install", "--user", "-e", "."]),
-    ],
-    "node": [("package.json", ["npm", "install"])],
-}
 
 
 def cache_volume_name(project_id: str) -> str:
@@ -92,10 +83,12 @@ def workspace_container(
     if project_id is None:
         project_id = project_host_path.name
 
+    stack_entry = config.stacks.stacks.get(stack)
     volumes = {str(project_host_path): {"bind": WORKSPACE_MOUNT_TARGET, "mode": "rw"}}
-    cache_target = CACHE_VOLUME_TARGET_FOR_STACK.get(stack)
-    if cache_target is not None:
-        volumes[cache_volume_name(project_id)] = {"bind": cache_target, "mode": "rw"}
+    if stack_entry is not None and stack_entry.cache_dir is not None:
+        volumes[cache_volume_name(project_id)] = {
+            "bind": stack_entry.cache_dir, "mode": "rw",
+        }
 
     container: Container | None = None
     try:
@@ -115,8 +108,10 @@ def workspace_container(
             )
         except (APIError, ImageNotFound) as exc:
             raise ContainerExecutionError(f"failed to start workspace container: {exc}") from exc
-        if install_dependencies:
-            _install_dependencies_if_present(container, stack, config.command_timeout_seconds)
+        if install_dependencies and stack_entry is not None:
+            _install_dependencies_if_present(
+                container, stack_entry, config.command_timeout_seconds
+            )
         yield container
     finally:
         if container is not None:
@@ -130,8 +125,10 @@ def workspace_container(
                 )
 
 
-def _install_dependencies_if_present(container: Container, stack: str, timeout: int) -> None:
-    """Runs stack's package-manager install command for the first manifest file found.
+def _install_dependencies_if_present(
+    container: Container, stack_entry: StackConfig, timeout: int
+) -> None:
+    """Runs stack_entry's package-manager install command for the first manifest file found.
 
     Both the presence check and the install itself run *inside* the
     container, never via the Executor's own filesystem -- the Executor's own
@@ -143,18 +140,18 @@ def _install_dependencies_if_present(container: Container, stack: str, timeout: 
 
     A stack may have more than one recognized manifest (Python's
     `requirements.txt` and `pyproject.toml`); the first one found, checked in
-    the order registered in MANIFEST_INSTALL_COMMANDS_FOR_STACK, wins -- a
-    project with both is expected to be the rare exception, not the norm.
+    the order registered in config/stacks.yaml (ADR-045), wins -- a project
+    with both is expected to be the rare exception, not the norm.
 
     Args:
         container: An already-running workspace container.
-        stack: The project's declared stack.
+        stack_entry: The project's declared stack's registry entry.
         timeout: Seconds to allow each check/install command.
     """
-    for manifest_file, install_command in MANIFEST_INSTALL_COMMANDS_FOR_STACK.get(stack, []):
-        check = exec_in_container(container, ["test", "-f", manifest_file], timeout)
+    for manifest in stack_entry.manifests:
+        check = exec_in_container(container, ["test", "-f", manifest.file], timeout)
         if check.exit_code == 0:
-            exec_in_container(container, install_command, timeout)
+            exec_in_container(container, manifest.install_command, timeout)
             return
 
 
@@ -196,9 +193,10 @@ def clear_project_cache_volume(
             (if any) to clear inside the volume. A stack with no registered
             cache directory is a no-op.
     """
-    if stack not in CACHE_VOLUME_TARGET_FOR_STACK:
+    stack_entry = config.stacks.stacks.get(stack)
+    if stack_entry is None or stack_entry.cache_dir is None:
         return
-    cache_target = CACHE_VOLUME_TARGET_FOR_STACK[stack]
+    cache_target = stack_entry.cache_dir
     with workspace_container(client, config, project_host_path, stack=stack, project_id=project_id) as container:
         exec_in_container(
             container, ["find", cache_target, "-mindepth", "1", "-delete"], config.command_timeout_seconds

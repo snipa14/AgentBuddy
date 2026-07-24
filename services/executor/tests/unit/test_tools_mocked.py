@@ -15,6 +15,7 @@ from docker.models.containers import Container
 
 from services.executor.config import ExecutorConfig
 from services.executor.errors import ContainerExecutionError, PathTraversalError
+from services.executor.stacks import StackConfig, StacksConfig
 from services.executor.tools import (
     _build_single_file_tar,
     tool_list_files,
@@ -188,6 +189,39 @@ def test_tool_run_tests_parses_passed_failed_and_coverage(mock_client, mock_cont
     assert result.failed == 1
     assert result.coverage_pct == 90.0
     assert pytest_output in result.report
+
+
+def test_tool_run_tests_uses_registry_test_command_for_registered_stack(
+    mock_client, mock_container, tmp_path
+):
+    go_registry = StacksConfig(
+        stacks={
+            "go": StackConfig(
+                image="foundry/workspace-go:1.22",
+                base_image="golang:1.22-slim",
+                test_command=["go", "test", "./..."],
+            )
+        }
+    )
+    config = ExecutorConfig(projects_host_path=tmp_path, stacks=go_registry)
+    mock_container.exec_run.return_value = (0, (b"ok\n", b""))
+
+    tool_run_tests(mock_client, config, "proj-1", stack="go")
+
+    command = mock_container.exec_run.call_args.args[0]
+    assert command == ["go", "test", "./..."]
+
+
+def test_tool_run_tests_falls_back_to_framework_for_unregistered_stack(
+    mock_client, mock_container, two_stack_registry, tmp_path
+):
+    config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
+    mock_container.exec_run.return_value = (0, (b"ok\n", b""))
+
+    tool_run_tests(mock_client, config, "proj-1", framework="npm", stack="ruby")
+
+    command = mock_container.exec_run.call_args.args[0]
+    assert command == ["npm", "test"]
 
 
 def test_tool_take_screenshot_returns_image_b64_on_success(mock_client, mock_container, config):

@@ -21,7 +21,8 @@ RUN pip install --no-cache-dir \
     "docker>=7.1" \
     "fastapi>=0.115" \
     "uvicorn>=0.30" \
-    "httpx>=0.27"
+    "httpx>=0.27" \
+    "pyyaml>=6.0"
 
 COPY services/__init__.py services/__init__.py
 COPY services/executor/ services/executor/

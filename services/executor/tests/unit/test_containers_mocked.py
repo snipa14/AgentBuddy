@@ -20,6 +20,7 @@ from services.executor.containers import (
     workspace_container,
 )
 from services.executor.errors import CommandTimeoutError, ContainerExecutionError
+from services.executor.stacks import StackConfig
 
 
 @pytest.fixture
@@ -66,7 +67,10 @@ def test_exec_in_container_kills_container_and_raises_on_timeout():
     mock_container.kill.assert_called_once()
 
 
-def test_workspace_container_mounts_python_cache_volume_at_pip_cache_path(config, tmp_path):
+def test_workspace_container_mounts_python_cache_volume_at_pip_cache_path(
+    two_stack_registry, tmp_path
+):
+    config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
     mock_container = MagicMock(spec=Container)
     client = MagicMock()
     client.containers.run.return_value = mock_container
@@ -81,7 +85,10 @@ def test_workspace_container_mounts_python_cache_volume_at_pip_cache_path(config
     }
 
 
-def test_workspace_container_mounts_node_cache_volume_at_npm_cache_path(config, tmp_path):
+def test_workspace_container_mounts_node_cache_volume_at_npm_cache_path(
+    two_stack_registry, tmp_path
+):
+    config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
     mock_container = MagicMock(spec=Container)
     client = MagicMock()
     client.containers.run.return_value = mock_container
@@ -96,7 +103,10 @@ def test_workspace_container_mounts_node_cache_volume_at_npm_cache_path(config, 
     }
 
 
-def test_workspace_container_omits_cache_volume_for_a_stack_with_none_registered(config, tmp_path):
+def test_workspace_container_omits_cache_volume_for_a_stack_with_none_registered(
+    two_stack_registry, tmp_path
+):
+    config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
     mock_container = MagicMock(spec=Container)
     client = MagicMock()
     client.containers.run.return_value = mock_container
@@ -109,11 +119,29 @@ def test_workspace_container_omits_cache_volume_for_a_stack_with_none_registered
     assert "foundry-cache-proj-1" not in run_kwargs["volumes"]
 
 
-def test_install_dependencies_if_present_runs_pip_install_when_requirements_txt_exists():
+def test_workspace_container_unknown_stack_gets_only_the_project_bind_mount(config, tmp_path):
+    mock_container = MagicMock(spec=Container)
+    client = MagicMock()
+    client.containers.run.return_value = mock_container
+
+    with workspace_container(client, config, tmp_path, stack="cobol", project_id="proj-1"):
+        pass
+
+    _, run_kwargs = client.containers.run.call_args
+    assert len(run_kwargs["volumes"]) == 1
+    mount_source = str(tmp_path)
+    assert run_kwargs["volumes"][mount_source] == {"bind": "/workspace", "mode": "rw"}
+
+
+def test_install_dependencies_if_present_runs_pip_install_when_requirements_txt_exists(
+    two_stack_registry,
+):
     mock_container = MagicMock(spec=Container)
     mock_container.exec_run.side_effect = [(0, (b"", b"")), (0, (b"installed\n", b""))]
 
-    _install_dependencies_if_present(mock_container, "python", timeout=5)
+    _install_dependencies_if_present(
+        mock_container, two_stack_registry.stacks["python"], timeout=5
+    )
 
     calls = mock_container.exec_run.call_args_list
     assert len(calls) == 2
@@ -121,7 +149,7 @@ def test_install_dependencies_if_present_runs_pip_install_when_requirements_txt_
     assert calls[1].args[0] == ["pip", "install", "--user", "-r", "requirements.txt"]
 
 
-def test_install_dependencies_if_present_falls_back_to_pyproject_toml():
+def test_install_dependencies_if_present_falls_back_to_pyproject_toml(two_stack_registry):
     mock_container = MagicMock(spec=Container)
     mock_container.exec_run.side_effect = [
         (1, (b"", b"")),
@@ -129,7 +157,9 @@ def test_install_dependencies_if_present_falls_back_to_pyproject_toml():
         (0, (b"installed\n", b"")),
     ]
 
-    _install_dependencies_if_present(mock_container, "python", timeout=5)
+    _install_dependencies_if_present(
+        mock_container, two_stack_registry.stacks["python"], timeout=5
+    )
 
     calls = mock_container.exec_run.call_args_list
     assert len(calls) == 3
@@ -138,11 +168,13 @@ def test_install_dependencies_if_present_falls_back_to_pyproject_toml():
     assert calls[2].args[0] == ["pip", "install", "--user", "-e", "."]
 
 
-def test_install_dependencies_if_present_runs_npm_install_when_package_json_exists():
+def test_install_dependencies_if_present_runs_npm_install_when_package_json_exists(
+    two_stack_registry,
+):
     mock_container = MagicMock(spec=Container)
     mock_container.exec_run.side_effect = [(0, (b"", b"")), (0, (b"installed\n", b""))]
 
-    _install_dependencies_if_present(mock_container, "node", timeout=5)
+    _install_dependencies_if_present(mock_container, two_stack_registry.stacks["node"], timeout=5)
 
     calls = mock_container.exec_run.call_args_list
     assert len(calls) == 2
@@ -150,11 +182,15 @@ def test_install_dependencies_if_present_runs_npm_install_when_package_json_exis
     assert calls[1].args[0] == ["npm", "install"]
 
 
-def test_install_dependencies_if_present_skips_install_when_no_manifest_is_present():
+def test_install_dependencies_if_present_skips_install_when_no_manifest_is_present(
+    two_stack_registry,
+):
     mock_container = MagicMock(spec=Container)
     mock_container.exec_run.return_value = (1, (b"", b""))
 
-    _install_dependencies_if_present(mock_container, "python", timeout=5)
+    _install_dependencies_if_present(
+        mock_container, two_stack_registry.stacks["python"], timeout=5
+    )
 
     calls = mock_container.exec_run.call_args_list
     assert len(calls) == 2
@@ -164,7 +200,8 @@ def test_install_dependencies_if_present_skips_install_when_no_manifest_is_prese
 
 def test_install_dependencies_if_present_is_a_noop_for_a_stack_without_a_manifest():
     mock_container = MagicMock(spec=Container)
+    stack_entry = StackConfig(image="foundry/workspace-ruby:3", base_image="ruby:3-slim")
 
-    _install_dependencies_if_present(mock_container, "ruby", timeout=5)
+    _install_dependencies_if_present(mock_container, stack_entry, timeout=5)
 
     mock_container.exec_run.assert_not_called()
