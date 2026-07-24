@@ -13,6 +13,26 @@ import pytest
 import services.orchestrator.registry.cli as cli
 
 
+@pytest.fixture()
+def stacks_config_env(monkeypatch, tmp_path):
+    """Points STACKS_CONFIG_PATH at a tmp stacks.yaml so main() never reads
+    the repo's real config/stacks.yaml (unit tier: no real filesystem)."""
+    stacks_file = tmp_path / "stacks.yaml"
+    stacks_file.write_text(
+        "stacks:\n"
+        "  python:\n"
+        "    image: foundry/workspace-python:3.12\n"
+        "    base_image: python:3.12-slim\n"
+        "  node:\n"
+        "    image: foundry/workspace-node:20\n"
+        "    base_image: node:20-slim\n"
+        "  go:\n"
+        "    image: foundry/workspace-go:1.22\n"
+        "    base_image: golang:1.22-bookworm\n"
+    )
+    monkeypatch.setenv("STACKS_CONFIG_PATH", str(stacks_file))
+
+
 def test_build_parser_parses_minimal_greenfield_args():
     args = cli.build_parser(["python", "node", "go"]).parse_args(
         ["my-project", "--name", "My Project", "--stack", "python"]
@@ -62,7 +82,7 @@ def test_build_parser_accepts_registered_stack():
     assert args.stack == "go"
 
 
-def test_main_registers_greenfield_project_and_starts_intake(tmp_path, monkeypatch):
+def test_main_registers_greenfield_project_and_starts_intake(tmp_path, monkeypatch, stacks_config_env):
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path)
     monkeypatch.setattr(cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
     started = []
@@ -77,7 +97,7 @@ def test_main_registers_greenfield_project_and_starts_intake(tmp_path, monkeypat
     assert (tmp_path / "my-project").is_dir()
 
 
-def test_main_registers_brownfield_project_from_local_path(tmp_path, monkeypatch):
+def test_main_registers_brownfield_project_from_local_path(tmp_path, monkeypatch, stacks_config_env):
     source = tmp_path / "existing-code"
     source.mkdir()
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path / "projects")
@@ -103,7 +123,7 @@ def test_main_registers_brownfield_project_from_local_path(tmp_path, monkeypatch
     assert started == ["my-project"]
 
 
-def test_main_registers_brownfield_project_from_git_remote(tmp_path, monkeypatch):
+def test_main_registers_brownfield_project_from_git_remote(tmp_path, monkeypatch, stacks_config_env):
     source = tmp_path / "source-repo"
     source.mkdir()
     subprocess.run(["git", "init", "-q", str(source)], check=True)
@@ -137,7 +157,7 @@ def test_main_registers_brownfield_project_from_git_remote(tmp_path, monkeypatch
     assert started == ["my-project"]
 
 
-def test_main_returns_error_code_and_message_on_duplicate(tmp_path, monkeypatch, capsys):
+def test_main_returns_error_code_and_message_on_duplicate(tmp_path, monkeypatch, capsys, stacks_config_env):
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path)
     monkeypatch.setattr(cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
     monkeypatch.setattr(cli, "_start_intake", lambda project_id, description: None)
