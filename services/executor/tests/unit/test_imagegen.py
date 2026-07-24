@@ -81,6 +81,26 @@ def test_instruction_lines_drops_comments_and_blanks():
     assert instruction_lines(text) == ["FROM x", "RUN a && b"]
 
 
+def test_render_rejects_empty_apt_packages():
+    stack = StackConfig(
+        image="foundry/workspace-x:1",
+        base_image="debian:12-slim",
+        pip_packages=["playwright"],
+    )
+    with pytest.raises(ValueError, match="apt_packages"):
+        render_dockerfile("x", stack, TEMPLATE_PATH.read_text())
+
+
+def test_render_rejects_empty_pip_packages():
+    stack = StackConfig(
+        image="foundry/workspace-x:1",
+        base_image="debian:12-slim",
+        apt_packages=["git"],
+    )
+    with pytest.raises(ValueError, match="pip_packages"):
+        render_dockerfile("x", stack, TEMPLATE_PATH.read_text())
+
+
 def test_golden_rendered_matches_committed_dockerfiles():
     yaml = pytest.importorskip("yaml")
     del yaml

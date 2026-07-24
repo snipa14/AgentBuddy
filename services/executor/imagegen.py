@@ -38,7 +38,22 @@ def render_dockerfile(stack_name: str, stack: StackConfig, template_text: str) -
     Returns:
         The complete Dockerfile text, with runs of blank lines collapsed so
         stacks without extra env lines don't render double blanks.
+
+    Raises:
+        ValueError: If stack.apt_packages is empty or if stack.pip_packages
+            is empty. Workspace images require both to build correctly and
+            every image needs the shared tool layer (Playwright, etc.).
     """
+    if not stack.apt_packages:
+        raise ValueError(
+            f"stack {stack_name!r} declares no apt_packages; the workspace "
+            "template's apt-get block requires at least one"
+        )
+    if not stack.pip_packages:
+        raise ValueError(
+            f"stack {stack_name!r} declares no pip_packages; every workspace "
+            "image needs at least Playwright (ADR-028)"
+        )
     apt_package_lines = "\n".join(
         f"{_APT_INDENT}{package} \\" for package in stack.apt_packages
     )
