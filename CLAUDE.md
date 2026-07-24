@@ -47,6 +47,10 @@ pytest --cov=services --cov-report=term-missing
 # build workspace base images (run before first project)
 docker build -t foundry/workspace-python:3.12 images/workspace-python/
 docker build -t foundry/workspace-node:20 images/workspace-node/
+docker build -t foundry/workspace-go:1.22 images/workspace-go/
+
+# regenerate workspace Dockerfiles from config/stacks.yaml (run after editing stacks.yaml)
+python3 scripts/gen_workspace_images.py
 ```
 
 ## Architecture map
