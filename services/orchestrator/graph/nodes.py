@@ -4,11 +4,16 @@ The Planner (Phase 8), Coder (Phase 9), Reviewer (Phase 10), and Tester
 (Phase 11) agents all replace what used to be single stub "planning"/
 "implementing"/"testing" nodes with real flows: interview -> draft -> critique
 -> approval, task-decomposition -> implement -> retry, review -> approve/revise,
-and pytest + coverage gate. The Git/GitHub Integrator (Phase 13) turns the
-terminal "done" node into a real commit/push/PR step, and the Memory Curator
-(Phase 14) runs after every phase-transition edge and approval resolution via
-its own `memory_curator` node rather than being called inline from each of
-those nodes -- see `node_memory_curator`'s docstring for why.
+and pytest + coverage gate. A deterministic `static_checks` gate (Phase 23,
+ADR-046) sits between Coder and Reviewer -- no LLM calls, so it never touches
+cost tracking -- running the stack's linters/type-checkers so a Reviewer token
+is never spent on output that a cheap deterministic check would have caught;
+the full chain is Coder -> static_checks -> Reviewer -> Tester. The Git/GitHub
+Integrator (Phase 13) turns the terminal "done" node into a real commit/push/PR
+step, and the Memory Curator (Phase 14) runs after every phase-transition edge
+and approval resolution via its own `memory_curator` node rather than being
+called inline from each of those nodes -- see `node_memory_curator`'s
+docstring for why.
 
 Every human-in-the-loop gate is split into two nodes -- a "check"/producer
 node that decides what to show the human and commits the `phase`/
@@ -84,6 +89,7 @@ from services.orchestrator.agents.planner import (
     draft_plan,
 )
 from services.orchestrator.agents.reviewer import REVIEWER_ROLE, review_changes
+from services.orchestrator.agents.static_checks import run_static_checks
 from services.orchestrator.agents.tester import run_tests
 from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.cost_aggregator import other_projects_cost_usd_weekly
@@ -91,6 +97,7 @@ from services.orchestrator.graph.state import ProjectState
 from services.orchestrator.memory.global_store import recall_for_task
 from services.orchestrator.integrator_client import IntegratorClient
 from services.orchestrator.model_router.router import ModelRouter
+from services.orchestrator.stacks import StacksConfig
 
 logger = logging.getLogger(__name__)
 
@@ -380,12 +387,112 @@ def node_coder(
 
 def route_after_coder(state: ProjectState) -> str:
     """Loops back for the next task/retry, curates then halts if blocked, routes
-    to reviewer when done."""
+    to the deterministic checks gate when done."""
     if state["phase"] == "blocked":
         return "memory_curator"
     if state["phase"] == "reviewing":
-        return "reviewer"
+        return "static_checks"
     return "coder"
+
+
+def node_static_checks(
+    state: ProjectState,
+    executor_client: ExecutorClient,
+    stacks_config: StacksConfig,
+) -> dict[str, Any]:
+    """Runs the stack's deterministic checks before any Reviewer token is spent.
+
+    Sits between coder and reviewer (ADR-046). Makes no LLM calls and never
+    touches cost tracking. On pass (including nothing applicable to run),
+    control continues to the Reviewer exactly as before this node existed.
+    On failure, the most recently completed task is reopened -- status back
+    to "in_progress" with attempts incremented, honoring MAX_TASK_ATTEMPTS
+    and the existing blocked semantics -- and the raw check output is
+    attached to messages as the Coder's feedback. A failure with no
+    reopenable task (empty or never-completed queue) blocks the project
+    rather than letting broken code through to review.
+
+    Args:
+        state: The current project state (phase "reviewing" on entry).
+        executor_client: The Executor client checks run through.
+        stacks_config: The loaded stack registry (ADR-045).
+
+    Returns:
+        A state update: {} on pass; task_queue/phase/messages updates on
+        failure; a blocked transition when attempts are exhausted.
+    """
+    outcome = asyncio.run(
+        run_static_checks(executor_client, state["project_id"], state["stack"], stacks_config)
+    )
+    if outcome.passed:
+        logger.info(
+            "project %s: static checks passed (%d ran, %d skipped)",
+            state["project_id"], len(outcome.ran), len(outcome.skipped),
+        )
+        return {}
+
+    failure_lines = ["Static checks failed:"]
+    for failure in outcome.failures:
+        failure_lines.append(
+            f"$ {' '.join(failure.command)} (exit {failure.exit_code})\n{failure.output}"
+        )
+    feedback = AIMessage(content="\n\n".join(failure_lines))
+
+    task_queue = state["task_queue"]
+    last_done_index = next(
+        (
+            i for i in range(len(task_queue) - 1, -1, -1)
+            if task_queue[i]["status"] == "done"
+        ),
+        None,
+    )
+    if last_done_index is None:
+        logger.warning(
+            "project %s: static checks failed with no completed task to reopen",
+            state["project_id"],
+        )
+        return {
+            "phase": "blocked",
+            "curator_source": "static_checks",
+            "messages": [feedback],
+        }
+
+    reopened = {
+        **task_queue[last_done_index],
+        "status": "in_progress",
+        "attempts": task_queue[last_done_index]["attempts"] + 1,
+    }
+    if reopened["attempts"] >= MAX_TASK_ATTEMPTS:
+        reopened["status"] = "blocked"
+        logger.warning(
+            "project %s: static checks exhausted %d attempts, blocking",
+            state["project_id"], reopened["attempts"],
+        )
+        return {
+            "task_queue": _replace_task(task_queue, last_done_index, reopened),
+            "phase": "blocked",
+            "curator_source": "static_checks",
+            "messages": [feedback],
+        }
+
+    logger.info(
+        "project %s: static checks failed (%d finding set(s)), reopening task",
+        state["project_id"], len(outcome.failures),
+    )
+    return {
+        "task_queue": _replace_task(task_queue, last_done_index, reopened),
+        "phase": "implementing",
+        "messages": [feedback],
+    }
+
+
+def route_after_static_checks(state: ProjectState) -> str:
+    """Routes to Coder on failure, curator on blocked, Reviewer on pass."""
+    if state["phase"] == "blocked":
+        return "memory_curator"
+    if state["phase"] == "implementing":
+        return "coder"
+    return "reviewer"
 
 
 def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: ExecutorClient) -> dict[str, Any]:

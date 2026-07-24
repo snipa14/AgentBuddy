@@ -27,3 +27,28 @@ def projects_root(tmp_path: Path) -> Path:
     gets its own isolated temp directory.
     """
     return tmp_path / "projects"
+
+
+@pytest.fixture()
+def two_stack_registry():
+    """A StacksConfig with two stacks, for node_static_checks tests (ADR-046).
+
+    The "python" entry carries one real check_command (ruff) so tests can
+    exercise a non-empty registry; "node" has none, standing in for a stack
+    with nothing applicable to run.
+    """
+    from services.orchestrator.stacks import StackCheck, StackConfig, StacksConfig
+
+    return StacksConfig(
+        stacks={
+            "python": StackConfig(
+                image="foundry/workspace-python:3.12",
+                base_image="python:3.12-slim",
+                check_commands=[StackCheck(command=["ruff", "check", "."])],
+            ),
+            "node": StackConfig(
+                image="foundry/workspace-node:20",
+                base_image="node:20-slim",
+            ),
+        }
+    )

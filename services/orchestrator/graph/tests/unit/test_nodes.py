@@ -28,6 +28,7 @@ from services.orchestrator.graph.nodes import (
     node_planner_critique,
     node_planner_draft,
     node_reviewer,
+    node_static_checks,
     node_task_decomposition,
     node_testing,
     route_after_coder,
@@ -36,6 +37,7 @@ from services.orchestrator.graph.nodes import (
     route_after_plan_wait,
     route_after_planner_ask,
     route_after_reviewer,
+    route_after_static_checks,
 )
 from services.orchestrator.graph.nodes import node_cost_check as cost_check
 from services.orchestrator.graph.state import new_project_state
@@ -436,18 +438,136 @@ def test_route_after_coder_routes_to_memory_curator_when_blocked():
     assert route_after_coder(state) == "memory_curator"
 
 
-def test_route_after_coder_advances_to_reviewer_when_reviewing():
-    state = new_project_state("proj-1")
-    state["phase"] = "reviewing"
-
-    assert route_after_coder(state) == "reviewer"
-
-
 def test_route_after_coder_loops_back_when_still_implementing():
     state = new_project_state("proj-1")
     state["phase"] = "implementing"
 
     assert route_after_coder(state) == "coder"
+
+
+def test_route_after_coder_sends_reviewing_to_static_checks():
+    state = new_project_state("proj-1")
+    state["phase"] = "reviewing"
+
+    assert route_after_coder(state) == "static_checks"
+
+
+# -- Static checks node tests (ADR-046) -----------------------------------------
+
+
+class _StaticChecksExecutorClient:
+    """Minimal fake for node_static_checks tests: every run_command call
+    returns the same canned exit code/stdout regardless of the command,
+    since node_static_checks itself has no per-command branching -- that
+    logic lives in and is already covered by agents/static_checks.py's own
+    unit tests."""
+
+    def __init__(self, default_exit_code: int = 0, default_stdout: str = ""):
+        self.default_exit_code = default_exit_code
+        self.default_stdout = default_stdout
+        self.calls: list[tuple] = []
+
+    async def run_command(self, project_id, command, timeout=None, stack: str = "python"):
+        self.calls.append(("run_command", project_id, tuple(command)))
+        return CommandResult(
+            stdout=self.default_stdout, stderr="", exit_code=self.default_exit_code
+        )
+
+
+def _checked_state(task_queue, stack="python"):
+    state = new_project_state("proj-1")
+    state["phase"] = "reviewing"
+    state["stack"] = stack
+    state["task_queue"] = task_queue
+    return state
+
+
+def _passing_checks_client():
+    return _StaticChecksExecutorClient(default_exit_code=0)
+
+
+def _failing_checks_client(output="app.py:1:1: F821 undefined name"):
+    return _StaticChecksExecutorClient(default_exit_code=1, default_stdout=output)
+
+
+def test_static_checks_pass_keeps_reviewing_phase(two_stack_registry):
+    state = _checked_state([{"description": "t", "status": "done", "attempts": 1}])
+
+    update = node_static_checks(
+        state, executor_client=_passing_checks_client(), stacks_config=two_stack_registry
+    )
+
+    assert update == {}
+
+
+def test_static_checks_failure_reopens_last_done_task_with_feedback(two_stack_registry):
+    queue = [
+        {"description": "first", "status": "done", "attempts": 1},
+        {"description": "second", "status": "done", "attempts": 0},
+    ]
+    state = _checked_state(queue)
+
+    update = node_static_checks(
+        state, executor_client=_failing_checks_client(), stacks_config=two_stack_registry
+    )
+
+    assert update["phase"] == "implementing"
+    assert update["task_queue"][1]["status"] == "in_progress"
+    assert update["task_queue"][1]["attempts"] == 1
+    assert update["task_queue"][0] == queue[0]
+    assert "F821" in update["messages"][0].content
+
+
+def test_static_checks_exhaustion_blocks(two_stack_registry):
+    queue = [{"description": "t", "status": "done", "attempts": MAX_TASK_ATTEMPTS - 1}]
+    state = _checked_state(queue)
+
+    update = node_static_checks(
+        state, executor_client=_failing_checks_client(), stacks_config=two_stack_registry
+    )
+
+    assert update["phase"] == "blocked"
+    assert update["task_queue"][0]["status"] == "blocked"
+    assert update["task_queue"][0]["attempts"] == MAX_TASK_ATTEMPTS
+    assert update["curator_source"] == "static_checks"
+
+
+def test_static_checks_failure_with_no_done_task_blocks(two_stack_registry):
+    state = _checked_state([])
+
+    update = node_static_checks(
+        state, executor_client=_failing_checks_client(), stacks_config=two_stack_registry
+    )
+
+    assert update["phase"] == "blocked"
+    assert update["curator_source"] == "static_checks"
+    assert "task_queue" not in update
+    assert "F821" in update["messages"][0].content
+
+
+def test_static_checks_pass_with_nothing_applicable_keeps_reviewing_phase(two_stack_registry):
+    state = _checked_state(
+        [{"description": "t", "status": "done", "attempts": 0}], stack="node"
+    )
+
+    update = node_static_checks(
+        state, executor_client=_passing_checks_client(), stacks_config=two_stack_registry
+    )
+
+    assert update == {}
+
+
+def test_route_after_static_checks_routes_all_three_outcomes():
+    state = new_project_state("proj-1")
+
+    state["phase"] = "reviewing"
+    assert route_after_static_checks(state) == "reviewer"
+
+    state["phase"] = "implementing"
+    assert route_after_static_checks(state) == "coder"
+
+    state["phase"] = "blocked"
+    assert route_after_static_checks(state) == "memory_curator"
 
 
 class _FakeCheckpointer:
