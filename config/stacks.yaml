@@ -1,0 +1,60 @@
+# The stack registry (ADR-045): one entry per supported project language.
+# Adding a language is one entry here plus one operator-run image build
+# (scripts/gen_workspace_images.py + docker build) -- never a .py edit and
+# never a docker-socket-proxy change. Validated against
+# services/executor/stacks.py's StacksConfig at Executor and Orchestrator
+# startup, same pattern as models.yaml.
+
+stacks:
+  python:
+    image: foundry/workspace-python:3.12
+    base_image: python:3.12-slim
+    apt_packages: [build-essential, git, curl]
+    pip_packages: [pytest, pytest-cov, playwright, ruff]
+    pip_break_system_packages: false
+    sandbox_user_mode: create
+    manifests:
+      - file: requirements.txt
+        install_command: [pip, install, --user, -r, requirements.txt]
+      - file: pyproject.toml
+        install_command: [pip, install, --user, -e, "."]
+    cache_dir: /home/sandbox/.cache/pip
+    check_commands:
+      - command: [ruff, check, .]
+    test_command: [python3, -m, pytest, --cov=., --cov-report=term-missing, -q]
+
+  node:
+    image: foundry/workspace-node:20
+    base_image: node:20-slim
+    apt_packages: [build-essential, git, curl, python3, python3-pip]
+    pip_packages: [playwright]
+    pip_break_system_packages: true
+    sandbox_user_mode: rename
+    rename_from: node
+    manifests:
+      - file: package.json
+        install_command: [npm, install]
+    cache_dir: /home/sandbox/.npm
+    check_commands:
+      - command: [npx, --no-install, tsc, --noEmit]
+        requires_file: tsconfig.json
+    test_command: [npm, test]
+
+  go:
+    image: foundry/workspace-go:1.22
+    base_image: golang:1.22-bookworm
+    apt_packages: [git, curl, python3, python3-pip]
+    pip_packages: [playwright]
+    pip_break_system_packages: true
+    sandbox_user_mode: create
+    env:
+      GOMODCACHE: /home/sandbox/go/pkg/mod
+      GOCACHE: /home/sandbox/.cache/go-build
+    manifests:
+      - file: go.mod
+        install_command: [go, mod, download]
+    cache_dir: /home/sandbox/go/pkg/mod
+    check_commands:
+      - command: [go, vet, ./...]
+      - command: [go, build, ./...]
+    test_command: [go, test, ./...]
