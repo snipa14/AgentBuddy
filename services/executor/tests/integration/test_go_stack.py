@@ -21,6 +21,8 @@ from services.executor.docker_client import build_docker_client
 from services.executor.stacks import load_stacks_config
 from services.executor.tools import tool_run_command, tool_run_tests, tool_write_file
 
+pytest.importorskip("yaml")
+
 WORKSPACE_IMAGE = "foundry/workspace-go:1.22"
 TEST_NETWORK_NAME = "foundry_workspace_test"
 
@@ -108,8 +110,6 @@ def project_id(executor_config):
 
 
 def test_go_project_installs_dependency_and_builds(docker_client, executor_config, project_id):
-    pytest.importorskip("yaml")
-
     tool_write_file(docker_client, executor_config, project_id, "go.mod", GO_MOD, stack="go")
     tool_write_file(docker_client, executor_config, project_id, "main.go", MAIN_GO, stack="go")
     tool_write_file(
