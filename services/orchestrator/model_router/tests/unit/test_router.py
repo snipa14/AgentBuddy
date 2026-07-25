@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 from langchain_anthropic import ChatAnthropic
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 
 from services.orchestrator.model_router.config import ModelsConfig, load_models_config
 from services.orchestrator.model_router.errors import NoCapableProviderError, UnknownRoleError
@@ -370,3 +371,104 @@ def test_cost_usd_uses_the_provider_that_would_actually_be_resolved():
     cost = router.cost_usd("coder", {"input_tokens": 1_000_000, "output_tokens": 0})
 
     assert cost == pytest.approx(3.0)
+
+
+def test_router_constructs_openai_compatible_model_with_configured_endpoint():
+    from services.orchestrator.model_router.router import _ThrottledChatModel
+
+    config = _config(
+        {
+            "roles": {"coder": {"requires": ["tool_calling"], "prefer": ["local"]}},
+            "providers": {
+                "local": {
+                    "type": "openai_compatible",
+                    "model": "qwen/qwen3-coder-30b",
+                    "base_url": "http://192.168.1.50:1234/v1",
+                    "capabilities": ["tool_calling"],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                }
+            },
+        }
+    )
+    router = ModelRouter(config, ollama_enabled=False, anthropic_api_key=None)
+
+    model = router.resolve("coder")
+
+    assert isinstance(model, _ThrottledChatModel)
+    assert isinstance(model._model, ChatOpenAI)
+    assert model.openai_api_base == "http://192.168.1.50:1234/v1"
+    assert model.model_name == "qwen/qwen3-coder-30b"
+    assert model.max_retries == PROVIDER_MAX_RETRIES
+
+
+def test_openai_compatible_provider_needs_no_anthropic_api_key():
+    config = _config(
+        {
+            "roles": {"coder": {"requires": [], "prefer": ["local"]}},
+            "providers": {
+                "local": {
+                    "type": "openai_compatible",
+                    "model": "qwen/qwen3-coder-30b",
+                    "base_url": "http://192.168.1.50:1234/v1",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                }
+            },
+        }
+    )
+
+    router = ModelRouter(config, ollama_enabled=False, anthropic_api_key=None)
+
+    assert "local" in router.configured_providers()
+
+
+def test_openai_compatible_providers_get_independent_semaphores():
+    """Each remote endpoint is its own GPU: remote providers must not share a
+    semaphore with each other or with the in-host Ollama semaphore, while
+    every call to one remote provider still serializes through its own."""
+    config = _config(
+        {
+            "roles": {
+                "role_a": {"requires": [], "prefer": ["remote_a"]},
+                "role_b": {"requires": [], "prefer": ["remote_b"]},
+                "role_c": {"requires": [], "prefer": ["local"]},
+            },
+            "providers": {
+                "remote_a": {
+                    "type": "openai_compatible",
+                    "model": "qwen/qwen3-coder-30b",
+                    "base_url": "http://192.168.1.50:1234/v1",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                },
+                "remote_b": {
+                    "type": "openai_compatible",
+                    "model": "qwen/qwen3-8b",
+                    "base_url": "http://192.168.1.60:1234/v1",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                },
+                "local": {
+                    "type": "ollama",
+                    "model": "qwen3-coder",
+                    "base_url": "http://ollama:11434",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                },
+            },
+        }
+    )
+    router = ModelRouter(config, ollama_enabled=True, anthropic_api_key=None)
+
+    semaphore_a = router.resolve("role_a")._semaphore
+    semaphore_b = router.resolve("role_b")._semaphore
+    semaphore_ollama = router.resolve("role_c")._semaphore
+
+    assert semaphore_a is not semaphore_b
+    assert semaphore_a is not semaphore_ollama
+    assert semaphore_b is not semaphore_ollama

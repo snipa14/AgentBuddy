@@ -7,6 +7,7 @@ from typing import Any
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 
 from services.orchestrator.model_router.config import ModelsConfig, ProviderConfig
 from services.orchestrator.model_router.errors import (
@@ -16,15 +17,22 @@ from services.orchestrator.model_router.errors import (
 
 OLLAMA_ENABLED_ENV_VAR = "OLLAMA_ENABLED"
 PROVIDER_MAX_RETRIES = 5
+OPENAI_COMPATIBLE_PLACEHOLDER_API_KEY = "not-needed"
+"""Sent to openai_compatible servers, which ignore authentication (LM Studio,
+vLLM without --api-key): the OpenAI client requires a non-empty key even when
+the server never checks it. Not a secret. Servers requiring real
+authentication are out of scope (see the 2026-07-25 spec)."""
 
 
 class _ThrottledChatModel:
     """Wraps a BaseChatModel so at most one call is ever in flight at a time.
 
     Local inference shares one physical GPU (TODO.md Phase 18), so
-    ModelRouter wraps every Ollama-backed model in this class before
-    storing it; ChatAnthropic entries are stored unwrapped, so
-    Claude-API-bound work runs in parallel without this constraint.
+    ModelRouter wraps every Ollama-backed model in this class (all sharing
+    one semaphore) and every openai_compatible-backed model (one semaphore
+    per provider, ADR-048) before storing it; ChatAnthropic entries are
+    stored unwrapped, so Claude-API-bound work runs in parallel without
+    this constraint.
 
     A threading.Semaphore, not asyncio.Semaphore, is required: every
     LLM-backed graph node bridges to its one async call via its own
@@ -91,6 +99,15 @@ class ModelRouter:
     built, so resolve() can never fall through to a provider that would
     attempt a network call to an Ollama instance that isn't running.
 
+    "openai_compatible" providers (remote OpenAI-API servers such as LM
+    Studio -- ADR-048) have no construction-time gate: declaring one in the
+    loaded config is the enable switch, and an unreachable server surfaces
+    as a call-time failure after retries, like any remote-provider outage.
+    Each is throttled by its own per-provider semaphore rather than the
+    shared Ollama one -- each remote endpoint is its own GPU, so two remote
+    providers must not serialize against each other, but calls to one
+    endpoint still never overlap.
+
     Every constructed model has retries enabled (`max_retries`, ADR-025) --
     transient provider errors no longer need to be handled by hand-rolled
     retry logic in agent code. Every Ollama-backed model is additionally
@@ -136,6 +153,16 @@ class ModelRouter:
                     max_retries=PROVIDER_MAX_RETRIES,
                 )
                 self._models[provider_name] = _ThrottledChatModel(raw_model, self._local_semaphore)
+            elif provider_config.type == "openai_compatible":
+                raw_model = ChatOpenAI(
+                    model=provider_config.model,
+                    base_url=provider_config.base_url,
+                    api_key=OPENAI_COMPATIBLE_PLACEHOLDER_API_KEY,
+                    max_retries=PROVIDER_MAX_RETRIES,
+                )
+                self._models[provider_name] = _ThrottledChatModel(
+                    raw_model, threading.Semaphore(1)
+                )
             else:
                 if anthropic_api_key is None:
                     raise ValueError(
