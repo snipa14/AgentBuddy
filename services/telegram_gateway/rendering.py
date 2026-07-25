@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 CALLBACK_APPROVE = "approve"
 CALLBACK_REJECT = "reject"
 CALLBACK_EDIT = "edit"
+CALLBACK_REPLY = "reply"
 
 _DEFAULT_TEXT = "Approval needed."
 
@@ -20,12 +21,23 @@ def render_approval(pending_approval: dict[str, Any]) -> tuple[str, InlineKeyboa
             "thread_id" and, usually, a human-readable "summary".
 
     Returns:
-        A (text, keyboard) pair ready to pass to a Message's answer/reply,
-        with Approve/Reject/Edit buttons whose callback_data encodes the
-        decision and thread_id as "<decision>:<thread_id>".
+        A (text, keyboard) pair ready to pass to a Message's answer/reply.
+        A "plan_questions" kind (the Planner's clarifying-question
+        interview) gets a single Reply button, since free text is how it's
+        actually answered -- see docs/superpowers/specs/
+        2026-07-25-telegram-conversational-loop-design.md. Every other kind
+        keeps the Approve/Reject/Edit keyboard, whose callback_data encodes
+        the decision and thread_id as "<decision>:<thread_id>".
     """
     thread_id = pending_approval["thread_id"]
     text = pending_approval.get("summary", _DEFAULT_TEXT)
+    if pending_approval.get("kind") == "plan_questions":
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="Reply", callback_data=f"{CALLBACK_REPLY}:{thread_id}")]
+            ]
+        )
+        return text, keyboard
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [

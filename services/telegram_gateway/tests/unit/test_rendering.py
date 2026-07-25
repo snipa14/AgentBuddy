@@ -2,7 +2,11 @@
 
 from aiogram.types import InlineKeyboardMarkup
 
-from services.telegram_gateway.rendering import render_approval, render_task_progress
+from services.telegram_gateway.rendering import (
+    CALLBACK_REPLY,
+    render_approval,
+    render_task_progress,
+)
 
 
 def test_render_approval_includes_summary_text_and_three_buttons():
@@ -63,3 +67,28 @@ def test_render_task_progress_shows_only_the_count_when_all_tasks_are_done():
     )
 
     assert text == "1/1 tasks done"
+
+
+def test_render_approval_shows_only_a_reply_button_for_plan_questions():
+    text, keyboard = render_approval(
+        {
+            "thread_id": "proj-1",
+            "kind": "plan_questions",
+            "summary": "- Which language?\n- Which framework?",
+        }
+    )
+
+    assert text == "- Which language?\n- Which framework?"
+    buttons = keyboard.inline_keyboard[0]
+    assert [button.text for button in buttons] == ["Reply"]
+    assert [button.callback_data for button in buttons] == ["reply:proj-1"]
+
+
+def test_render_approval_shows_approve_reject_edit_for_every_other_kind():
+    text, keyboard = render_approval(
+        {"thread_id": "proj-1", "kind": "merge_approval", "summary": "Merge to main?"}
+    )
+
+    assert text == "Merge to main?"
+    buttons = keyboard.inline_keyboard[0]
+    assert [button.text for button in buttons] == ["Approve", "Reject", "Edit"]
