@@ -472,3 +472,41 @@ def test_openai_compatible_providers_get_independent_semaphores():
     assert semaphore_a is not semaphore_b
     assert semaphore_a is not semaphore_ollama
     assert semaphore_b is not semaphore_ollama
+
+
+def test_openai_compatible_providers_sharing_base_url_share_a_semaphore():
+    """Two provider entries pointing at the same GPU server (e.g. two models
+    served by one LM Studio instance) must serialize against each other --
+    the semaphore is keyed by base_url, not by provider name."""
+    config = _config(
+        {
+            "roles": {
+                "role_a": {"requires": [], "prefer": ["remote_a"]},
+                "role_b": {"requires": [], "prefer": ["remote_b"]},
+            },
+            "providers": {
+                "remote_a": {
+                    "type": "openai_compatible",
+                    "model": "qwen/qwen3-coder-30b",
+                    "base_url": "http://192.168.1.50:1234/v1",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                },
+                "remote_b": {
+                    "type": "openai_compatible",
+                    "model": "qwen/qwen3-8b",
+                    "base_url": "http://192.168.1.50:1234/v1",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                },
+            },
+        }
+    )
+    router = ModelRouter(config, ollama_enabled=False, anthropic_api_key=None)
+
+    semaphore_a = router.resolve("role_a")._semaphore
+    semaphore_b = router.resolve("role_b")._semaphore
+
+    assert semaphore_a is semaphore_b

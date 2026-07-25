@@ -68,12 +68,13 @@ Third branch in `ModelRouter.__init__`:
 - Builds `ChatOpenAI` (new orchestrator dependency: `langchain-openai`)
   with the config's `base_url` and `model`, a fixed placeholder API key,
   and `max_retries=PROVIDER_MAX_RETRIES` (ADR-025 parity).
-- Wraps it in the existing `_ThrottledChatModel` with a **per-provider**
-  `threading.Semaphore(1)` — not the shared Ollama semaphore. Phase 18's
-  shared semaphore models "one in-host GPU"; a remote server is a different
-  physical GPU. Each remote provider still serializes to one in-flight
-  request, but two distinct GPUs never falsely serialize against each
-  other.
+- Wraps it in the existing `_ThrottledChatModel` with a **per-endpoint**
+  `threading.Semaphore(1)`, keyed by `base_url` — not the shared Ollama
+  semaphore. Phase 18's shared semaphore models "one in-host GPU"; a remote
+  server is a different physical GPU. Each remote endpoint still serializes
+  to one in-flight request (so two provider entries sharing a `base_url`
+  share a semaphore too), but two distinct GPUs never falsely serialize
+  against each other.
 - **Gating:** constructed whenever declared in the loaded config. There is
   no container or env flag to gate on (deliberate deviation from ADR-015's
   construction-time gating — declaring the provider in the active config
@@ -114,8 +115,9 @@ leaves room for an optional secrets-backed key field later.
 - `test_router.py`:
   - constructs a `ChatOpenAI` with the configured `base_url`/`model`;
   - the resolved model is `_ThrottledChatModel`-wrapped;
-  - two `openai_compatible` providers get independent semaphores while
-    `ollama` providers still share one;
+  - two `openai_compatible` providers with different `base_url`s get
+    independent semaphores, two sharing a `base_url` share one, and
+    `ollama` providers still share the separate local semaphore;
   - retries are enabled on the constructed model;
   - `resolve("coder")` returns the remote provider when it declares
     `tool_calling`.
@@ -127,4 +129,5 @@ leaves room for an optional secrets-backed key field later.
 - Update `docs/model-router.md` with the new provider type.
 - Append `ARCHITECTURE.md` Decision Log entry (ADR-048): the
   `openai_compatible` type, declaration-in-config as the enable gate, and
-  per-provider throttle semaphores for remote single-GPU servers.
+  per-endpoint (base_url-keyed) throttle semaphores for remote single-GPU
+  servers.

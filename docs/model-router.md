@@ -95,15 +95,17 @@ Unlike `ollama`-type providers (gated by `OLLAMA_ENABLED`, which the
 construction-time gate: declaring it in the active config is the enable
 switch. If the server is unreachable, calls fail after the standard retries
 (ADR-025) and surface like any provider outage -- there is no silent
-mid-run fallback to Claude. Calls to each remote provider are serialized
-(one in flight at a time) by a per-provider semaphore, on the same
-one-GPU-per-endpoint reasoning as Phase 18's shared Ollama throttle.
+mid-run fallback to Claude. Calls to each remote endpoint are serialized
+(one in flight at a time) by a per-endpoint semaphore, keyed by
+`base_url` -- so two provider entries pointing at the same endpoint share
+one semaphore -- on the same one-GPU-per-endpoint reasoning as Phase 18's
+shared Ollama throttle.
 
 ## Testing notes
 
 - Unit tests for the router live in
   `services/orchestrator/model_router/tests/unit/test_router.py` and
-  construct real `ChatAnthropic`/`ChatOllama` instances against fake
+  construct real `ChatAnthropic`/`ChatOllama`/`ChatOpenAI` instances against fake
   credentials -- no real network call is made unless a test actually invokes
   the model (none do; resolution and cost math are pure functions of config).
 - Tests for LLM-backed *agent* nodes (Phase 8+) should mock at the
