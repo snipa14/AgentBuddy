@@ -21,10 +21,20 @@ class OllamaProviderConfig(BaseModel):
 
 
 class AnthropicProviderConfig(BaseModel):
-    """Config for a provider backed by the Claude API."""
+    """Config for a provider speaking the Anthropic Messages API.
+
+    base_url defaults to None, meaning the real hosted Claude API. Setting
+    it points this provider at any other Messages-API-compatible server
+    instead -- e.g. LM Studio's Anthropic-compatible endpoint, which (unlike
+    its OpenAI-compatible one) surfaces a reasoning model's post-thinking
+    answer in a distinct `tool_use` content block rather than folding it
+    into a non-standard `reasoning_content` field with nothing left in
+    `content` (ADR-050).
+    """
 
     type: Literal["anthropic"]
     model: str
+    base_url: str | None = None
     capabilities: list[Capability] = Field(default_factory=list)
     cost_per_1m_input_tokens: float = Field(ge=0)
     cost_per_1m_output_tokens: float = Field(ge=0)

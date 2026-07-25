@@ -510,3 +510,89 @@ def test_openai_compatible_providers_sharing_base_url_share_a_semaphore():
     semaphore_b = router.resolve("role_b")._semaphore
 
     assert semaphore_a is semaphore_b
+
+
+def test_anthropic_provider_with_no_base_url_is_unwrapped_and_parallel():
+    config = _config(
+        {
+            "roles": {"coder": {"requires": [], "prefer": ["claude_sonnet"]}},
+            "providers": {
+                "claude_sonnet": {
+                    "type": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 3.0,
+                    "cost_per_1m_output_tokens": 15.0,
+                }
+            },
+        }
+    )
+    router = ModelRouter(config, ollama_enabled=False, anthropic_api_key="key")
+
+    model = router.resolve("coder")
+
+    assert isinstance(model, ChatAnthropic)
+
+
+def test_anthropic_provider_with_base_url_override_is_throttled():
+    from services.orchestrator.model_router.router import _ThrottledChatModel
+
+    config = _config(
+        {
+            "roles": {"coder": {"requires": ["tool_calling"], "prefer": ["local"]}},
+            "providers": {
+                "local": {
+                    "type": "anthropic",
+                    "model": "qwen3.6-35b-a3b",
+                    "base_url": "http://192.168.8.246:1234",
+                    "capabilities": ["tool_calling"],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                }
+            },
+        }
+    )
+    router = ModelRouter(config, ollama_enabled=False, anthropic_api_key="key")
+
+    model = router.resolve("coder")
+
+    assert isinstance(model, _ThrottledChatModel)
+    assert isinstance(model._model, ChatAnthropic)
+
+
+def test_anthropic_providers_sharing_base_url_share_a_semaphore_across_types():
+    """An openai_compatible entry and an anthropic-typed entry pointed at the
+    same LM Studio instance must serialize against each other too -- the
+    semaphore dict is keyed by base_url regardless of provider type."""
+    config = _config(
+        {
+            "roles": {
+                "role_a": {"requires": [], "prefer": ["remote_openai"]},
+                "role_b": {"requires": [], "prefer": ["remote_anthropic"]},
+            },
+            "providers": {
+                "remote_openai": {
+                    "type": "openai_compatible",
+                    "model": "qwen3.6-35b-a3b",
+                    "base_url": "http://192.168.8.246:1234/v1",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                },
+                "remote_anthropic": {
+                    "type": "anthropic",
+                    "model": "qwen3.6-35b-a3b",
+                    "base_url": "http://192.168.8.246:1234/v1",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                },
+            },
+        }
+    )
+    router = ModelRouter(config, ollama_enabled=False, anthropic_api_key="key")
+
+    semaphore_a = router.resolve("role_a")._semaphore
+    semaphore_b = router.resolve("role_b")._semaphore
+
+    assert semaphore_a is semaphore_b

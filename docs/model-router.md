@@ -50,14 +50,32 @@ schema, and what `ModelRouter.cost_usd(role, usage_metadata)` uses to turn a
 completion's token usage into a dollar figure (ADR-026).
 
 Three provider *types* exist: `ollama` (in-host Ollama container),
-`anthropic` (Claude API), and `openai_compatible` (any server speaking the
-OpenAI chat-completions API -- LM Studio, vLLM, llama.cpp server -- ADR-048).
-`openai_compatible` providers need a `base_url`; the router sends a fixed
-placeholder API key (`OPENAI_COMPATIBLE_PLACEHOLDER_API_KEY`), so servers
-that enforce real authentication are not yet supported. Adding a fourth
-type needs code: construct the matching LangChain chat model class in
+`anthropic` (Claude API, or any self-hosted server speaking the Anthropic
+Messages API -- see `base_url` below, ADR-050), and `openai_compatible`
+(any server speaking the OpenAI chat-completions API -- LM Studio, vLLM,
+llama.cpp server -- ADR-048). `openai_compatible` providers need a
+`base_url`; the router sends a fixed placeholder API key
+(`OPENAI_COMPATIBLE_PLACEHOLDER_API_KEY`), so servers that enforce real
+authentication are not yet supported. Adding a fourth type needs code:
+construct the matching LangChain chat model class in
 `ModelRouter.__init__`, and add a matching `TypeProviderConfig` to the
 discriminated union in `config.py`.
+
+`anthropic`-typed providers also accept an optional `base_url` (default:
+the real hosted Claude API). Setting it points `ChatAnthropic` at any
+Anthropic-Messages-API-compatible server instead -- notably, LM Studio
+exposes both an OpenAI-compatible *and* an Anthropic-compatible endpoint,
+and for reasoning-mode local models the latter is often the one that
+actually works: Anthropic's protocol has first-class support for a model
+reasoning before answering in the same turn (a distinct `tool_use` content
+block after any thinking), where OpenAI's Chat Completions API does not,
+and some local reasoning models fold their entire answer into a
+non-standard `reasoning_content` field instead of `content` when driven
+through an OpenAI-shaped request (ADR-050). When `base_url` is set, the
+provider is throttled exactly like an `openai_compatible` one -- same
+`base_url`-keyed semaphore dict, so an `openai_compatible` and an
+`anthropic`-typed entry pointed at the same server still serialize against
+each other.
 
 ## The Claude-only preset
 

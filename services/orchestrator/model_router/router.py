@@ -29,10 +29,12 @@ class _ThrottledChatModel:
 
     Local inference shares one physical GPU (TODO.md Phase 18), so
     ModelRouter wraps every Ollama-backed model in this class (all sharing
-    one semaphore) and every openai_compatible-backed model (one semaphore
-    per endpoint, keyed by `base_url`, ADR-048) before storing it;
-    ChatAnthropic entries are stored unwrapped, so Claude-API-bound work
-    runs in parallel without this constraint.
+    one semaphore), every openai_compatible-backed model, and every
+    anthropic-typed model whose `base_url` points somewhere other than the
+    real Claude API (one semaphore per endpoint, keyed by `base_url`,
+    ADR-048/ADR-050) before storing it; a ChatAnthropic entry with no
+    `base_url` override (the real, hosted Claude API) is stored unwrapped,
+    so that Claude-API-bound work runs in parallel without this constraint.
 
     A threading.Semaphore, not asyncio.Semaphore, is required: every
     LLM-backed graph node bridges to its one async call via its own
@@ -88,8 +90,9 @@ class _ThrottledChatModel:
 
 ResolvedChatModel = BaseChatModel | _ThrottledChatModel
 """What resolve() actually returns: a real BaseChatModel, or the
-_ThrottledChatModel proxy wrapping one for Ollama- or
-openai_compatible-backed roles."""
+_ThrottledChatModel proxy wrapping one for Ollama-backed roles,
+openai_compatible-backed roles, or anthropic-typed roles pointed at a
+self-hosted `base_url` (ADR-050)."""
 
 
 class ModelRouter:
@@ -101,15 +104,18 @@ class ModelRouter:
     attempt a network call to an Ollama instance that isn't running.
 
     "openai_compatible" providers (remote OpenAI-API servers such as LM
-    Studio -- ADR-048) have no construction-time gate: declaring one in the
-    loaded config is the enable switch, and an unreachable server surfaces
-    as a call-time failure after retries, like any remote-provider outage.
-    Each is throttled by a per-endpoint semaphore, keyed by `base_url`,
-    rather than the shared Ollama one -- each remote endpoint is its own
-    GPU, so two distinct endpoints must not serialize against each other,
-    but calls to one endpoint still never overlap, including when two
-    provider entries share a `base_url` (e.g. two models on the same GPU
-    server).
+    Studio -- ADR-048), and "anthropic"-typed providers with a `base_url`
+    override (a self-hosted Anthropic-Messages-API-compatible server --
+    ADR-050), have no construction-time gate: declaring one in the loaded
+    config is the enable switch, and an unreachable server surfaces as a
+    call-time failure after retries, like any remote-provider outage. Each
+    is throttled by a per-endpoint semaphore, keyed by `base_url`, rather
+    than the shared Ollama one -- each remote endpoint is its own GPU, so
+    two distinct endpoints must not serialize against each other, but calls
+    to one endpoint still never overlap, including when two provider
+    entries share a `base_url` (e.g. two models on the same GPU server, or
+    an `openai_compatible` and an `anthropic`-typed entry both pointed at
+    the same LM Studio instance).
 
     Every constructed model has retries enabled (`max_retries`, ADR-025) --
     transient provider errors no longer need to be handled by hand-rolled
@@ -173,11 +179,19 @@ class ModelRouter:
                     raise ValueError(
                         f"provider '{provider_name}' requires an anthropic_api_key"
                     )
-                self._models[provider_name] = ChatAnthropic(
+                raw_model = ChatAnthropic(
                     model=provider_config.model,
                     api_key=anthropic_api_key,
+                    base_url=provider_config.base_url,
                     max_retries=PROVIDER_MAX_RETRIES,
                 )
+                if provider_config.base_url is None:
+                    self._models[provider_name] = raw_model
+                else:
+                    semaphore = self._remote_semaphores.setdefault(
+                        provider_config.base_url, threading.Semaphore(1)
+                    )
+                    self._models[provider_name] = _ThrottledChatModel(raw_model, semaphore)
 
     def configured_providers(self) -> frozenset[str]:
         """Returns the names of providers actually constructed for this deployment.
@@ -197,7 +211,9 @@ class ModelRouter:
             The `BaseChatModel` for the first provider in the role's prefer
             list that was constructed (i.e. enabled) and supports every
             capability the role requires, wrapped in `_ThrottledChatModel`
-            if it's an Ollama- or openai_compatible-backed provider.
+            if it's an Ollama-backed provider, an openai_compatible-backed
+            provider, or an anthropic-typed provider with a `base_url`
+            override.
 
         Raises:
             UnknownRoleError: If role isn't declared in the loaded config.

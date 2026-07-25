@@ -157,3 +157,42 @@ def test_remote_llm_models_yaml_is_valid_and_local_is_openai_compatible():
     assert isinstance(config.providers["local"], OpenAICompatibleProviderConfig)
     default_config = load_models_config(REPO_ROOT / "config" / "models.yaml")
     assert set(config.roles) == set(default_config.roles)
+
+
+def test_anthropic_provider_base_url_defaults_to_none():
+    raw = {
+        "roles": {"coder": {"requires": [], "prefer": ["claude_sonnet"]}},
+        "providers": {
+            "claude_sonnet": {
+                "type": "anthropic",
+                "model": "claude-sonnet-5",
+                "capabilities": [],
+                "cost_per_1m_input_tokens": 3.0,
+                "cost_per_1m_output_tokens": 15.0,
+            }
+        },
+    }
+
+    config = ModelsConfig.model_validate(raw)
+
+    assert config.providers["claude_sonnet"].base_url is None
+
+
+def test_anthropic_provider_accepts_a_base_url_override():
+    raw = {
+        "roles": {"coder": {"requires": [], "prefer": ["local"]}},
+        "providers": {
+            "local": {
+                "type": "anthropic",
+                "model": "qwen3.6-35b-a3b",
+                "base_url": "http://192.168.8.246:1234",
+                "capabilities": ["tool_calling"],
+                "cost_per_1m_input_tokens": 0,
+                "cost_per_1m_output_tokens": 0,
+            }
+        },
+    }
+
+    config = ModelsConfig.model_validate(raw)
+
+    assert config.providers["local"].base_url == "http://192.168.8.246:1234"
