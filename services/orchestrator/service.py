@@ -27,6 +27,7 @@ from services.orchestrator.registry.validation import validate_project_id
 from services.orchestrator.stacks import StacksConfig
 
 _TERMINAL_PHASES = frozenset({"done", "blocked"})
+_ACTIVE_PROJECT_FILENAME = ".active_project_id"
 
 
 class UnknownProjectError(Exception):
@@ -64,32 +65,40 @@ class OrchestratorService:
                 OrchestratorConfig.global_cost_threshold_usd.
         """
         self._checkpointer = checkpointer
+        self._projects_root = projects_root
         self._graph = build_project_graph(
             checkpointer, router, executor_client, memory_conn, projects_root,
             stacks_config, global_cost_threshold_usd,
         )
 
-    def handle_webhook(self, project_id: str | None, text: str) -> dict[str, Any]:
-        """Starts a new project thread, or echoes status for an existing one.
+    def handle_webhook(
+        self, project_id: str | None, text: str, force_new: bool = False
+    ) -> dict[str, Any]:
+        """Starts a new project thread, resumes an active interview, or
+        echoes status for an existing one.
 
-        The Planner's intake interview (Phase 8) is only wired to drive a
-        *brand-new* thread from its seeded initial message; a webhook naming
-        a known project_id just returns that project's current status
-        without feeding the text into the graph -- turning an in-progress
-        thread's free text into a real interrupt-resume answer needs a
-        richer webhook contract than "project_id + text" (which round it's
-        answering, for one), left for whichever phase builds the full
-        conversational Telegram loop.
+        When project_id is None and force_new is False, the active-project
+        pointer (ADR: 2026-07-25 Telegram conversational loop) decides what
+        happens: a live, non-terminal active project paused mid-interview
+        (pending_approval["kind"] == "plan_questions") has text fed in via
+        Command(resume=text); a live, non-terminal active project waiting on
+        anything else (mid-execution, or paused at a button gate) is left
+        untouched and its status is returned with text_applied forced to
+        False, so the text is never silently dropped without a signal.
 
         Args:
-            project_id: The project this message belongs to, or None/unknown
-                to start a new project.
-            text: The free-text message body. Seeds the new project's
-                intake interview when starting a new thread; ignored for an
-                existing one.
+            project_id: The project this message belongs to, or None to let
+                the active-project pointer (or force_new) decide.
+            text: The free-text message body. Seeds a new project's intake
+                interview, or answers the active project's current
+                clarifying-question round.
+            force_new: If True, always start a fresh project, ignoring any
+                active project. Set by the Gateway's /new handler.
 
         Returns:
-            The resulting project's status dict (see `status()`).
+            The resulting project's status dict (see `status()`), with a
+            `text_applied: False` key added only when text was received but
+            not applied to any project.
 
         Raises:
             InvalidProjectIdError: If a caller-supplied project_id for a new
@@ -99,13 +108,33 @@ class OrchestratorService:
                 component (the Memory Curator's `projects/<id>/memory/`
                 writes), so it must apply the same allow-list itself.
         """
-        if project_id is None or not self._project_exists(project_id):
-            if project_id is not None:
+        if project_id is not None:
+            if not self._project_exists(project_id):
                 validate_project_id(project_id)
-            project_id = project_id or uuid.uuid4().hex[:12]
-            initial_state = new_project_state(project_id, initial_message=text)
-            self._graph.invoke(initial_state, config=self._config(project_id))
-        return self.status(project_id)
+                initial_state = new_project_state(project_id, initial_message=text)
+                self._graph.invoke(initial_state, config=self._config(project_id))
+            self._write_active_project_id(project_id)
+            return self.status(project_id)
+
+        if not force_new:
+            active_id = self._read_active_project_id()
+            if active_id is not None and self._project_exists(active_id):
+                active_status = self.status(active_id)
+                if active_status["phase"] not in _TERMINAL_PHASES:
+                    pending = active_status["pending_approval"]
+                    if pending is not None and pending.get("kind") == "plan_questions":
+                        self._graph.invoke(
+                            Command(resume=text), config=self._config(active_id)
+                        )
+                        self._write_active_project_id(active_id)
+                        return self.status(active_id)
+                    return {**active_status, "text_applied": False}
+
+        new_id = uuid.uuid4().hex[:12]
+        initial_state = new_project_state(new_id, initial_message=text)
+        self._graph.invoke(initial_state, config=self._config(new_id))
+        self._write_active_project_id(new_id)
+        return self.status(new_id)
 
     def resume(self, project_id: str, decision: str) -> dict[str, Any]:
         """Resumes a paused project thread with a human decision.
@@ -125,8 +154,22 @@ class OrchestratorService:
         """
         if not self._project_exists(project_id):
             raise UnknownProjectError(project_id)
+        self._write_active_project_id(project_id)
         self._graph.invoke(Command(resume=decision), config=self._config(project_id))
         return self.status(project_id)
+
+    def activate(self, project_id: str) -> None:
+        """Marks project_id as the active project for future bare free text.
+
+        Args:
+            project_id: The project to activate.
+
+        Raises:
+            UnknownProjectError: If project_id has no checkpoint history.
+        """
+        if not self._project_exists(project_id):
+            raise UnknownProjectError(project_id)
+        self._write_active_project_id(project_id)
 
     def status(self, project_id: str) -> dict[str, Any]:
         """Reads a project's current phase and any pending approval.
@@ -184,3 +227,31 @@ class OrchestratorService:
 
     def _config(self, project_id: str) -> dict[str, Any]:
         return {"configurable": {"thread_id": project_id}}
+
+    def _active_project_path(self) -> Path:
+        return self._projects_root / _ACTIVE_PROJECT_FILENAME
+
+    def _read_active_project_id(self) -> str | None:
+        """Reads the active-project pointer.
+
+        Returns:
+            The active project's id, or None if no pointer file exists yet
+            (a fresh deployment, or one where no project has ever been
+            created or resumed).
+        """
+        path = self._active_project_path()
+        if not path.exists():
+            return None
+        content = path.read_text().strip()
+        return content or None
+
+    def _write_active_project_id(self, project_id: str) -> None:
+        """Overwrites the active-project pointer with project_id.
+
+        No locking: this is a single-operator system (ADR-002) with
+        Telegram delivering one chat's messages in order, and a whole-file
+        overwrite is atomic enough for this scope.
+        """
+        path = self._active_project_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(project_id)

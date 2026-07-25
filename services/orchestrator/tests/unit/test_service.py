@@ -2,11 +2,21 @@
 
 import pytest
 
+from services.orchestrator.agents.planner import InterviewTurn
 from services.orchestrator.executor_client import CommandResult, TestResult
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
 from services.orchestrator.graph.tests.unit.planner_fakes import (
+    CODER_DONE,
+    CURATION_OK,
+    EMPTY_DRAFT,
+    FakeRouter,
+    NO_FINDINGS_CRITIQUE,
+    ONE_TASK,
+    READY_TURN,
+    REVIEWER_APPROVE,
     fast_track_router_with_curation,
     start_only_router,
+    structured,
 )
 from services.orchestrator.memory.global_store import build_global_memory_connection
 from services.orchestrator.service import OrchestratorService, UnknownProjectError
@@ -134,3 +144,191 @@ def test_list_projects_returns_known_ids(tmp_path):
     service.handle_webhook("project-b", "hello")
 
     assert service.list_projects() == ["project-a", "project-b"]
+
+
+def test_handle_webhook_resumes_a_plan_questions_paused_active_project_with_free_text(
+    tmp_path,
+):
+    """The core fix: a project paused mid-interview (pending_approval["kind"]
+    == "plan_questions") must have free text routed to Command(resume=text),
+    not treated as a new project's initial message.
+
+    Response order: (1) InterviewTurn(status="questions") -- node_planner_ask's
+    first call, pauses at planner_wait; (2) READY_TURN -- node_planner_ask's
+    second call after resume, signals interview complete; (3) EMPTY_DRAFT --
+    node_planner_draft; (4) NO_FINDINGS_CRITIQUE -- node_planner_critique,
+    pauses at plan_wait. Exactly these 4, in this order, per one project that
+    never reaches plan_wait's own resume in this test.
+    """
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    responses = [
+        structured(InterviewTurn(status="questions", questions=["Which language?"])),
+        READY_TURN,
+        EMPTY_DRAFT,
+        NO_FINDINGS_CRITIQUE,
+    ]
+    service = OrchestratorService(
+        checkpointer,
+        FakeRouter(responses),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+
+    started = service.handle_webhook(None, "build me a thing", force_new=True)
+    assert started["pending_approval"]["kind"] == "plan_questions"
+
+    resumed = service.handle_webhook(None, "Python please")
+
+    assert resumed["project_id"] == started["project_id"]
+    assert resumed["phase"] == "awaiting_plan_approval"
+    assert "text_applied" not in resumed
+
+
+def test_handle_webhook_does_not_touch_the_graph_when_active_project_is_mid_execution(
+    tmp_path,
+):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        fast_track_router_with_curation(rounds=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("my-project", "hello")
+    service.resume("my-project", "approve")
+
+    result = service.handle_webhook(None, "some unrelated text")
+
+    assert result["project_id"] == "my-project"
+    assert result["phase"] == "awaiting_merge_approval"
+    assert result["text_applied"] is False
+
+
+def test_handle_webhook_force_new_starts_a_fresh_project_even_with_an_active_one(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("my-project", "hello")
+
+    result = service.handle_webhook(None, "brand new idea", force_new=True)
+
+    assert result["project_id"] != "my-project"
+    assert result["phase"] == "awaiting_plan_approval"
+
+
+def test_handle_webhook_starts_fresh_when_active_project_is_terminal(tmp_path):
+    """Response order: 9 items driving "my-project" all the way to done
+    (READY_TURN/EMPTY_DRAFT/NO_FINDINGS_CRITIQUE/CURATION_OK for the plan
+    interview+curator checkpoint, ONE_TASK/CODER_DONE/REVIEWER_APPROVE for
+    the one task, CURATION_OK x2 for the testing and merge_wait curator
+    checkpoints -- mirrors fast_track_router_with_curation(rounds=1) exactly),
+    then 3 more (READY_TURN/EMPTY_DRAFT/NO_FINDINGS_CRITIQUE) for the second
+    project's interview, which must NOT reuse "my-project"'s already-consumed
+    responses.
+    """
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    responses = [
+        READY_TURN,
+        EMPTY_DRAFT,
+        NO_FINDINGS_CRITIQUE,
+        CURATION_OK,
+        ONE_TASK,
+        CODER_DONE,
+        REVIEWER_APPROVE,
+        CURATION_OK,
+        CURATION_OK,
+        READY_TURN,
+        EMPTY_DRAFT,
+        NO_FINDINGS_CRITIQUE,
+    ]
+    service = OrchestratorService(
+        checkpointer,
+        FakeRouter(responses),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("my-project", "hello")
+    service.resume("my-project", "approve")
+    service.resume("my-project", "approve")
+    assert service.status("my-project")["phase"] == "done"
+
+    result = service.handle_webhook(None, "another idea")
+
+    assert result["project_id"] != "my-project"
+    assert result["phase"] == "awaiting_plan_approval"
+
+
+def test_handle_webhook_starts_fresh_on_first_ever_message_with_no_active_project(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+
+    result = service.handle_webhook(None, "build me a thing")
+
+    assert result["project_id"]
+    assert result["phase"] == "awaiting_plan_approval"
+
+
+def test_activate_marks_a_project_active_for_subsequent_free_text(tmp_path):
+    """Response order: two independent projects' interview sequences
+    (start_only_router(projects=2)'s own documented shape) -- project-a is
+    created first (becoming active by that side effect), project-b second;
+    explicitly re-activating project-a must make a later bare free-text
+    webhook target project-a again, not project-b."""
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("project-a", "hello")
+    service.handle_webhook("project-b", "hello")
+
+    service.activate("project-a")
+    result = service.handle_webhook(None, "some text")
+
+    assert result["project_id"] == "project-a"
+    assert result["text_applied"] is False
+
+
+def test_activate_unknown_project_raises(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        FakeRouter([]),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+
+    with pytest.raises(UnknownProjectError):
+        service.activate("does-not-exist")
