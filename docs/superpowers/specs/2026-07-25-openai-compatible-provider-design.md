@@ -54,9 +54,12 @@ local:
 ```
 
 Keeping the provider name `local` means no role `prefer` chain changes.
-Activated by setting `MODELS_CONFIG_PATH=/app/config/models.remote-llm.yaml`
-in `.env`/compose — the same mechanism as the claude-only preset. The user
-fills in the placeholder `base_url`/`model` values for their deployment.
+Activated the same way as the claude-only preset (its documented mechanism
+in `docs/model-router.md`): `cp config/models.remote-llm.yaml
+config/models.yaml`, then fill in the placeholder `base_url`/`model` values
+for the deployment. (`MODELS_CONFIG_PATH` also exists as an env override,
+but `docker-compose.yml` pins it to `/app/config/models.yaml`, so the copy
+is the path of least surprise.)
 
 ## Router (`model_router/router.py`)
 
@@ -89,7 +92,8 @@ leaves room for an optional secrets-backed key field later.
 
 - `scripts/start.sh` unchanged; run it *without* `--local-llm`. No Ollama
   container, no downloads.
-- One `.env` addition: `MODELS_CONFIG_PATH=/app/config/models.remote-llm.yaml`.
+- Activation: `cp config/models.remote-llm.yaml config/models.yaml` and
+  edit the two placeholder values; no `.env` or compose changes.
 - The orchestrator reaches the GPU PC's LAN IP as ordinary outbound
   traffic from the default bridge network; no compose changes.
 
