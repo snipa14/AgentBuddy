@@ -3,7 +3,8 @@
 A self-hosted multi-agent software development platform. Agents plan, build,
 review, and test code autonomously inside isolated Docker containers,
 supervised through Telegram, with LangGraph orchestration and configurable
-local (Ollama) or remote (Claude API) inference.
+inference: an in-host Ollama container, a remote OpenAI-compatible server
+(LM Studio, vLLM, ...) on another machine, or the Claude API.
 
 Give it a project idea — or point it at an existing repo — and it runs an
 intake interview, drafts and self-critiques a plan, then works through
@@ -30,8 +31,8 @@ memory, multi-project concurrency, and packaged skills. Security hardening
   checkpointer mean a pending approval survives `./foundry down` and a
   restart the next day.
 - **Capability-based model routing**, not hardcoded model names. Swapping
-  a role between a local Ollama model and the Claude API is a
-  `config/models.yaml` edit, not a code change.
+  a role between a local or remote self-hosted model and the Claude API is
+  a `config/models.yaml` edit, not a code change.
 - **Memory is boring and inspectable.** Per-project markdown files plus a
   global SQLite/FTS5 store — a human can open a text file and understand
   what the system has learned. No opaque embeddings-only memory for v1.
@@ -124,8 +125,25 @@ Useful commands while it's running:
 ./foundry down    # stop the stack
 ```
 
-To use a local model (Ollama on an RTX 3090) for roles that don't need
-Claude-tier reasoning: `./scripts/start.sh --local-llm`.
+To use a local model for roles that don't need Claude-tier reasoning:
+
+- **GPU on the Foundry host** — runs Ollama as a Compose service:
+  `./scripts/start.sh --local-llm`.
+- **GPU on a different machine** — e.g. an RTX 3090 PC on the LAN running
+  LM Studio's OpenAI-compatible server. Copy the preset over the active
+  config, fill in that machine's address, and start normally (no
+  `--local-llm`, nothing downloaded on the host):
+
+  ```bash
+  cp config/models.remote-llm.yaml config/models.yaml
+  # edit config/models.yaml: base_url -> your GPU machine's LAN address
+  #                          model    -> the id it reports at /v1/models
+  ./scripts/start.sh
+  ```
+
+  See [`docs/model-router.md`](docs/model-router.md) for the full provider
+  reference and ADR-048 in [`ARCHITECTURE.md`](ARCHITECTURE.md#10-decision-log)
+  for the design rationale.
 
 > **Screenshot / demo clip:** coming soon — will show a real Telegram run
 > once one's been captured against a live deployment.
