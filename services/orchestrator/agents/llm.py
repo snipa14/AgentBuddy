@@ -44,12 +44,20 @@ async def invoke_structured(
         about pricing.
 
     Raises:
-        ValueError: If the model's response doesn't validate against schema.
+        ValueError: If the model's response doesn't validate against schema,
+            or if it parsed to None without a parsing_error (the model
+            didn't call the expected tool at all).
     """
     structured_llm = llm.with_structured_output(schema, include_raw=True, method="function_calling")
     response = await structured_llm.ainvoke(messages)
     if response["parsing_error"] is not None:
         raise ValueError(
             f"structured output failed to parse as {schema.__name__}: {response['parsing_error']}"
+        )
+    if response["parsed"] is None:
+        raise ValueError(
+            f"structured output for {schema.__name__} parsed to None with no "
+            f"parsing_error -- the model likely didn't call the expected tool. "
+            f"Raw response: {response['raw']!r}"
         )
     return response["parsed"], response["raw"]
