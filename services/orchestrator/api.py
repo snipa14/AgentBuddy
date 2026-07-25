@@ -14,6 +14,7 @@ class WebhookRequest(BaseModel):
     user_id: int
     text: str
     project_id: str | None = None
+    force_new: bool = False
 
 
 class ResumeRequest(BaseModel):
@@ -29,6 +30,7 @@ class ProjectStatusResponse(BaseModel):
     phase: str
     pending_approval: dict | None
     task_progress: dict | None
+    text_applied: bool = True
 
 
 class ProjectListResponse(BaseModel):
@@ -64,7 +66,9 @@ def build_app(service: OrchestratorService) -> FastAPI:
     @app.post("/webhook", response_model=ProjectStatusResponse)
     def webhook(request: WebhookRequest) -> ProjectStatusResponse:
         try:
-            result = service.handle_webhook(request.project_id, request.text)
+            result = service.handle_webhook(
+                request.project_id, request.text, force_new=request.force_new
+            )
         except InvalidProjectIdError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return ProjectStatusResponse(**result)
@@ -76,6 +80,14 @@ def build_app(service: OrchestratorService) -> FastAPI:
         except UnknownProjectError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return ProjectStatusResponse(**result)
+
+    @app.post("/activate/{project_id}", response_model=ProjectStatusResponse)
+    def activate(project_id: str) -> ProjectStatusResponse:
+        try:
+            service.activate(project_id)
+        except UnknownProjectError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return ProjectStatusResponse(**service.status(project_id))
 
     @app.get("/stream/{project_id}", response_model=StreamResponse)
     def stream(project_id: str, since_seq: int = -1) -> StreamResponse:

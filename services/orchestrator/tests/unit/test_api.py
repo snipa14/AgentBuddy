@@ -174,3 +174,36 @@ def test_status_of_a_terminal_project_clears_its_progress_buffer(client):
     client.post("/resume/terminal-project", json={"decision": "approve"})
 
     assert get_chunks_since("terminal-project") == []
+
+
+def test_webhook_force_new_starts_a_fresh_project_even_with_an_active_one(client):
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"})
+
+    response = client.post(
+        "/webhook", json={"user_id": 1, "text": "brand new idea", "force_new": True}
+    )
+
+    assert response.json()["project_id"] != "my-project"
+
+
+def test_webhook_response_defaults_text_applied_to_true(client):
+    response = client.post(
+        "/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"}
+    )
+
+    assert response.json()["text_applied"] is True
+
+
+def test_activate_unknown_project_returns_404(client):
+    response = client.post("/activate/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_activate_known_project_returns_its_status(client):
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"})
+
+    response = client.post("/activate/my-project")
+
+    assert response.status_code == 200
+    assert response.json()["project_id"] == "my-project"
