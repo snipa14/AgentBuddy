@@ -30,8 +30,24 @@ class AnthropicProviderConfig(BaseModel):
     cost_per_1m_output_tokens: float = Field(ge=0)
 
 
+class OpenAICompatibleProviderConfig(BaseModel):
+    """Config for a provider speaking the OpenAI chat-completions API.
+
+    Covers any self-hosted OpenAI-compatible server -- LM Studio, vLLM,
+    llama.cpp server -- typically running on a separate machine from the
+    Foundry host, reached via base_url.
+    """
+
+    type: Literal["openai_compatible"]
+    model: str
+    base_url: str
+    capabilities: list[Capability] = Field(default_factory=list)
+    cost_per_1m_input_tokens: float = Field(ge=0)
+    cost_per_1m_output_tokens: float = Field(ge=0)
+
+
 ProviderConfig = Annotated[
-    OllamaProviderConfig | AnthropicProviderConfig,
+    OllamaProviderConfig | AnthropicProviderConfig | OpenAICompatibleProviderConfig,
     Field(discriminator="type"),
 ]
 

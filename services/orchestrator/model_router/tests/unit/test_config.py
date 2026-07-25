@@ -10,6 +10,7 @@ from services.orchestrator.model_router.config import (
     AnthropicProviderConfig,
     ModelsConfig,
     OllamaProviderConfig,
+    OpenAICompatibleProviderConfig,
     load_models_config,
 )
 
@@ -109,3 +110,42 @@ def test_claude_only_models_yaml_is_valid_and_has_no_local_provider():
     assert "local" not in config.providers
     for role in config.roles.values():
         assert all(config.providers[name].type == "anthropic" for name in role.prefer)
+
+
+def test_openai_compatible_provider_block_parses():
+    raw = {
+        "roles": {"coder": {"requires": ["tool_calling"], "prefer": ["local"]}},
+        "providers": {
+            "local": {
+                "type": "openai_compatible",
+                "model": "qwen/qwen3-coder-30b",
+                "base_url": "http://192.168.1.50:1234/v1",
+                "capabilities": ["tool_calling"],
+                "cost_per_1m_input_tokens": 0,
+                "cost_per_1m_output_tokens": 0,
+            }
+        },
+    }
+
+    config = ModelsConfig.model_validate(raw)
+
+    assert isinstance(config.providers["local"], OpenAICompatibleProviderConfig)
+    assert config.providers["local"].base_url == "http://192.168.1.50:1234/v1"
+
+
+def test_openai_compatible_provider_missing_base_url_raises_validation_error():
+    raw = {
+        "roles": {"coder": {"requires": [], "prefer": ["local"]}},
+        "providers": {
+            "local": {
+                "type": "openai_compatible",
+                "model": "qwen/qwen3-coder-30b",
+                "capabilities": [],
+                "cost_per_1m_input_tokens": 0,
+                "cost_per_1m_output_tokens": 0,
+            }
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        ModelsConfig.model_validate(raw)
