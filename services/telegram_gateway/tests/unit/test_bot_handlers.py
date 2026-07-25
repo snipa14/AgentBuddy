@@ -15,6 +15,7 @@ from services.telegram_gateway.bot import (
     handle_free_text,
     handle_new,
     handle_projects,
+    handle_reply_callback,
     handle_start,
     handle_status,
 )
@@ -77,7 +78,7 @@ def test_handle_start_greets_without_calling_orchestrator(message):
 def test_handle_new_forwards_to_orchestrator_and_acknowledges(message, orchestrator, poller):
     asyncio.run(handle_new(message, orchestrator, poller))
 
-    orchestrator.send_webhook.assert_awaited_once_with(42, "/new build me a thing")
+    orchestrator.send_webhook.assert_awaited_once_with(42, "/new build me a thing", force_new=True)
     message.answer.assert_awaited_once()
 
 
@@ -307,3 +308,48 @@ def test_handle_approval_callback_handles_missing_message_gracefully(orchestrato
     asyncio.run(handle_approval_callback(callback, orchestrator))
 
     orchestrator.resume.assert_awaited_once_with("thread-9", "reject")
+
+
+def test_handle_free_text_shows_a_hint_when_text_was_not_applied(message, orchestrator, poller):
+    response = MagicMock()
+    response.json.return_value = {
+        "project_id": "proj-1",
+        "phase": "awaiting_merge_approval",
+        "pending_approval": {"thread_id": "proj-1", "summary": "Merge to main?"},
+        "text_applied": False,
+    }
+    orchestrator.send_webhook = AsyncMock(return_value=response)
+
+    asyncio.run(handle_free_text(message, orchestrator, poller))
+
+    message.answer.assert_awaited_once_with(
+        "Project proj-1 is at phase 'awaiting_merge_approval' and isn't waiting on typed "
+        "replies right now -- use the buttons above, or /status."
+    )
+
+
+def test_handle_reply_callback_activates_the_project_and_prompts_for_a_reply(orchestrator):
+    from aiogram.types import ForceReply
+
+    orchestrator.activate = AsyncMock(return_value=_status_response(project_id="proj-1"))
+    callback = _callback("reply:proj-1")
+
+    asyncio.run(handle_reply_callback(callback, orchestrator))
+
+    orchestrator.activate.assert_awaited_once_with("proj-1")
+    callback.answer.assert_awaited_once()
+    callback.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+    args, kwargs = callback.message.answer.call_args
+    assert isinstance(kwargs.get("reply_markup"), ForceReply)
+
+
+def test_handle_reply_callback_handles_missing_message_gracefully(orchestrator):
+    orchestrator.activate = AsyncMock(return_value=_status_response(project_id="proj-1"))
+    callback = MagicMock()
+    callback.data = "reply:proj-1"
+    callback.answer = AsyncMock()
+    callback.message = None
+
+    asyncio.run(handle_reply_callback(callback, orchestrator))
+
+    orchestrator.activate.assert_awaited_once_with("proj-1")

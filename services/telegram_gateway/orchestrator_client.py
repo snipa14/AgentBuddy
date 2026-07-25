@@ -21,10 +21,13 @@ class OrchestratorClient:
         self._base_url = base_url.rstrip("/")
         self._client = client
 
-    async def send_webhook(self, user_id: int, text: str) -> httpx.Response:
+    async def send_webhook(
+        self, user_id: int, text: str, force_new: bool = False
+    ) -> httpx.Response:
         """Forwards a free-text message or command to POST /webhook."""
         return await self._client.post(
-            f"{self._base_url}/webhook", json={"user_id": user_id, "text": text}
+            f"{self._base_url}/webhook",
+            json={"user_id": user_id, "text": text, "force_new": force_new},
         )
 
     async def resume(self, thread_id: str, decision: str) -> httpx.Response:
@@ -32,6 +35,10 @@ class OrchestratorClient:
         return await self._client.post(
             f"{self._base_url}/resume/{thread_id}", json={"decision": decision}
         )
+
+    async def activate(self, project_id: str) -> httpx.Response:
+        """Marks project_id active via POST /activate/{project_id}."""
+        return await self._client.post(f"{self._base_url}/activate/{project_id}")
 
     async def stream(self, project_id: str, since_seq: int = -1) -> httpx.Response:
         """Polls GET /stream/{project_id} for progress chunks recorded after since_seq."""

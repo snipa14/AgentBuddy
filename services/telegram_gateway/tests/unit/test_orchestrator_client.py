@@ -23,7 +23,17 @@ def test_send_webhook_posts_user_id_and_text():
 
     args, kwargs = client.post.call_args
     assert args[0] == "http://orchestrator:8000/webhook"
-    assert kwargs["json"] == {"user_id": 42, "text": "hello"}
+    assert kwargs["json"] == {"user_id": 42, "text": "hello", "force_new": False}
+
+
+def test_send_webhook_can_force_a_new_project():
+    client = _mock_httpx_client()
+    orchestrator = OrchestratorClient("http://orchestrator:8000", client)
+
+    asyncio.run(orchestrator.send_webhook(42, "hello", force_new=True))
+
+    _, kwargs = client.post.call_args
+    assert kwargs["json"] == {"user_id": 42, "text": "hello", "force_new": True}
 
 
 def test_resume_posts_decision_to_thread_specific_url():
@@ -76,3 +86,13 @@ def test_get_projects_gets_the_projects_url():
 
     args, _ = client.get.call_args
     assert args[0] == "http://orchestrator:8000/projects"
+
+
+def test_activate_posts_to_the_project_specific_url():
+    client = _mock_httpx_client()
+    orchestrator = OrchestratorClient("http://orchestrator:8000/", client)
+
+    asyncio.run(orchestrator.activate("proj-1"))
+
+    args, _ = client.post.call_args
+    assert args[0] == "http://orchestrator:8000/activate/proj-1"

@@ -17,7 +17,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, ForceReply, Message
 
 from services.telegram_gateway.orchestrator_client import OrchestratorClient
 from services.telegram_gateway.progress_poller import ProgressPoller
@@ -25,6 +25,7 @@ from services.telegram_gateway.rendering import (
     CALLBACK_APPROVE,
     CALLBACK_EDIT,
     CALLBACK_REJECT,
+    CALLBACK_REPLY,
     render_approval,
     render_project_list,
     render_project_status,
@@ -56,15 +57,22 @@ def _start_poller_from_response(poller: ProgressPoller, response, chat_id: int) 
 
 
 async def _relay_webhook_result(message: Message, response) -> None:
-    """Renders a webhook response: an Approve/Reject/Edit keyboard if the
-    project is now paused at a gate, a task-progress summary if tasks exist,
-    a plain acknowledgment otherwise.
+    """Renders a webhook response: an explicit hint if the text wasn't
+    applied to any project, an Approve/Reject/Edit or Reply keyboard if the
+    project is now paused at a gate, a task-progress summary if tasks
+    exist, a plain acknowledgment otherwise.
 
     Args:
         message: The incoming message to reply to.
         response: The httpx.Response returned by OrchestratorClient.send_webhook.
     """
     body = response.json()
+    if body.get("text_applied") is False:
+        await message.answer(
+            f"Project {body['project_id']} is at phase '{body['phase']}' and isn't "
+            "waiting on typed replies right now -- use the buttons above, or /status."
+        )
+        return
     pending_approval = body.get("pending_approval")
     if pending_approval:
         text, keyboard = render_approval(pending_approval)
@@ -92,7 +100,7 @@ async def handle_new(
     message: Message, orchestrator: OrchestratorClient, poller: ProgressPoller
 ) -> None:
     """Forwards a /new command to the Orchestrator to start a project."""
-    response = await orchestrator.send_webhook(message.from_user.id, message.text)
+    response = await orchestrator.send_webhook(message.from_user.id, message.text, force_new=True)
     _start_poller_from_response(poller, response, message.chat.id)
     await _relay_webhook_result(message, response)
 
@@ -156,3 +164,23 @@ async def handle_approval_callback(
         return
     await callback.message.edit_reply_markup(reply_markup=None)
     await _relay_webhook_result(callback.message, response)
+
+
+@router.callback_query(F.data.startswith(CALLBACK_REPLY))
+async def handle_reply_callback(callback: CallbackQuery, orchestrator: OrchestratorClient) -> None:
+    """Activates the tapped project and opens a force-reply text box.
+
+    The Reply button on an interview-question message is the disambiguator
+    for when more than one project is paused at once (the common
+    single-project case never needs it -- see docs/superpowers/specs/
+    2026-07-25-telegram-conversational-loop-design.md).
+    """
+    _, project_id = callback.data.split(":", 1)
+    await orchestrator.activate(project_id)
+    await callback.answer()
+    if callback.message is None:
+        return
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        "Type your answer:", reply_markup=ForceReply(selective=True)
+    )
