@@ -94,7 +94,9 @@ class FakeChatModel:
         for chunk in _split_into_chunks(response):
             yield chunk
 
-    def with_structured_output(self, schema: type[BaseModel], include_raw: bool = False):
+    def with_structured_output(
+        self, schema: type[BaseModel], include_raw: bool = False, method: str | None = None
+    ):
         return _FakeStructuredRunnable(self, schema, include_raw)
 
 

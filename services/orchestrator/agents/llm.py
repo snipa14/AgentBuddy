@@ -4,10 +4,18 @@ Every agent module resolves a `BaseChatModel` from `ModelRouter.resolve()`
 and drives it directly: `with_structured_output()` for single-shot structured
 responses (Planner, Reviewer, Frontend Reviewer, Memory Curator), `bind_tools()`
 for the Coder's tool-calling loop (services.orchestrator.agents.coder). This
-module holds the one piece of glue every structured-output call needs:
+module holds the two pieces of glue every structured-output call needs:
 forcing `include_raw=True` so the raw `AIMessage` -- and its `usage_metadata`,
 needed for cost tracking -- comes back alongside the parsed result, without
-agent code ever needing to know about token pricing itself (ADR-026).
+agent code ever needing to know about token pricing itself (ADR-026); and
+forcing `method="function_calling"` rather than leaving the method
+provider-inferred (ADR-049) -- left unspecified, `ChatOpenAI` silently
+resolves to OpenAI's strict `json_schema` structured-output mode for
+`openai_compatible` providers, which several real reasoning-mode local
+models fail on outright (the model exhausts its turn on its `<think>` block
+and never enters the JSON grammar, returning empty content with neither a
+`parsed` nor a `refusal` field). Tool-calling is the structured-output
+mechanism every provider in this router supports reliably.
 """
 
 from typing import TypeVar
@@ -38,7 +46,7 @@ async def invoke_structured(
     Raises:
         ValueError: If the model's response doesn't validate against schema.
     """
-    structured_llm = llm.with_structured_output(schema, include_raw=True)
+    structured_llm = llm.with_structured_output(schema, include_raw=True, method="function_calling")
     response = await structured_llm.ainvoke(messages)
     if response["parsing_error"] is not None:
         raise ValueError(
