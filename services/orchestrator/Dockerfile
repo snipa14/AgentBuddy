@@ -30,6 +30,7 @@ RUN pip install --no-cache-dir \
     "langchain-core>=0.3" \
     "langchain-anthropic>=0.3" \
     "langchain-ollama>=0.2" \
+    "langchain-openai>=0.2" \
     "fastapi>=0.115" \
     "uvicorn>=0.30" \
     "pygithub>=2.5"
