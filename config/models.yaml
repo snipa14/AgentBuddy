@@ -1,6 +1,7 @@
 # Default model routing config: local-first for cost, Claude API as the
 # fallback/escalation tier. See docs/model-router.md for how to add a new
-# provider or role, and config/models.claude-only.yaml for the GPU-less preset.
+# provider or role; config/models.claude-only.yaml for the GPU-less preset;
+# config/models.remote-llm.yaml for a GPU on another machine (LM Studio etc.).
 roles:
   planner:
     requires: [tool_calling, long_context]

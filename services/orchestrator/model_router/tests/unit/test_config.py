@@ -149,3 +149,11 @@ def test_openai_compatible_provider_missing_base_url_raises_validation_error():
 
     with pytest.raises(ValidationError):
         ModelsConfig.model_validate(raw)
+
+
+def test_remote_llm_models_yaml_is_valid_and_local_is_openai_compatible():
+    config = load_models_config(REPO_ROOT / "config" / "models.remote-llm.yaml")
+
+    assert isinstance(config.providers["local"], OpenAICompatibleProviderConfig)
+    default_config = load_models_config(REPO_ROOT / "config" / "models.yaml")
+    assert set(config.roles) == set(default_config.roles)
