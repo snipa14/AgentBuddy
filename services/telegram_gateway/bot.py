@@ -244,7 +244,12 @@ async def handle_approval_callback(
     await callback.answer(_DECISION_ACKNOWLEDGMENTS.get(decision, "Done."))
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=None)
-    response = await orchestrator.resume(thread_id, decision)
+    try:
+        response = await orchestrator.resume(thread_id, decision)
+    except httpx.TimeoutException:
+        if callback.message is not None:
+            await _answer_timeout_hint(callback.message)
+        return
     if callback.message is None:
         return
     await _relay_webhook_result(callback.message, response)
@@ -271,7 +276,12 @@ async def handle_reply_callback(callback: CallbackQuery, orchestrator: Orchestra
     await callback.answer()
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=None)
-    await orchestrator.activate(project_id)
+    try:
+        await orchestrator.activate(project_id)
+    except httpx.TimeoutException:
+        if callback.message is not None:
+            await _answer_timeout_hint(callback.message)
+        return
     if callback.message is None:
         return
     await callback.message.answer(

@@ -409,6 +409,22 @@ def test_handle_approval_callback_acknowledges_and_clears_keyboard_before_the_sl
     orchestrator.resume.assert_awaited_once_with("thread-123", "approve")
 
 
+def test_handle_approval_callback_shows_a_hint_when_the_resume_call_times_out(orchestrator):
+    """resume() can now run node_coder's task loop through every remaining
+    task in one call and outlast even the Gateway's generous httpx timeout
+    (observed: 300s+ once real task execution started working). Unlike
+    handle_new/handle_free_text/handle_continue, this handler had no
+    httpx.TimeoutException guard at all, so it crashed uncaught -- the tap
+    was acknowledged and the keyboard cleared (the earlier ordering fix), but
+    the user never got any follow-up message."""
+    callback = _callback("approve:thread-123")
+    orchestrator.resume = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+
+    asyncio.run(handle_approval_callback(callback, orchestrator))
+
+    callback.message.answer.assert_awaited_once()
+
+
 def test_handle_approval_callback_handles_missing_message_gracefully(orchestrator):
     callback = MagicMock()
     callback.data = "reject:thread-9"
@@ -492,6 +508,18 @@ def test_handle_reply_callback_acknowledges_and_clears_keyboard_before_the_slow_
     asyncio.run(handle_reply_callback(callback, orchestrator))
 
     orchestrator.activate.assert_awaited_once_with("proj-1")
+
+
+def test_handle_reply_callback_shows_a_hint_when_the_activate_call_times_out(orchestrator):
+    """activate() can now resume a stuck project's execution and outlast the
+    Gateway's httpx timeout the same way resume() can -- must not crash
+    uncaught, must tell the user something."""
+    callback = _callback("reply:proj-1")
+    orchestrator.activate = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+
+    asyncio.run(handle_reply_callback(callback, orchestrator))
+
+    callback.message.answer.assert_awaited_once()
 
 
 def test_handle_free_text_shows_a_hint_when_the_orchestrator_call_times_out(

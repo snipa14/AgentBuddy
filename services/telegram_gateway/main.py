@@ -16,13 +16,21 @@ from services.telegram_gateway.config import GatewayConfig
 from services.telegram_gateway.orchestrator_client import OrchestratorClient
 from services.telegram_gateway.progress_poller import ProgressPoller
 
-DEFAULT_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=30.0)
-"""Generous read timeout: POST /webhook runs the LangGraph synchronously up
-to its next interrupt, which can chain several sequential LLM calls (e.g.
-interview complete -> plan drafted -> critique) before responding. Against a
-local model this routinely exceeds httpx's 5s default, which aborted the
-request client-side while the Orchestrator kept running -- the user's
-message appeared to vanish even though the project advanced."""
+DEFAULT_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=1800.0, write=30.0, pool=30.0)
+"""Generous read timeout: POST /webhook, /resume, and /activate all run the
+LangGraph synchronously up to its next interrupt, which can chain several
+sequential LLM calls (e.g. interview complete -> plan drafted -> critique)
+before responding. Against a local model this routinely exceeds httpx's 5s
+default, which aborted the request client-side while the Orchestrator kept
+running -- the user's message appeared to vanish even though the project
+advanced. 300s (the original fix) was itself too short once real task
+execution started working: /resume can run node_coder's task loop through
+every remaining task in one call, observed taking over 5 minutes for a
+single multi-task run against a local model. 1800s (30 minutes) is a
+pragmatic ceiling, not a structural fix -- a sufficiently large plan can
+still legitimately outlast it, at which point the real fix is making these
+endpoints non-blocking (return immediately, let the poller carry progress)
+rather than raising this number again."""
 
 
 async def run(config: GatewayConfig) -> None:
