@@ -110,6 +110,17 @@ networks:
   # name. Isolated from foundry_internal: a workspace container can't reach
   # the proxy, the Orchestrator, or the Telegram Gateway.
   foundry_workspace:
+    # Pinned to this literal name (bypassing Compose's default
+    # <project>_<network> prefixing) because services/executor/config.py's
+    # DEFAULT_NETWORK_NAME passes "foundry_workspace" straight to the Docker
+    # SDK, which doesn't go through Compose's name resolution -- with
+    # COMPOSE_PROJECT_NAME=foundry (.env) and no override, Compose would
+    # otherwise create this as "foundry_foundry_workspace", which the
+    # Executor could create containers against (container creation doesn't
+    # validate the network) but never actually start (start() resolves and
+    # attaches the network, failing with "network foundry_workspace not
+    # found" once it can't find that literal name).
+    name: foundry_workspace
     driver: bridge
 
 volumes:

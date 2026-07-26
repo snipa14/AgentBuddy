@@ -25,6 +25,7 @@ from services.telegram_gateway.bot import (
 
 def _webhook_response(project_id: str = "proj-1") -> MagicMock:
     response = MagicMock()
+    response.status_code = 200
     response.json.return_value = {
         "project_id": project_id,
         "phase": "intake",
@@ -260,6 +261,7 @@ def test_handle_new_renders_an_approval_keyboard_when_a_gate_is_pending(
     message, orchestrator, poller
 ):
     response = MagicMock()
+    response.status_code = 200
     response.json.return_value = {
         "project_id": "proj-1",
         "phase": "awaiting_plan_approval",
@@ -286,6 +288,7 @@ def test_handle_new_renders_task_progress_when_no_gate_is_pending(
     message, orchestrator, poller
 ):
     response = MagicMock()
+    response.status_code = 200
     response.json.return_value = {
         "project_id": "proj-1",
         "phase": "implementing",
@@ -351,6 +354,7 @@ def test_handle_approval_callback_pushes_the_next_gates_keyboard(orchestrator):
     approval keyboard must be pushed immediately, not stall until the user
     happens to send another message."""
     merge_gate = MagicMock()
+    merge_gate.status_code = 200
     merge_gate.json.return_value = {
         "project_id": "proj-1",
         "phase": "awaiting_merge_approval",
@@ -368,6 +372,7 @@ def test_handle_approval_callback_pushes_the_next_gates_keyboard(orchestrator):
 
 def test_handle_approval_callback_reports_terminal_phase_after_reject(orchestrator):
     blocked = MagicMock()
+    blocked.status_code = 200
     blocked.json.return_value = {
         "project_id": "proj-1",
         "phase": "blocked",
@@ -417,6 +422,7 @@ def test_handle_approval_callback_handles_missing_message_gracefully(orchestrato
 
 def test_handle_free_text_shows_a_hint_when_text_was_not_applied(message, orchestrator, poller):
     response = MagicMock()
+    response.status_code = 200
     response.json.return_value = {
         "project_id": "proj-1",
         "phase": "awaiting_merge_approval",
@@ -431,6 +437,24 @@ def test_handle_free_text_shows_a_hint_when_text_was_not_applied(message, orches
         "Project proj-1 is at phase 'awaiting_merge_approval' and isn't waiting on typed "
         "replies right now -- use the buttons above, or /status."
     )
+
+
+def test_handle_free_text_shows_a_hint_when_the_orchestrator_returns_a_server_error(
+    message, orchestrator, poller
+):
+    """A 5xx response means the graph itself crashed on an uncaught exception
+    (e.g. a provider error mid-tool-call) -- FastAPI's default error body for
+    that isn't JSON, so calling response.json() on it raised an unhandled
+    JSONDecodeError in production instead of telling the user anything."""
+    response = MagicMock()
+    response.status_code = 500
+    response.json.side_effect = ValueError("not JSON")
+    orchestrator.send_webhook = AsyncMock(return_value=response)
+
+    asyncio.run(handle_free_text(message, orchestrator, poller))
+
+    message.answer.assert_awaited_once()
+    response.json.assert_not_called()
 
 
 def test_handle_reply_callback_activates_the_project_and_prompts_for_a_reply(orchestrator):

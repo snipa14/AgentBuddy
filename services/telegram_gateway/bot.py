@@ -47,11 +47,18 @@ _DECISION_ACKNOWLEDGMENTS = {
 def _start_poller_from_response(poller: ProgressPoller, response, chat_id: int) -> None:
     """Starts live progress polling for the project a webhook response names.
 
+    A 5xx response means the graph crashed rather than returning a normal
+    ProjectStatusResponse -- its body isn't JSON, and there's nothing to
+    poll for anyway, so this is a no-op rather than crashing on
+    response.json() (see _relay_webhook_result's matching guard).
+
     Args:
         poller: The Gateway's shared ProgressPoller.
         response: The httpx.Response returned by OrchestratorClient.send_webhook.
         chat_id: The Telegram chat to relay this project's progress into.
     """
+    if response.status_code >= 500:
+        return
     project_id = response.json().get("project_id")
     if project_id:
         poller.start(project_id, chat_id)
@@ -63,10 +70,23 @@ async def _relay_webhook_result(message: Message, response) -> None:
     project is now paused at a gate, a task-progress summary if tasks
     exist, a plain acknowledgment otherwise.
 
+    A 5xx response means the graph run itself crashed (an uncaught
+    exception inside a node -- e.g. a provider error mid-tool-call) rather
+    than returning a normal ProjectStatusResponse; FastAPI's default error
+    body for that isn't JSON, so calling response.json() on it raised an
+    unhandled JSONDecodeError here instead of telling the user anything.
+
     Args:
         message: The incoming message to reply to.
         response: The httpx.Response returned by OrchestratorClient.send_webhook.
     """
+    if response.status_code >= 500:
+        await message.answer(
+            "The Orchestrator hit an internal error handling that -- check its "
+            "logs. The project may be stuck at the same point; /continue can "
+            "retry it."
+        )
+        return
     body = response.json()
     if body.get("text_applied") is False:
         await message.answer(
