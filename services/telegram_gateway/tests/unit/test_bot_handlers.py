@@ -214,6 +214,19 @@ def test_handle_continue_shows_task_progress_when_no_gate_pending(message, orche
     message.answer.assert_awaited_once_with("1/2 tasks done\nIn progress: Second task")
 
 
+def test_handle_continue_shows_a_hint_when_the_orchestrator_call_times_out(message, orchestrator):
+    """activate() can now resume a stuck project's execution synchronously
+    (OrchestratorService.activate), so it can be just as slow as /webhook or
+    /resume against a local model -- /continue needs the same timeout
+    fallback those already have."""
+    message.text = "/continue proj-1"
+    orchestrator.activate = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+
+    asyncio.run(handle_continue(message, orchestrator))
+
+    message.answer.assert_awaited_once()
+
+
 def test_handle_projects_lists_known_ids(message, orchestrator):
     message.text = "/projects"
 
@@ -433,6 +446,28 @@ def test_handle_reply_callback_activates_the_project_and_prompts_for_a_reply(orc
     callback.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
     args, kwargs = callback.message.answer.call_args
     assert isinstance(kwargs.get("reply_markup"), ForceReply)
+
+
+def test_handle_reply_callback_acknowledges_and_clears_keyboard_before_the_slow_activate_call(
+    orchestrator,
+):
+    """activate() can now resume a stuck project's execution synchronously
+    (OrchestratorService.activate), the same slow-call class that made
+    handle_approval_callback answer the tap before calling resume(). An old
+    Reply button tapped on a project that's since moved past its interview
+    must not crash on callback.answer() before the keyboard is cleared."""
+    callback = _callback("reply:proj-1")
+
+    async def _activate_after_ack_and_clear(*args, **kwargs):
+        assert callback.answer.await_count == 1
+        assert callback.message.edit_reply_markup.await_count == 1
+        return _status_response(project_id="proj-1")
+
+    orchestrator.activate = AsyncMock(side_effect=_activate_after_ack_and_clear)
+
+    asyncio.run(handle_reply_callback(callback, orchestrator))
+
+    orchestrator.activate.assert_awaited_once_with("proj-1")
 
 
 def test_handle_free_text_shows_a_hint_when_the_orchestrator_call_times_out(

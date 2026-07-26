@@ -159,14 +159,22 @@ async def handle_continue(message: Message, orchestrator: OrchestratorClient) ->
     button left to tap. POST /activate/{project_id} only ever writes the
     active-project pointer file (ARCHITECTURE.md's webhook contract), so it
     works regardless of what the Gateway process itself remembers; this
-    command is the only text-based way to reach it.
+    command is the only text-based way to reach it. It also now resumes a
+    project's execution from checkpoint if it was stuck mid-flight
+    (OrchestratorService.activate), which can run the LangGraph synchronously
+    just like /webhook and /resume do -- so this can be slow against a local
+    model the same way those are.
     """
     parts = (message.text or "").split(maxsplit=1)
     project_id = parts[1].strip() if len(parts) > 1 else ""
     if not project_id:
         await message.answer("Usage: /continue <project_id>")
         return
-    response = await orchestrator.activate(project_id)
+    try:
+        response = await orchestrator.activate(project_id)
+    except httpx.TimeoutException:
+        await _answer_timeout_hint(message)
+        return
     if response.status_code == 404:
         await message.answer(f"Unknown project '{project_id}'. Try /projects.")
         return
@@ -230,13 +238,22 @@ async def handle_reply_callback(callback: CallbackQuery, orchestrator: Orchestra
     for when more than one project is paused at once (the common
     single-project case never needs it -- see docs/superpowers/specs/
     2026-07-25-telegram-conversational-loop-design.md).
+
+    The tap is acknowledged and the keyboard cleared *before* calling
+    activate(), not after: activate() can now resume a stuck project's
+    execution from its checkpoint (OrchestratorService.activate), which runs
+    the LangGraph synchronously just like resume() does -- the same "query
+    is too old" crash fixed in handle_approval_callback applies here too if
+    an old Reply button gets tapped on a project that's since moved past its
+    interview into a long-running implementation.
     """
     _, project_id = callback.data.split(":", 1)
-    await orchestrator.activate(project_id)
     await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await orchestrator.activate(project_id)
     if callback.message is None:
         return
-    await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
         "Type your answer:", reply_markup=ForceReply(selective=True)
     )
