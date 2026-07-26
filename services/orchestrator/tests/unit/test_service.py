@@ -2,6 +2,7 @@
 
 import pytest
 
+from services.orchestrator.agents.coder import CoderTask, _TaskList
 from services.orchestrator.agents.planner import InterviewTurn
 from services.orchestrator.executor_client import CommandResult, TestResult
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
@@ -316,6 +317,87 @@ def test_activate_marks_a_project_active_for_subsequent_free_text(tmp_path):
 
     assert result["project_id"] == "project-a"
     assert result["text_applied"] is False
+
+
+def test_activate_resumes_execution_when_stuck_mid_task_with_no_pending_approval(tmp_path):
+    """Simulates the Orchestrator process dying mid-task-loop (e.g. a Docker
+    stack restart): the checkpointer persists state after every completed
+    superstep, but nothing re-invokes the compiled graph after a crash on
+    its own. A fresh service built from the same on-disk checkpoint (a new
+    OrchestratorService/checkpointer pair against the same sqlite file,
+    exactly like restarting the process for real) must have activate() pick
+    task execution back up, not just write the active-project pointer.
+
+    The "crash" itself is simulated by under-scripting the FakeRouter so its
+    FakeChatModel runs out of responses mid-task-two and raises IndexError --
+    LangGraph still checkpoints task one's completion first, since that
+    superstep finished before the crash.
+    """
+    db_path = tmp_path / "foundry_memory.db"
+    two_tasks = structured(
+        _TaskList(tasks=[CoderTask(description="Task 1"), CoderTask(description="Task 2")])
+    )
+    checkpointer = build_sqlite_checkpointer(db_path)
+    memory_conn = build_global_memory_connection(db_path)
+    router = FakeRouter(
+        [READY_TURN, EMPTY_DRAFT, NO_FINDINGS_CRITIQUE, CURATION_OK, two_tasks, CODER_DONE]
+    )
+    service = OrchestratorService(
+        checkpointer,
+        router,
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("proj-1", "build me a thing")
+
+    with pytest.raises(IndexError):
+        service.resume("proj-1", "approve")
+
+    stuck_status = service.status("proj-1")
+    assert stuck_status["phase"] == "implementing"
+    assert stuck_status["pending_approval"] is None
+    assert stuck_status["task_progress"]["done"] == 1
+
+    resumed_service = OrchestratorService(
+        build_sqlite_checkpointer(db_path),
+        FakeRouter([CODER_DONE]),
+        _StubExecutorClient(),
+        build_global_memory_connection(db_path),
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+
+    with pytest.raises(IndexError):
+        resumed_service.activate("proj-1")
+
+    final_status = resumed_service.status("proj-1")
+    assert final_status["task_progress"]["done"] == 2
+
+
+def test_activate_leaves_a_project_paused_at_a_real_gate_untouched(tmp_path):
+    """A project paused at plan_approval (pending_approval is not None) must
+    not have the graph re-invoked just because it was reactivated -- that
+    needs an explicit decision via resume(), not a bare continuation."""
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("proj-1", "build me a thing")
+
+    result = service.activate("proj-1")
+
+    assert result is None
+    status = service.status("proj-1")
+    assert status["phase"] == "awaiting_plan_approval"
+    assert status["pending_approval"] is not None
 
 
 def test_activate_unknown_project_raises(tmp_path):

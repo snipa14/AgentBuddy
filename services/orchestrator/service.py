@@ -159,10 +159,24 @@ class OrchestratorService:
         return self.status(project_id)
 
     def activate(self, project_id: str) -> None:
-        """Marks project_id as the active project for future bare free text.
+        """Marks project_id active, and resumes its execution if it's stuck mid-flight.
+
+        A project mid-task-loop (non-terminal, no pending_approval) with no
+        further progress happening isn't waiting on anything -- it's stuck
+        because whatever last called `_graph.invoke()` never returned, most
+        often because the Orchestrator process itself stopped (e.g. a Docker
+        stack restart) partway through. The checkpointer persists state after
+        every completed superstep, but nothing else re-invokes the compiled
+        graph after a crash. Passing `None` as input, rather than an initial
+        state or `Command(resume=...)`, tells LangGraph to continue running
+        from wherever the last checkpoint left off.
+
+        A project currently paused at a real `interrupt()` (pending_approval
+        is not None) is left untouched here -- that needs an explicit
+        decision via `resume()`, not a bare continuation.
 
         Args:
-            project_id: The project to activate.
+            project_id: The project to activate (and resume, if stuck).
 
         Raises:
             UnknownProjectError: If project_id has no checkpoint history.
@@ -170,6 +184,9 @@ class OrchestratorService:
         if not self._project_exists(project_id):
             raise UnknownProjectError(project_id)
         self._write_active_project_id(project_id)
+        current = self.status(project_id)
+        if current["phase"] not in _TERMINAL_PHASES and current["pending_approval"] is None:
+            self._graph.invoke(None, config=self._config(project_id))
 
     def status(self, project_id: str) -> dict[str, Any]:
         """Reads a project's current phase and any pending approval.
