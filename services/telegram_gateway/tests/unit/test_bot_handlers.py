@@ -300,6 +300,29 @@ def test_handle_approval_callback_reports_terminal_phase_after_reject(orchestrat
     callback.message.answer.assert_awaited_once_with("Project proj-1 is blocked.")
 
 
+def test_handle_approval_callback_acknowledges_and_clears_keyboard_before_the_slow_resume_call(
+    orchestrator,
+):
+    """orchestrator.resume() runs a LangGraph turn synchronously and can take
+    a minute+ against a local model (observed: 58-62s in production). Telegram
+    invalidates a callback query's answer token long before that ("query is
+    too old and response timeout expired"), so answering and clearing the
+    keyboard must happen before the slow call, not after -- otherwise the
+    handler crashes on callback.answer() and the keyboard never clears."""
+    callback = _callback("approve:thread-123")
+
+    async def _resume_after_ack_and_clear(*args, **kwargs):
+        assert callback.answer.await_count == 1
+        assert callback.message.edit_reply_markup.await_count == 1
+        return _webhook_response()
+
+    orchestrator.resume = AsyncMock(side_effect=_resume_after_ack_and_clear)
+
+    asyncio.run(handle_approval_callback(callback, orchestrator))
+
+    orchestrator.resume.assert_awaited_once_with("thread-123", "approve")
+
+
 def test_handle_approval_callback_handles_missing_message_gracefully(orchestrator):
     callback = MagicMock()
     callback.data = "reject:thread-9"

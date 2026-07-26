@@ -85,6 +85,11 @@ services:
     container_name: foundry-telegram-gateway
     environment:
       ORCHESTRATOR_URL: http://orchestrator:8000
+      # Optional overrides for the progress poller (services/telegram_gateway/
+      # progress_poller.py); defaults to POLL_INTERVAL_SECONDS=3.0,
+      # MAX_IDLE_POLLS=100 when unset.
+      # PROGRESS_POLL_INTERVAL_SECONDS: "3.0"
+      # PROGRESS_POLL_MAX_IDLE_POLLS: "100"
     secrets:
       - telegram_bot_token
       - telegram_allowed_user_id

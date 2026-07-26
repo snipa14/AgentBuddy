@@ -177,17 +177,25 @@ async def handle_approval_callback(
 ) -> None:
     """Resolves an Approve/Reject/Edit button press via POST /resume/{thread_id}.
 
-    The resume response is relayed back into the chat: a project that
-    advances straight to its next gate (plan approval -> merge approval)
-    gets that gate's keyboard pushed immediately, instead of stalling
-    silently until the user happens to send another message.
+    The tap is acknowledged and the keyboard cleared *before* the resume
+    call, not after: POST /resume runs the LangGraph synchronously and can
+    take well over a minute against a local model, but Telegram invalidates
+    a callback query's answer token long before that -- calling
+    callback.answer() after a slow resume() raised "query is too old" in
+    production, crashing the handler before the keyboard was ever cleared.
+
+    The resume response is relayed back into the chat once it returns: a
+    project that advances straight to its next gate (plan approval -> merge
+    approval) gets that gate's keyboard pushed immediately, instead of
+    stalling silently until the user happens to send another message.
     """
     decision, thread_id = callback.data.split(":", 1)
-    response = await orchestrator.resume(thread_id, decision)
     await callback.answer(_DECISION_ACKNOWLEDGMENTS.get(decision, "Done."))
+    if callback.message is not None:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    response = await orchestrator.resume(thread_id, decision)
     if callback.message is None:
         return
-    await callback.message.edit_reply_markup(reply_markup=None)
     await _relay_webhook_result(callback.message, response)
 
 

@@ -40,7 +40,12 @@ async def run(config: GatewayConfig) -> None:
 
     async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
         orchestrator = OrchestratorClient(config.orchestrator_url, client)
-        poller = ProgressPoller(orchestrator, bot)
+        poller = ProgressPoller(
+            orchestrator,
+            bot,
+            poll_interval_seconds=config.poll_interval_seconds,
+            max_idle_polls=config.max_idle_polls,
+        )
         await dispatcher.start_polling(bot, orchestrator=orchestrator, poller=poller)
 
 

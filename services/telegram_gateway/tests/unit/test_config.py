@@ -3,6 +3,7 @@
 import pytest
 
 from services.telegram_gateway.config import GatewayConfig
+from services.telegram_gateway.progress_poller import MAX_IDLE_POLLS, POLL_INTERVAL_SECONDS
 
 
 def test_from_env_reads_secrets_and_env(tmp_path, monkeypatch):
@@ -15,6 +16,32 @@ def test_from_env_reads_secrets_and_env(tmp_path, monkeypatch):
     assert config.bot_token == "123:ABC"
     assert config.allowed_user_id == 42
     assert config.orchestrator_url == "http://orchestrator:8000"
+
+
+def test_from_env_defaults_poll_settings_when_unset(tmp_path, monkeypatch):
+    (tmp_path / "telegram_bot_token").write_text("123:ABC\n")
+    (tmp_path / "telegram_allowed_user_id").write_text("42\n")
+    monkeypatch.setenv("ORCHESTRATOR_URL", "http://orchestrator:8000")
+    monkeypatch.delenv("PROGRESS_POLL_INTERVAL_SECONDS", raising=False)
+    monkeypatch.delenv("PROGRESS_POLL_MAX_IDLE_POLLS", raising=False)
+
+    config = GatewayConfig.from_env(secrets_dir=tmp_path)
+
+    assert config.poll_interval_seconds == POLL_INTERVAL_SECONDS
+    assert config.max_idle_polls == MAX_IDLE_POLLS
+
+
+def test_from_env_reads_poll_settings_from_env(tmp_path, monkeypatch):
+    (tmp_path / "telegram_bot_token").write_text("123:ABC\n")
+    (tmp_path / "telegram_allowed_user_id").write_text("42\n")
+    monkeypatch.setenv("ORCHESTRATOR_URL", "http://orchestrator:8000")
+    monkeypatch.setenv("PROGRESS_POLL_INTERVAL_SECONDS", "5.5")
+    monkeypatch.setenv("PROGRESS_POLL_MAX_IDLE_POLLS", "250")
+
+    config = GatewayConfig.from_env(secrets_dir=tmp_path)
+
+    assert config.poll_interval_seconds == 5.5
+    assert config.max_idle_polls == 250
 
 
 def test_from_env_raises_value_error_when_orchestrator_url_unset(tmp_path, monkeypatch):
