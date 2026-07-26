@@ -28,9 +28,9 @@ def config(tmp_path):
     return ExecutorConfig(projects_host_path=tmp_path)
 
 
-def test_workspace_container_raises_container_execution_error_when_run_fails(config, tmp_path):
+def test_workspace_container_raises_container_execution_error_when_create_fails(config, tmp_path):
     client = MagicMock()
-    client.containers.run.side_effect = APIError("no such image")
+    client.containers.create.side_effect = APIError("no such image")
 
     with pytest.raises(ContainerExecutionError):
         with workspace_container(client, config, tmp_path):
@@ -41,10 +41,29 @@ def test_workspace_container_swallows_remove_failure_during_cleanup(config, tmp_
     mock_container = MagicMock(spec=Container)
     mock_container.remove.side_effect = APIError("already gone")
     client = MagicMock()
-    client.containers.run.return_value = mock_container
+    client.containers.create.return_value = mock_container
 
     with workspace_container(client, config, tmp_path) as container:
         assert container is mock_container
+
+    mock_container.remove.assert_called_once_with(force=True)
+
+
+def test_workspace_container_removes_a_container_that_was_created_but_never_started(
+    config, tmp_path
+):
+    """The exact leak reported in production: create() succeeds (a real
+    container now exists on the daemon) but start() then fails -- the
+    container must still be captured and removed, not silently orphaned
+    because the combined run() call raised before returning anything."""
+    mock_container = MagicMock(spec=Container)
+    mock_container.start.side_effect = APIError("404 Client Error: no such container")
+    client = MagicMock()
+    client.containers.create.return_value = mock_container
+
+    with pytest.raises(ContainerExecutionError):
+        with workspace_container(client, config, tmp_path):
+            pass
 
     mock_container.remove.assert_called_once_with(force=True)
 
@@ -73,13 +92,13 @@ def test_workspace_container_mounts_python_cache_volume_at_pip_cache_path(
     config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
     mock_container = MagicMock(spec=Container)
     client = MagicMock()
-    client.containers.run.return_value = mock_container
+    client.containers.create.return_value = mock_container
 
     with workspace_container(client, config, tmp_path, stack="python", project_id="proj-1"):
         pass
 
-    _, run_kwargs = client.containers.run.call_args
-    assert run_kwargs["volumes"]["foundry-cache-proj-1"] == {
+    _, create_kwargs = client.containers.create.call_args
+    assert create_kwargs["volumes"]["foundry-cache-proj-1"] == {
         "bind": "/home/sandbox/.cache/pip",
         "mode": "rw",
     }
@@ -91,13 +110,13 @@ def test_workspace_container_mounts_node_cache_volume_at_npm_cache_path(
     config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
     mock_container = MagicMock(spec=Container)
     client = MagicMock()
-    client.containers.run.return_value = mock_container
+    client.containers.create.return_value = mock_container
 
     with workspace_container(client, config, tmp_path, stack="node", project_id="proj-1"):
         pass
 
-    _, run_kwargs = client.containers.run.call_args
-    assert run_kwargs["volumes"]["foundry-cache-proj-1"] == {
+    _, create_kwargs = client.containers.create.call_args
+    assert create_kwargs["volumes"]["foundry-cache-proj-1"] == {
         "bind": "/home/sandbox/.npm",
         "mode": "rw",
     }
@@ -109,28 +128,28 @@ def test_workspace_container_omits_cache_volume_for_a_stack_with_none_registered
     config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
     mock_container = MagicMock(spec=Container)
     client = MagicMock()
-    client.containers.run.return_value = mock_container
+    client.containers.create.return_value = mock_container
 
     with workspace_container(client, config, tmp_path, stack="ruby", project_id="proj-1"):
         pass
 
-    _, run_kwargs = client.containers.run.call_args
-    assert len(run_kwargs["volumes"]) == 1
-    assert "foundry-cache-proj-1" not in run_kwargs["volumes"]
+    _, create_kwargs = client.containers.create.call_args
+    assert len(create_kwargs["volumes"]) == 1
+    assert "foundry-cache-proj-1" not in create_kwargs["volumes"]
 
 
 def test_workspace_container_unknown_stack_gets_only_the_project_bind_mount(config, tmp_path):
     mock_container = MagicMock(spec=Container)
     client = MagicMock()
-    client.containers.run.return_value = mock_container
+    client.containers.create.return_value = mock_container
 
     with workspace_container(client, config, tmp_path, stack="cobol", project_id="proj-1"):
         pass
 
-    _, run_kwargs = client.containers.run.call_args
-    assert len(run_kwargs["volumes"]) == 1
+    _, create_kwargs = client.containers.create.call_args
+    assert len(create_kwargs["volumes"]) == 1
     mount_source = str(tmp_path)
-    assert run_kwargs["volumes"][mount_source] == {"bind": "/workspace", "mode": "rw"}
+    assert create_kwargs["volumes"][mount_source] == {"bind": "/workspace", "mode": "rw"}
 
 
 def test_install_dependencies_if_present_runs_pip_install_when_requirements_txt_exists(

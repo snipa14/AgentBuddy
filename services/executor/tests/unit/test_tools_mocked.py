@@ -40,7 +40,7 @@ def mock_container():
 @pytest.fixture
 def mock_client(mock_container):
     client = MagicMock()
-    client.containers.run.return_value = mock_container
+    client.containers.create.return_value = mock_container
     return client
 
 
@@ -54,15 +54,15 @@ def test_tool_run_command_creates_locked_down_container_and_removes_it(
     assert result.exit_code == 0
     assert result.stdout == "hello\n"
 
-    _, run_kwargs = mock_client.containers.run.call_args
-    assert run_kwargs["cap_drop"] == ["ALL"]
-    assert run_kwargs["security_opt"] == ["no-new-privileges:true"]
-    assert run_kwargs["mem_limit"] == config.mem_limit
-    assert run_kwargs["nano_cpus"] == config.nano_cpus
-    assert run_kwargs["network"] == config.network_name
-    assert run_kwargs["user"] == "1000:1000"
+    _, create_kwargs = mock_client.containers.create.call_args
+    assert create_kwargs["cap_drop"] == ["ALL"]
+    assert create_kwargs["security_opt"] == ["no-new-privileges:true"]
+    assert create_kwargs["mem_limit"] == config.mem_limit
+    assert create_kwargs["nano_cpus"] == config.nano_cpus
+    assert create_kwargs["network"] == config.network_name
+    assert create_kwargs["user"] == "1000:1000"
     mount_source = str((config.projects_host_path / "proj-1").resolve())
-    assert run_kwargs["volumes"][mount_source] == {"bind": "/workspace", "mode": "rw"}
+    assert create_kwargs["volumes"][mount_source] == {"bind": "/workspace", "mode": "rw"}
 
     mock_container.remove.assert_called_once_with(force=True)
 
@@ -82,28 +82,28 @@ def test_tool_run_command_rejects_project_id_path_traversal(mock_client, config)
     with pytest.raises(PathTraversalError):
         tool_run_command(mock_client, config, "../../etc", ["echo", "hi"])
 
-    mock_client.containers.run.assert_not_called()
+    mock_client.containers.create.assert_not_called()
 
 
 def test_tool_read_file_rejects_path_traversal_without_touching_docker(mock_client, config):
     with pytest.raises(PathTraversalError):
         tool_read_file(mock_client, config, "proj-1", "../../etc/passwd")
 
-    mock_client.containers.run.assert_not_called()
+    mock_client.containers.create.assert_not_called()
 
 
 def test_tool_write_file_rejects_path_traversal_without_touching_docker(mock_client, config):
     with pytest.raises(PathTraversalError):
         tool_write_file(mock_client, config, "proj-1", "../../etc/passwd", "data")
 
-    mock_client.containers.run.assert_not_called()
+    mock_client.containers.create.assert_not_called()
 
 
 def test_tool_list_files_rejects_path_traversal_without_touching_docker(mock_client, config):
     with pytest.raises(PathTraversalError):
         tool_list_files(mock_client, config, "proj-1", "../outside")
 
-    mock_client.containers.run.assert_not_called()
+    mock_client.containers.create.assert_not_called()
 
 
 def test_tool_list_files_parses_json_output(mock_client, mock_container, config):
@@ -172,7 +172,7 @@ def test_tool_run_tests_rejects_unsupported_framework(mock_client, config):
     with pytest.raises(ValueError):
         tool_run_tests(mock_client, config, "proj-1", framework="unittest")
 
-    mock_client.containers.run.assert_not_called()
+    mock_client.containers.create.assert_not_called()
 
 
 def test_tool_run_tests_parses_passed_failed_and_coverage(mock_client, mock_container, config):

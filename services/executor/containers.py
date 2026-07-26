@@ -11,6 +11,16 @@ volume isn't a host path, and it's only ever used for that cache directory.
 Which stacks get a cache volume, and which manifest/install commands run,
 is driven entirely by the registry loaded from config/stacks.yaml (ADR-045)
 rather than by anything hardcoded in this module.
+
+workspace_container() calls client.containers.create() and container.start()
+as two separate steps rather than the SDK's combined containers.run(): if
+create() succeeds but start() then fails (observed in production as a 404
+"no such container" from the proxied daemon), a single run() call raises
+before ever assigning its return value, so the local `container` variable
+stays None and the finally block's cleanup never finds the container Docker
+already created -- it leaks, silently, forever. Assigning `container`
+immediately after create() succeeds means start() failing afterward still
+leaves a real container reference behind for the finally block to remove.
 """
 
 import concurrent.futures
@@ -93,10 +103,9 @@ def workspace_container(
     container: Container | None = None
     try:
         try:
-            container = client.containers.run(
+            container = client.containers.create(
                 image_for_stack(stack, config),
                 WORKSPACE_IDLE_COMMAND,
-                detach=True,
                 user=f"{WORKSPACE_UID}:{WORKSPACE_UID}",
                 working_dir=WORKSPACE_MOUNT_TARGET,
                 volumes=volumes,
@@ -106,6 +115,7 @@ def workspace_container(
                 mem_limit=config.mem_limit,
                 nano_cpus=config.nano_cpus,
             )
+            container.start()
         except (APIError, ImageNotFound) as exc:
             raise ContainerExecutionError(f"failed to start workspace container: {exc}") from exc
         if install_dependencies and stack_entry is not None:
