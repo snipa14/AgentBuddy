@@ -2,7 +2,9 @@
 
 import pytest
 
+from services.orchestrator.memory import project_memory
 from services.orchestrator.memory.project_memory import (
+    WORKSPACE_CONTAINER_UID,
     append_memory_entry,
     read_memory_file,
 )
@@ -50,3 +52,48 @@ def test_projects_are_isolated_from_each_other(tmp_path):
     append_memory_entry(tmp_path, "proj-a", "LEARNINGS.md", "only in a")
 
     assert read_memory_file(tmp_path, "proj-b", "LEARNINGS.md") == ""
+
+
+def test_append_memory_entry_chowns_the_project_dir_to_the_workspace_container_uid(
+    tmp_path, monkeypatch
+):
+    """The Orchestrator runs as root (no USER in its Dockerfile), so the
+    project directory this call creates would otherwise be root-owned at
+    755 -- blocking the Executor's non-root workspace container (fixed UID,
+    services/executor/containers.py's WORKSPACE_UID) from writing anything
+    into it. create()/start() succeed regardless, but every write_file's
+    mkdir -p then fails with a permission error, observed in production as
+    every write_file 500ing while read_file/run_command kept succeeding.
+    os.chown is patched here rather than asserting real ownership, since a
+    non-root test runner can't chown to an arbitrary UID -- os.geteuid is
+    also patched to simulate running as root, the only way the real chown
+    call is ever reached."""
+    chown_calls = []
+    monkeypatch.setattr(project_memory.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        project_memory.os, "chown", lambda path, uid, gid: chown_calls.append((path, uid, gid))
+    )
+
+    append_memory_entry(tmp_path, "proj-1", "LEARNINGS.md", "hello")
+
+    assert len(chown_calls) == 1
+    path, uid, gid = chown_calls[0]
+    assert path == tmp_path / "proj-1"
+    assert uid == WORKSPACE_CONTAINER_UID
+    assert gid == WORKSPACE_CONTAINER_UID
+
+
+def test_append_memory_entry_skips_chown_when_not_running_as_root(tmp_path, monkeypatch):
+    """A non-root dev/test process can't chown to an arbitrary UID -- this
+    must not raise PermissionError and break local development or CI, which
+    is also why every other test in this file works unmodified: they all
+    run as whatever non-root UID the test runner actually is."""
+    chown_calls = []
+    monkeypatch.setattr(project_memory.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(
+        project_memory.os, "chown", lambda path, uid, gid: chown_calls.append((path, uid, gid))
+    )
+
+    append_memory_entry(tmp_path, "proj-1", "LEARNINGS.md", "hello")
+
+    assert chown_calls == []
