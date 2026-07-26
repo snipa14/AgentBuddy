@@ -13,6 +13,7 @@ import pytest
 
 from services.telegram_gateway.bot import (
     handle_approval_callback,
+    handle_continue,
     handle_free_text,
     handle_new,
     handle_projects,
@@ -144,6 +145,73 @@ def test_handle_status_without_argument_lists_projects(message, orchestrator):
     text = message.answer.call_args.args[0]
     assert "Usage: /status <project_id>" in text
     assert "proj-1" in text and "proj-2" in text
+
+
+def test_handle_continue_without_argument_shows_usage(message, orchestrator):
+    message.text = "/continue"
+    orchestrator.activate = AsyncMock()
+
+    asyncio.run(handle_continue(message, orchestrator))
+
+    orchestrator.activate.assert_not_awaited()
+    message.answer.assert_awaited_once_with("Usage: /continue <project_id>")
+
+
+def test_handle_continue_reports_unknown_project_on_404(message, orchestrator):
+    message.text = "/continue nope"
+    orchestrator.activate = AsyncMock(return_value=_status_response(status_code=404))
+
+    asyncio.run(handle_continue(message, orchestrator))
+
+    orchestrator.activate.assert_awaited_once_with("nope")
+    message.answer.assert_awaited_once_with("Unknown project 'nope'. Try /projects.")
+
+
+def test_handle_continue_reactivates_and_shows_pending_approval(message, orchestrator):
+    """The main use case: no message with buttons is available anymore (e.g.
+    after a Docker stack restart), so /continue <id> must both reactivate
+    the project (so a later free-text reply routes to it) and immediately
+    show whatever it's currently waiting on."""
+    message.text = "/continue proj-1"
+    orchestrator.activate = AsyncMock(
+        return_value=_status_response(
+            status_code=200,
+            project_id="proj-1",
+            phase="awaiting_plan_approval",
+            pending_approval={"thread_id": "proj-1", "summary": "Ready to build?"},
+        )
+    )
+
+    asyncio.run(handle_continue(message, orchestrator))
+
+    orchestrator.activate.assert_awaited_once_with("proj-1")
+    args, kwargs = message.answer.call_args
+    assert args[0] == "Ready to build?"
+    assert "reply_markup" in kwargs
+
+
+def test_handle_continue_shows_task_progress_when_no_gate_pending(message, orchestrator):
+    message.text = "/continue proj-1"
+    orchestrator.activate = AsyncMock(
+        return_value=_status_response(
+            status_code=200,
+            project_id="proj-1",
+            phase="implementing",
+            pending_approval=None,
+            task_progress={
+                "done": 1,
+                "total": 2,
+                "tasks": [
+                    {"description": "First task", "status": "done", "attempts": 1},
+                    {"description": "Second task", "status": "in_progress", "attempts": 0},
+                ],
+            },
+        )
+    )
+
+    asyncio.run(handle_continue(message, orchestrator))
+
+    message.answer.assert_awaited_once_with("1/2 tasks done\nIn progress: Second task")
 
 
 def test_handle_projects_lists_known_ids(message, orchestrator):

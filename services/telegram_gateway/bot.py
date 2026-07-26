@@ -150,6 +150,29 @@ async def handle_status(message: Message, orchestrator: OrchestratorClient) -> N
     await message.answer(render_project_status(response.json()))
 
 
+@router.message(Command("continue"))
+async def handle_continue(message: Message, orchestrator: OrchestratorClient) -> None:
+    """Reactivates a project by id and shows whatever it's currently waiting on.
+
+    Fallback for when the original approval/Reply message is gone -- e.g.
+    after a Docker stack restart, or scrolled out of reach -- and there's no
+    button left to tap. POST /activate/{project_id} only ever writes the
+    active-project pointer file (ARCHITECTURE.md's webhook contract), so it
+    works regardless of what the Gateway process itself remembers; this
+    command is the only text-based way to reach it.
+    """
+    parts = (message.text or "").split(maxsplit=1)
+    project_id = parts[1].strip() if len(parts) > 1 else ""
+    if not project_id:
+        await message.answer("Usage: /continue <project_id>")
+        return
+    response = await orchestrator.activate(project_id)
+    if response.status_code == 404:
+        await message.answer(f"Unknown project '{project_id}'. Try /projects.")
+        return
+    await _relay_webhook_result(message, response)
+
+
 @router.message(Command("projects"))
 async def handle_projects(message: Message, orchestrator: OrchestratorClient) -> None:
     """Lists every known project id via GET /projects."""
