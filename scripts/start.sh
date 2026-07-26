@@ -30,6 +30,15 @@ if [[ ! -f .env ]]; then
   echo "[start] Wrote .env with PROJECTS_HOST_PATH=$ROOT_DIR/projects"
 fi
 
+# foundry_workspace is declared external in docker-compose.yml (isolated
+# network the Executor joins workspace containers to at runtime, per
+# .claude/rules/security.md) -- it's referenced by no service, so Compose
+# won't create it on its own. Idempotent: a no-op if it already exists.
+if ! docker network inspect foundry_workspace >/dev/null 2>&1; then
+  docker network create --driver bridge foundry_workspace
+  echo "[start] Created foundry_workspace network"
+fi
+
 compose_files=(-f docker-compose.yml)
 if [[ "${1:-}" == "--local-llm" ]]; then
   compose_files+=(-f docker-compose.local-llm.yml)

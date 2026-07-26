@@ -104,24 +104,22 @@ networks:
     driver: bridge
   # Not attached to any service below -- ephemeral workspace containers are
   # spawned dynamically by the Executor (ARCHITECTURE.md §6/§7), not declared
-  # here. This network exists so `docker compose up` provisions it ahead of
-  # time; docker-socket-proxy's NETWORKS=0 means the Executor itself can
+  # here. docker-socket-proxy's NETWORKS=0 means the Executor itself can
   # never create or modify a network at runtime, only reference this one by
   # name. Isolated from foundry_internal: a workspace container can't reach
   # the proxy, the Orchestrator, or the Telegram Gateway.
   foundry_workspace:
-    # Pinned to this literal name (bypassing Compose's default
-    # <project>_<network> prefixing) because services/executor/config.py's
-    # DEFAULT_NETWORK_NAME passes "foundry_workspace" straight to the Docker
-    # SDK, which doesn't go through Compose's name resolution -- with
-    # COMPOSE_PROJECT_NAME=foundry (.env) and no override, Compose would
-    # otherwise create this as "foundry_foundry_workspace", which the
-    # Executor could create containers against (container creation doesn't
-    # validate the network) but never actually start (start() resolves and
-    # attaches the network, failing with "network foundry_workspace not
-    # found" once it can't find that literal name).
+    # external: true + scripts/start.sh creating it beforehand, not Compose:
+    # a network declared here but referenced by no service below is *not*
+    # reliably created by `docker compose up` on its own (confirmed live --
+    # `docker network ls` showed no foundry_workspace at all after `up`,
+    # even with the name pinned below), so relying on Compose for it left
+    # every workspace container able to create() but never start() ("network
+    # foundry_workspace not found"). external: true makes that failure mode
+    # loud and immediate (`docker compose up` errors if it's missing) instead
+    # of silent until the first container start.
     name: foundry_workspace
-    driver: bridge
+    external: true
 
 volumes:
   foundry_memory:
