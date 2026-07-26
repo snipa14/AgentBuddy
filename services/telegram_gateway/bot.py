@@ -15,6 +15,7 @@ real Planner LLM call) on every status check.
 
 import logging
 
+import httpx
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, ForceReply, Message
@@ -89,6 +90,20 @@ async def _relay_webhook_result(message: Message, response) -> None:
     await message.answer("Got it -- working on that.")
 
 
+async def _answer_timeout_hint(message: Message) -> None:
+    """Tells the user their message was received but the Orchestrator hasn't
+    replied within the Gateway's client timeout. The graph run keeps going
+    server-side regardless -- POST /webhook runs it synchronously to the next
+    interrupt and a slow local-model chain (e.g. interview -> plan ->
+    critique) can outlast the client's read timeout -- so this isn't a
+    failure, just a slow turn.
+    """
+    await message.answer(
+        "Still working on that -- a local-model turn can take a while, "
+        "especially mid-interview. Check /status in a bit."
+    )
+
+
 @router.message(Command("start"))
 async def handle_start(message: Message) -> None:
     """Greets the user. Sends nothing to the Orchestrator."""
@@ -100,7 +115,13 @@ async def handle_new(
     message: Message, orchestrator: OrchestratorClient, poller: ProgressPoller
 ) -> None:
     """Forwards a /new command to the Orchestrator to start a project."""
-    response = await orchestrator.send_webhook(message.from_user.id, message.text, force_new=True)
+    try:
+        response = await orchestrator.send_webhook(
+            message.from_user.id, message.text, force_new=True
+        )
+    except httpx.TimeoutException:
+        await _answer_timeout_hint(message)
+        return
     _start_poller_from_response(poller, response, message.chat.id)
     await _relay_webhook_result(message, response)
 
@@ -141,7 +162,11 @@ async def handle_free_text(
     message: Message, orchestrator: OrchestratorClient, poller: ProgressPoller
 ) -> None:
     """Forwards any other free-text message to the Orchestrator."""
-    response = await orchestrator.send_webhook(message.from_user.id, message.text)
+    try:
+        response = await orchestrator.send_webhook(message.from_user.id, message.text)
+    except httpx.TimeoutException:
+        await _answer_timeout_hint(message)
+        return
     _start_poller_from_response(poller, response, message.chat.id)
     await _relay_webhook_result(message, response)
 

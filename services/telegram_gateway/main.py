@@ -16,6 +16,14 @@ from services.telegram_gateway.config import GatewayConfig
 from services.telegram_gateway.orchestrator_client import OrchestratorClient
 from services.telegram_gateway.progress_poller import ProgressPoller
 
+DEFAULT_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=30.0)
+"""Generous read timeout: POST /webhook runs the LangGraph synchronously up
+to its next interrupt, which can chain several sequential LLM calls (e.g.
+interview complete -> plan drafted -> critique) before responding. Against a
+local model this routinely exceeds httpx's 5s default, which aborted the
+request client-side while the Orchestrator kept running -- the user's
+message appeared to vanish even though the project advanced."""
+
 
 async def run(config: GatewayConfig) -> None:
     """Builds and runs the bot via long polling until interrupted.
@@ -30,7 +38,7 @@ async def run(config: GatewayConfig) -> None:
     dispatcher.callback_query.outer_middleware(auth_middleware)
     dispatcher.include_router(router)
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
         orchestrator = OrchestratorClient(config.orchestrator_url, client)
         poller = ProgressPoller(orchestrator, bot)
         await dispatcher.start_polling(bot, orchestrator=orchestrator, poller=poller)

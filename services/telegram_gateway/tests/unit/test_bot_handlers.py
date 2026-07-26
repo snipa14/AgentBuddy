@@ -8,6 +8,7 @@ Dispatcher workflow data, so no live Dispatcher/Bot is needed here.
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from services.telegram_gateway.bot import (
@@ -341,6 +342,31 @@ def test_handle_reply_callback_activates_the_project_and_prompts_for_a_reply(orc
     callback.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
     args, kwargs = callback.message.answer.call_args
     assert isinstance(kwargs.get("reply_markup"), ForceReply)
+
+
+def test_handle_free_text_shows_a_hint_when_the_orchestrator_call_times_out(
+    message, orchestrator, poller
+):
+    """A slow local-model turn can outlast the Gateway's httpx read timeout
+    even though the Orchestrator keeps running server-side (main.py's
+    DEFAULT_HTTP_TIMEOUT). The user must get some reply, not silence."""
+    orchestrator.send_webhook = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+
+    asyncio.run(handle_free_text(message, orchestrator, poller))
+
+    message.answer.assert_awaited_once()
+    poller.start.assert_not_called()
+
+
+def test_handle_new_shows_a_hint_when_the_orchestrator_call_times_out(
+    message, orchestrator, poller
+):
+    orchestrator.send_webhook = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+
+    asyncio.run(handle_new(message, orchestrator, poller))
+
+    message.answer.assert_awaited_once()
+    poller.start.assert_not_called()
 
 
 def test_handle_reply_callback_handles_missing_message_gracefully(orchestrator):
