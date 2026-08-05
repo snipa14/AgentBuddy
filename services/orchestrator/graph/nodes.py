@@ -102,6 +102,7 @@ from services.orchestrator.graph.state import ProjectState
 from services.orchestrator.memory.global_store import recall_for_task
 from services.orchestrator.integrator_client import IntegratorClient
 from services.orchestrator.model_router.router import ModelRouter
+from services.orchestrator.progress_buffer import add_progress
 from services.orchestrator.stacks import StacksConfig
 
 logger = logging.getLogger(__name__)
@@ -395,6 +396,7 @@ def node_coder(
         logger.info(
             "project %s: task succeeded, %d remaining", state["project_id"], remaining
         )
+        add_progress(state["project_id"], f"✓ task succeeded ({remaining} remaining)")
         return _with_cost(
             state,
             {
@@ -413,6 +415,10 @@ def node_coder(
             logger.warning(
                 "project %s: task exhausted %d attempts, proposing replan",
                 state["project_id"], active_task["attempts"],
+            )
+            add_progress(
+                state["project_id"],
+                f"↻ task exhausted {active_task['attempts']} attempts, proposing replan",
             )
             reason = (
                 f"task {active_task['description']!r} failed "
@@ -433,6 +439,9 @@ def node_coder(
             "project %s: task exhausted %d attempts at replan cap, blocking",
             state["project_id"], active_task["attempts"],
         )
+        add_progress(
+            state["project_id"], f"✗ task blocked after {active_task['attempts']} attempts"
+        )
         return _with_cost(
             state,
             {
@@ -448,6 +457,9 @@ def node_coder(
         "project %s: task attempt %d failed, retrying",
         state["project_id"],
         active_task["attempts"],
+    )
+    add_progress(
+        state["project_id"], f"↻ task attempt {active_task['attempts']} failed, retrying"
     )
     new_queue = _replace_task(task_queue, active_index, active_task)
     return _with_cost(
