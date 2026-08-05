@@ -204,6 +204,15 @@ class OrchestratorService:
         is not None) is left untouched here -- that needs an explicit
         decision via `resume()`, not a bare continuation.
 
+        Buffered progress is discarded before the continuation runs. What's
+        left in the buffer describes the attempt that already failed --
+        including the `❌ crashed:` event `_invoke_graph` records -- and the
+        buffer is otherwise only ever cleared on a terminal-phase `status()`
+        read. A poller that starts fresh after this (a restarted Gateway
+        resets its own `since_seq`) would otherwise replay the old crash
+        marker as if it had just happened, immediately ahead of the recovered
+        run's real progress.
+
         Args:
             project_id: The project to activate (and resume, if stuck).
 
@@ -215,6 +224,7 @@ class OrchestratorService:
         self._write_active_project_id(project_id)
         current = self.status(project_id)
         if current["phase"] not in _TERMINAL_PHASES and current["pending_approval"] is None:
+            clear_progress(project_id)
             self._invoke_graph(None, project_id)
 
     def status(self, project_id: str) -> dict[str, Any]:

@@ -412,6 +412,59 @@ def test_activate_resumes_execution_when_stuck_mid_task_with_no_pending_approval
     assert final_status["task_progress"]["done"] == 2
 
 
+def test_activate_does_not_leave_a_stale_crash_marker_for_a_fresh_poller_to_replay(tmp_path):
+    """progress_buffer is only otherwise cleared on a terminal-phase status()
+    read, so a crash marker from a failed attempt sits there indefinitely. A
+    Gateway restarted alongside the Orchestrator resets its poller's
+    since_seq to -1 and replays the whole buffer -- which would show
+    "❌ crashed: ..." from the *previous* attempt immediately ahead of the
+    recovered run's real progress. activate() clears the buffer before
+    continuing, so what a fresh poller sees describes only this attempt.
+
+    Uses the same under-scripted-FakeRouter crash simulation as
+    test_activate_resumes_execution_when_stuck_mid_task_with_no_pending_approval,
+    but scripts the continuation fully (task two's CODER_DONE, the reviewer,
+    the post-testing curator) so activate() reaches the merge gate and
+    returns normally instead of crashing again.
+    """
+    db_path = tmp_path / "foundry_memory.db"
+    two_tasks = structured(
+        _TaskList(tasks=[CoderTask(description="Task 1"), CoderTask(description="Task 2")])
+    )
+    service = OrchestratorService(
+        build_sqlite_checkpointer(db_path),
+        FakeRouter(
+            [READY_TURN, EMPTY_DRAFT, NO_FINDINGS_CRITIQUE, CURATION_OK, two_tasks, CODER_DONE]
+        ),
+        _StubExecutorClient(),
+        build_global_memory_connection(db_path),
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("proj-stale-crash", "build me a thing")
+
+    with pytest.raises(IndexError):
+        service.resume("proj-stale-crash", "approve")
+
+    crashed_chunks = [chunk.text for chunk in get_chunks_since("proj-stale-crash")]
+    assert any(chunk.startswith("❌ crashed:") for chunk in crashed_chunks)
+
+    resumed_service = OrchestratorService(
+        build_sqlite_checkpointer(db_path),
+        FakeRouter([CODER_DONE, REVIEWER_APPROVE, CURATION_OK]),
+        _StubExecutorClient(),
+        build_global_memory_connection(db_path),
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    resumed_service.activate("proj-stale-crash")
+
+    assert resumed_service.status("proj-stale-crash")["task_progress"]["done"] == 2
+    replayed = [chunk.text for chunk in get_chunks_since("proj-stale-crash")]
+    assert not any(chunk.startswith("❌ crashed:") for chunk in replayed)
+    assert replayed
+
+
 def test_activate_leaves_a_project_paused_at_a_real_gate_untouched(tmp_path):
     """A project paused at plan_approval (pending_approval is not None) must
     not have the graph re-invoked just because it was reactivated -- that

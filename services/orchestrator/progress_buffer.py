@@ -1,9 +1,15 @@
 """In-memory per-project progress-chunk buffer for live Telegram streaming (ADR-027).
 
-Populated by the Coder node as it streams a turn's content
-(`agents/coder.py`), read by the Orchestrator's `GET /stream/{project_id}`
-endpoint (`api.py`), and polled by the Telegram Gateway
-(`telegram_gateway/progress_poller.py`). Chunks are addressed by a
+Holds discrete progress events -- a tool dispatch and its success/failure
+(`agents/coder.py`'s tool wrappers), a task's outcome (`graph/nodes.py`'s
+`node_coder`), a crashed graph run (`service.py`) -- pushed by several
+producers as they happen, read by the Orchestrator's
+`GET /stream/{project_id}` endpoint (`api.py`), and polled by the Telegram
+Gateway (`telegram_gateway/progress_poller.py`), which renders one event per
+line. This originally carried raw content deltas streamed from a single
+producer (the Coder's own turn), which proved unreadable relayed into
+Telegram and told a watcher nothing about what the agent was actually
+doing. Chunks are addressed by a
 per-project monotonic sequence number so a poller can ask for only what it
 hasn't seen yet (`since_seq`) instead of the buffer needing to destroy state
 on every read -- a slow or duplicate poll never loses or re-sends a chunk.
@@ -24,18 +30,23 @@ _buffers: dict[str, list[str]] = {}
 
 @dataclass
 class ProgressChunk:
-    """One streamed content chunk, addressed by its position in the buffer."""
+    """One recorded progress event, addressed by its position in the buffer."""
 
     seq: int
     text: str
 
 
 def add_progress(project_id: str, text: str) -> None:
-    """Appends a streamed content chunk for *project_id*.
+    """Appends one progress event for *project_id*.
+
+    Callers pass a complete, self-contained event line and no separator of
+    their own; the Gateway's poller is what joins events with newlines when
+    it renders them.
 
     Args:
-        project_id: The project whose Coder turn is currently streaming.
-        text: The partial content chunk to record.
+        project_id: The project the event belongs to.
+        text: The event to record -- a tool dispatch or its outcome, a
+            task's result, a crash notice.
     """
     with _lock:
         _buffers.setdefault(project_id, []).append(text)
