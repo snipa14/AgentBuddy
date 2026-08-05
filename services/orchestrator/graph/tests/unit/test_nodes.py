@@ -496,6 +496,24 @@ def test_node_coder_records_a_progress_event_when_blocked_at_the_replan_cap():
     assert f"✗ task blocked after {MAX_TASK_ATTEMPTS} attempts" in chunks
 
 
+def test_node_coder_records_a_progress_event_when_proposing_a_replan():
+    router = FakeRouter([_tool_call("read_file", {"path": "missing.py"})] * 10)
+    state = new_project_state("proj-progress-replan")
+    state["replan_count"] = 0
+    state["task_queue"] = [
+        {
+            "description": "Do the trivial thing",
+            "status": "in_progress",
+            "attempts": MAX_TASK_ATTEMPTS - 1,
+        }
+    ]
+
+    node_coder(state, router, executor_client=_RecordingExecutorClient())
+
+    chunks = [chunk.text for chunk in get_chunks_since("proj-progress-replan")]
+    assert f"↻ task exhausted {MAX_TASK_ATTEMPTS} attempts, proposing replan" in chunks
+
+
 def test_node_coder_blocks_after_exhausting_the_attempt_budget():
     """At the replan cap (ADR-047), exhaustion blocks outright, same as
     before this phase; the under-cap case is covered separately by
