@@ -8,11 +8,11 @@ completion is signaled by the model returning a turn with no further tool
 calls, rather than a parsed "done" action string.
 
 Each turn is streamed (`astream`, ADR-027) rather than a single `ainvoke`
-call -- partial content is relayed into `progress_buffer` as it arrives, so
-the Telegram Gateway's poller has something to show before a long turn
-finishes, while the accumulated `AIMessageChunk`s are summed back into one
-`AIMessage` for tool-dispatch and cost accounting exactly as `ainvoke` would
-have returned.
+call. Tool dispatch events (dispatch/success/failure for read_file/write_file/
+run_command) are pushed to `progress_buffer` via add_progress so the Telegram
+Gateway's poller has something to show, while the accumulated `AIMessageChunk`s
+are summed back into one `AIMessage` for tool-dispatch and cost accounting
+exactly as `ainvoke` would have returned.
 
 `decompose_plan_into_tasks` and `run_coder_task` are both plain, testable
 async functions with no LangGraph or real-Docker dependency -- they're
