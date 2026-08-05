@@ -103,8 +103,13 @@ def workspace_container(
     container: Container | None = None
     try:
         try:
+            image = image_for_stack(stack, config)
+            logger.info(
+                "project %s: creating workspace container (stack=%s, image=%s)",
+                project_id, stack, image,
+            )
             container = client.containers.create(
-                image_for_stack(stack, config),
+                image,
                 WORKSPACE_IDLE_COMMAND,
                 user=f"{WORKSPACE_UID}:{WORKSPACE_UID}",
                 working_dir=WORKSPACE_MOUNT_TARGET,
@@ -116,6 +121,9 @@ def workspace_container(
                 nano_cpus=config.nano_cpus,
             )
             container.start()
+            logger.info(
+                "project %s: workspace container %s started", project_id, container.id[:12]
+            )
         except (APIError, ImageNotFound) as exc:
             raise ContainerExecutionError(f"failed to start workspace container: {exc}") from exc
         if install_dependencies and stack_entry is not None:
@@ -125,6 +133,9 @@ def workspace_container(
         yield container
     finally:
         if container is not None:
+            logger.info(
+                "project %s: removing workspace container %s", project_id, container.id[:12]
+            )
             try:
                 container.remove(force=True)
             except APIError:

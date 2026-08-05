@@ -5,6 +5,7 @@ and test_tools_parsing.py) -- these tests are only about HTTP routing and
 error-status mapping, not tool correctness.
 """
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -308,3 +309,16 @@ def test_clear_project_cache_returns_500_on_container_error(client, monkeypatch)
     )
 
     assert response.status_code == 500
+
+
+def test_run_command_logs_the_exception_before_returning_500(client, monkeypatch, caplog):
+    def _raise(*args, **kwargs):
+        raise ContainerExecutionError("boom: no such network foundry_workspace")
+
+    monkeypatch.setattr(api_module, "tool_run_command", _raise)
+
+    with caplog.at_level(logging.ERROR):
+        response = client.post("/run_command", json={"project_id": "proj-1", "command": ["ls"]})
+
+    assert response.status_code == 500
+    assert "boom: no such network foundry_workspace" in caplog.text

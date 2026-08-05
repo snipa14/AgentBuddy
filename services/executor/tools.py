@@ -8,6 +8,7 @@ direct filesystem access from the Executor's own process.
 
 import io
 import json
+import logging
 import os
 import re
 import tarfile
@@ -30,6 +31,8 @@ from services.executor.schemas import CommandResult, FileEntry, ScreenshotResult
 
 _PYTEST_SUMMARY_RE = re.compile(r"(?P<count>\d+)\s+(?P<outcome>passed|failed|error|errors)")
 _COVERAGE_TOTAL_RE = re.compile(r"^TOTAL\s+.*\s(\d+)%\s*$", re.MULTILINE)
+
+logger = logging.getLogger(__name__)
 
 _LIST_DIR_SNIPPET = (
     "import json, os, sys\n"
@@ -66,11 +69,14 @@ def tool_run_command(
         A CommandResult with stdout, stderr, and exit_code.
     """
     effective_timeout = timeout if timeout is not None else config.command_timeout_seconds
+    logger.info("project %s: run_command(%s)", project_id, command)
     project_host_path = _project_host_path(config, project_id)
     with workspace_container(
         client, config, project_host_path, stack=stack, project_id=project_id, install_dependencies=True
     ) as container:
-        return exec_in_container(container, command, effective_timeout)
+        result = exec_in_container(container, command, effective_timeout)
+    logger.info("project %s: run_command exit_code=%d", project_id, result.exit_code)
+    return result
 
 
 def tool_read_file(
@@ -96,14 +102,18 @@ def tool_read_file(
         PathTraversalError: If path resolves outside the project root.
         FileNotFoundError: If path doesn't exist in the project.
     """
+    logger.info("project %s: read_file(%s)", project_id, path)
     container_path = _container_path(path)
     project_host_path = _project_host_path(config, project_id)
     with workspace_container(client, config, project_host_path, stack=stack, project_id=project_id) as container:
         try:
             chunks, _ = container.get_archive(container_path)
         except NotFound as exc:
+            logger.warning("project %s: read_file(%s) not found", project_id, path)
             raise FileNotFoundError(f"'{path}' not found in project '{project_id}'") from exc
-        return _extract_single_file(chunks, os.path.basename(container_path))
+        content = _extract_single_file(chunks, os.path.basename(container_path))
+        logger.info("project %s: read_file(%s) returned %d bytes", project_id, path, len(content))
+        return content
 
 
 def tool_write_file(
@@ -130,6 +140,7 @@ def tool_write_file(
     Raises:
         PathTraversalError: If path resolves outside the project root.
     """
+    logger.info("project %s: write_file(%s), %d bytes", project_id, path, len(content))
     container_path = _container_path(path)
     directory = os.path.dirname(container_path)
     project_host_path = _project_host_path(config, project_id)
@@ -140,6 +151,10 @@ def tool_write_file(
             container, ["mkdir", "-p", directory], config.command_timeout_seconds
         )
         if mkdir_result.exit_code != 0:
+            logger.warning(
+                "project %s: write_file(%s) mkdir failed: %s",
+                project_id, path, mkdir_result.stderr,
+            )
             raise ContainerExecutionError(
                 f"mkdir failed for '{path}': {mkdir_result.stderr}"
             )

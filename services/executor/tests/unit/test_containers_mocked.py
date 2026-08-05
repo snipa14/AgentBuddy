@@ -6,6 +6,7 @@ failing, remove() itself failing during cleanup, exec_run raising a
 non-timeout APIError, and the timeout path killing the container.
 """
 
+import logging
 import time
 from unittest.mock import MagicMock
 
@@ -224,3 +225,19 @@ def test_install_dependencies_if_present_is_a_noop_for_a_stack_without_a_manifes
     _install_dependencies_if_present(mock_container, stack_entry, timeout=5)
 
     mock_container.exec_run.assert_not_called()
+
+
+def test_workspace_container_logs_create_start_and_remove(config, tmp_path, caplog):
+    mock_container = MagicMock(spec=Container)
+    mock_container.id = "abc123def456"
+    client = MagicMock()
+    client.containers.create.return_value = mock_container
+
+    with caplog.at_level(logging.INFO):
+        with workspace_container(client, config, tmp_path, stack="python", project_id="proj-1"):
+            pass
+
+    messages = [record.message for record in caplog.records]
+    assert any("proj-1" in m and "creating workspace container" in m for m in messages)
+    assert any("proj-1" in m and "abc123def456"[:12] in m and "started" in m for m in messages)
+    assert any("proj-1" in m and "abc123def456"[:12] in m and "removing" in m for m in messages)

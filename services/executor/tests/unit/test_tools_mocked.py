@@ -7,6 +7,7 @@ Docker daemon (tests/integration/test_executor_sandbox.py) proves that.
 """
 
 import json
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -272,3 +273,25 @@ def test_tool_take_screenshot_passes_the_container_workspace_path_not_the_host_p
     command = mock_container.exec_run.call_args.args[0]
     assert "/workspace" in command
     assert str(config.projects_host_path / "proj-1") not in command
+
+
+def test_tool_run_command_logs_start_and_exit_code(mock_client, mock_container, config, caplog):
+    mock_container.exec_run.return_value = (0, (b"hello\n", b""))
+
+    with caplog.at_level(logging.INFO):
+        tool_run_command(mock_client, config, "proj-1", ["echo", "hello"])
+
+    messages = [record.message for record in caplog.records]
+    assert any("proj-1" in m and "run_command" in m for m in messages)
+    assert any("exit_code=0" in m for m in messages)
+
+
+def test_tool_write_file_logs_a_warning_on_mkdir_failure(mock_client, mock_container, config, caplog):
+    mock_container.exec_run.return_value = (1, (b"", b"permission denied"))
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(ContainerExecutionError):
+            tool_write_file(mock_client, config, "proj-1", "sub/a.py", "content")
+
+    messages = [record.message for record in caplog.records]
+    assert any("proj-1" in m and "write_file" in m and "permission denied" in m for m in messages)

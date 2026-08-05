@@ -7,6 +7,8 @@ which would mean constructing or holding a Docker client outside the one
 service allowed to (.claude/rules/security.md).
 """
 
+import logging
+
 import docker
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -23,6 +25,8 @@ from services.executor.tools import (
     tool_take_screenshot,
     tool_write_file,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RunCommandRequest(BaseModel):
@@ -124,8 +128,10 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except CommandTimeoutError as exc:
+            logger.exception("project %s: run_command timed out", request.project_id)
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except ContainerExecutionError as exc:
+            logger.exception("project %s: run_command failed", request.project_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/read_file", response_model=ReadFileResponse)
@@ -139,8 +145,10 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except CommandTimeoutError as exc:
+            logger.exception("project %s: read_file timed out", request.project_id)
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except ContainerExecutionError as exc:
+            logger.exception("project %s: read_file failed", request.project_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return ReadFileResponse(content=content)
 
@@ -158,8 +166,10 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except CommandTimeoutError as exc:
+            logger.exception("project %s: write_file timed out", request.project_id)
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except ContainerExecutionError as exc:
+            logger.exception("project %s: write_file failed", request.project_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return WriteFileResponse(ok=ok)
 
@@ -172,6 +182,7 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ContainerExecutionError as exc:
+            logger.exception("project %s: list_files failed", request.project_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return ListFilesResponse(entries=entries)
 
@@ -184,8 +195,10 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except CommandTimeoutError as exc:
+            logger.exception("project %s: run_tests timed out", request.project_id)
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except ContainerExecutionError as exc:
+            logger.exception("project %s: run_tests failed", request.project_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     class TakeScreenshotRequest(BaseModel):
@@ -212,8 +225,10 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except CommandTimeoutError as exc:
+            logger.exception("project %s: take_screenshot timed out", request.project_id)
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except ContainerExecutionError as exc:
+            logger.exception("project %s: take_screenshot failed", request.project_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/clear_project_cache", response_model=ClearProjectCacheResponse)
@@ -223,6 +238,7 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ContainerExecutionError as exc:
+            logger.exception("project %s: clear_project_cache failed", request.project_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return ClearProjectCacheResponse(ok=ok)
 
