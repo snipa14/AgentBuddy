@@ -249,15 +249,54 @@ def test_run_coder_task_prompt_is_unchanged_without_recalled_lessons():
     assert sent[1].content == "Task: trivial task"
 
 
-def test_run_coder_task_streams_partial_content_into_the_progress_buffer():
-    router = FakeRouter([AIMessage(content="working on it", tool_calls=[], usage_metadata=usage())])
+def test_run_coder_task_records_progress_events_for_a_successful_write():
+    router = FakeRouter(
+        [
+            _tool_call_message(
+                "write_file", {"path": "models.py", "content": "class User:\n    pass"}, "call_1"
+            ),
+            _done_message(),
+        ]
+    )
     executor = RecordingExecutorClient()
 
-    result = asyncio.run(run_coder_task(router, executor, "proj-stream", "trivial task"))
+    asyncio.run(run_coder_task(router, executor, "proj-progress-write", "Add a User model"))
 
-    assert result.success is True
-    chunks = get_chunks_since("proj-stream")
-    assert "".join(chunk.text for chunk in chunks) == "working on it"
+    chunks = [chunk.text for chunk in get_chunks_since("proj-progress-write")]
+    assert "→ write_file(models.py)" in chunks
+    assert "✓ wrote models.py" in chunks
+
+
+def test_run_coder_task_records_a_progress_event_for_a_failed_read():
+    router = FakeRouter(
+        [
+            _tool_call_message("read_file", {"path": "missing.py"}, "call_1"),
+            _done_message(),
+        ]
+    )
+    executor = RecordingExecutorClient(files={})
+
+    asyncio.run(run_coder_task(router, executor, "proj-progress-read-fail", "Add a User model"))
+
+    chunks = [chunk.text for chunk in get_chunks_since("proj-progress-read-fail")]
+    assert "→ read_file(missing.py)" in chunks
+    assert any(chunk.startswith("✗ read_file(missing.py) failed:") for chunk in chunks)
+
+
+def test_run_coder_task_records_progress_events_for_run_command():
+    router = FakeRouter(
+        [
+            _tool_call_message("run_command", {"command": ["pytest", "-q"]}, "call_1"),
+            _done_message(),
+        ]
+    )
+    executor = RecordingExecutorClient()
+
+    asyncio.run(run_coder_task(router, executor, "proj-progress-cmd", "run the tests"))
+
+    chunks = [chunk.text for chunk in get_chunks_since("proj-progress-cmd")]
+    assert "→ run_command(pytest -q)" in chunks
+    assert "✓ pytest -q (exit 0)" in chunks
 
 
 def test_run_coder_task_dispatches_run_command_as_an_argv_list():

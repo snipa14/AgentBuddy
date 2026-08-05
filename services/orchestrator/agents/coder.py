@@ -21,6 +21,8 @@ tests/unit/test_coder.py. The real end-to-end proof against a live
 workspace container lives in tests/integration/test_coder_end_to_end.py.
 """
 
+import logging
+
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -38,6 +40,7 @@ from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.progress_buffer import add_progress
 
 CODER_ROLE = "coder"
+logger = logging.getLogger(__name__)
 
 
 class CoderTask(BaseModel):
@@ -93,28 +96,47 @@ def _build_tools(executor_client: ExecutorClient, project_id: str, stack: str) -
     @tool
     async def read_file(path: str) -> str:
         """Reads a file's contents from the project workspace."""
+        add_progress(project_id, f"→ read_file({path})")
+        logger.info("project %s: read_file(%s)", project_id, path)
         try:
-            return await executor_client.read_file(project_id, path, stack=stack)
+            content = await executor_client.read_file(project_id, path, stack=stack)
         except ExecutorClientError as exc:
+            add_progress(project_id, f"✗ read_file({path}) failed: {exc}")
+            logger.warning("project %s: read_file(%s) failed: %s", project_id, path, exc)
             return f"error: {exc}"
+        add_progress(project_id, f"✓ read {path}")
+        return content
 
     @tool
     async def write_file(path: str, content: str) -> str:
         """Writes content to a file in the project workspace, creating parent directories as needed."""
+        add_progress(project_id, f"→ write_file({path})")
+        logger.info("project %s: write_file(%s)", project_id, path)
         try:
             await executor_client.write_file(project_id, path, content, stack=stack)
-            return f"wrote {path}"
         except ExecutorClientError as exc:
+            add_progress(project_id, f"✗ write_file({path}) failed: {exc}")
+            logger.warning("project %s: write_file(%s) failed: %s", project_id, path, exc)
             return f"error: {exc}"
+        add_progress(project_id, f"✓ wrote {path}")
+        return f"wrote {path}"
 
     @tool
     async def run_command(command: list[str]) -> str:
         """Runs a command inside the project workspace container, given as an argv list, e.g. ["pytest", "-q"]."""
+        command_text = " ".join(command)
+        add_progress(project_id, f"→ run_command({command_text})")
+        logger.info("project %s: run_command(%s)", project_id, command_text)
         try:
             result = await executor_client.run_command(project_id, command, stack=stack)
-            return f"exit_code={result.exit_code}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         except ExecutorClientError as exc:
+            add_progress(project_id, f"✗ run_command({command_text}) failed: {exc}")
+            logger.warning(
+                "project %s: run_command(%s) failed: %s", project_id, command_text, exc
+            )
             return f"error: {exc}"
+        add_progress(project_id, f"✓ {command_text} (exit {result.exit_code})")
+        return f"exit_code={result.exit_code}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
     return [read_file, write_file, run_command]
 
@@ -226,8 +248,6 @@ async def run_coder_task(
     for _ in range(max_steps):
         ai_message_chunk: AIMessageChunk | None = None
         async for chunk in llm_with_tools.astream(messages):
-            if chunk.content:
-                add_progress(project_id, str(chunk.content))
             ai_message_chunk = chunk if ai_message_chunk is None else ai_message_chunk + chunk
         ai_message: AIMessage = ai_message_chunk
 
