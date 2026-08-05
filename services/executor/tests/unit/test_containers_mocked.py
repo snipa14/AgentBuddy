@@ -229,7 +229,7 @@ def test_install_dependencies_if_present_is_a_noop_for_a_stack_without_a_manifes
 
 def test_workspace_container_logs_create_start_and_remove(config, tmp_path, caplog):
     mock_container = MagicMock(spec=Container)
-    mock_container.id = "abc123def456"
+    mock_container.id = "abc123def456ff00extra"
     client = MagicMock()
     client.containers.create.return_value = mock_container
 
@@ -239,5 +239,6 @@ def test_workspace_container_logs_create_start_and_remove(config, tmp_path, capl
 
     messages = [record.message for record in caplog.records]
     assert any("proj-1" in m and "creating workspace container" in m for m in messages)
-    assert any("proj-1" in m and "abc123def456"[:12] in m and "started" in m for m in messages)
-    assert any("proj-1" in m and "abc123def456"[:12] in m and "removing" in m for m in messages)
+    assert any("proj-1" in m and "abc123def456" in m and "started" in m for m in messages)
+    assert any("proj-1" in m and "abc123def456" in m and "removing" in m for m in messages)
+    assert not any("abc123def456ff00extra" in m for m in messages)

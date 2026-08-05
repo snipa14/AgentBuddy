@@ -286,7 +286,9 @@ def test_tool_run_command_logs_start_and_exit_code(mock_client, mock_container, 
     assert any("exit_code=0" in m for m in messages)
 
 
-def test_tool_write_file_logs_a_warning_on_mkdir_failure(mock_client, mock_container, config, caplog):
+def test_tool_write_file_logs_a_warning_on_mkdir_failure(
+    mock_client, mock_container, config, caplog
+):
     mock_container.exec_run.return_value = (1, (b"", b"permission denied"))
 
     with caplog.at_level(logging.WARNING):
