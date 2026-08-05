@@ -22,9 +22,9 @@ def _stream_response(chunks: list[dict]) -> MagicMock:
     return response
 
 
-def _status_response(phase: str) -> MagicMock:
+def _status_response(phase: str, **body) -> MagicMock:
     response = MagicMock()
-    response.json.return_value = {"phase": phase}
+    response.json.return_value = {"phase": phase, **body}
     return response
 
 
@@ -79,7 +79,34 @@ def test_poll_once_edits_the_same_message_on_subsequent_chunks():
 
     bot.send_message.assert_awaited_once_with(7, "hello ")
     bot.edit_message_text.assert_awaited_once_with(
-        "hello world", chat_id=7, message_id=99
+        "hello \nworld", chat_id=7, message_id=99
+    )
+
+
+def test_poll_once_puts_each_event_from_one_fetch_on_its_own_line():
+    """Chunks are discrete progress events, not deltas of one streamed
+    sentence -- several arriving in a single /stream fetch must render one
+    per line, not run together into an unreadable single line."""
+    orchestrator = _fake_orchestrator(
+        [
+            _stream_response(
+                [
+                    {"seq": 0, "text": "🔧 write_file src/a.py"},
+                    {"seq": 1, "text": "✅ write_file src/a.py"},
+                ]
+            )
+        ],
+        [_status_response("implementing")],
+    )
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot)
+    poller._since_seq["proj-1"] = -1
+    poller._idle_polls["proj-1"] = 0
+
+    asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    bot.send_message.assert_awaited_once_with(
+        7, "🔧 write_file src/a.py\n✅ write_file src/a.py"
     )
 
 
@@ -113,10 +140,12 @@ def test_poll_once_stops_and_sends_a_done_message_once_the_project_reaches_done(
 
     assert should_continue is False
     assert "proj-1" not in poller._since_seq
-    bot.send_message.assert_awaited_once_with(7, "\n✅ project done")
+    bot.send_message.assert_awaited_once_with(7, "✅ project done")
 
 
 def test_poll_once_stops_and_sends_a_blocked_message_once_the_project_reaches_blocked():
+    """A project blocked by something other than a task -- a rejected cost or
+    merge gate -- has no blocked task to name, so no reason clause."""
     orchestrator = _fake_orchestrator(
         [_stream_response([])],
         [_status_response("blocked")],
@@ -129,7 +158,107 @@ def test_poll_once_stops_and_sends_a_blocked_message_once_the_project_reaches_bl
     should_continue = asyncio.run(poller._poll_once("proj-1", chat_id=7))
 
     assert should_continue is False
-    bot.send_message.assert_awaited_once_with(7, "\n🚫 project blocked")
+    bot.send_message.assert_awaited_once_with(7, "🚫 project blocked")
+
+
+def test_poll_once_names_the_blocked_task_as_the_reason_in_the_blocked_message():
+    orchestrator = _fake_orchestrator(
+        [_stream_response([])],
+        [
+            _status_response(
+                "blocked",
+                task_progress={
+                    "done": 1,
+                    "total": 2,
+                    "tasks": [
+                        {"description": "Add the parser", "status": "done", "attempts": 1},
+                        {"description": "Wire up the CLI", "status": "blocked", "attempts": 3},
+                    ],
+                },
+            )
+        ],
+    )
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot)
+    poller._since_seq["proj-1"] = 5
+    poller._idle_polls["proj-1"] = 0
+
+    should_continue = asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    assert should_continue is False
+    bot.send_message.assert_awaited_once_with(7, "🚫 project blocked: Wire up the CLI")
+
+
+def test_poll_once_falls_back_to_a_bare_blocked_message_when_no_task_is_blocked():
+    orchestrator = _fake_orchestrator(
+        [_stream_response([])],
+        [
+            _status_response(
+                "blocked",
+                task_progress={
+                    "done": 1,
+                    "total": 1,
+                    "tasks": [
+                        {"description": "Add the parser", "status": "done", "attempts": 1},
+                    ],
+                },
+            )
+        ],
+    )
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot)
+    poller._since_seq["proj-1"] = 5
+    poller._idle_polls["proj-1"] = 0
+
+    asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    bot.send_message.assert_awaited_once_with(7, "🚫 project blocked")
+
+
+def test_poll_once_stops_polling_even_when_the_terminal_message_fails_to_send():
+    """A failed Telegram send must not leave the poll loop running for a
+    project that's genuinely finished -- the send is best-effort, the stop
+    is not."""
+    orchestrator = _fake_orchestrator(
+        [_stream_response([])],
+        [_status_response("done")],
+    )
+    bot = _fake_bot()
+    bot.send_message = AsyncMock(side_effect=RuntimeError("telegram rejected it"))
+    poller = ProgressPoller(orchestrator, bot)
+    poller._since_seq["proj-1"] = 5
+    poller._idle_polls["proj-1"] = 0
+
+    should_continue = asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    assert should_continue is False
+    assert "proj-1" not in poller._since_seq
+
+
+def test_poll_once_resets_the_idle_budget_while_a_project_waits_at_an_approval_gate():
+    """A project parked at a human approval gate produces no progress events
+    by design (no gate calls add_progress), and every gate needs a human tap.
+    Spending the idle budget there wrongly declares a healthy project lost
+    after a few minutes of the operator not looking at their phone."""
+    orchestrator = _fake_orchestrator(
+        [_stream_response([])],
+        [
+            _status_response(
+                "awaiting_merge_approval",
+                pending_approval={"thread_id": "proj-1", "summary": "Merge to main?"},
+            )
+        ],
+    )
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot, max_idle_polls=5)
+    poller._since_seq["proj-1"] = 5
+    poller._idle_polls["proj-1"] = 4
+
+    should_continue = asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    assert should_continue is True
+    assert poller._idle_polls["proj-1"] == 0
+    bot.send_message.assert_not_awaited()
 
 
 def test_poll_once_stops_after_idle_timeout_and_sends_a_give_up_message():
@@ -210,7 +339,7 @@ def test_poll_once_truncates_the_telegram_message_but_keeps_the_full_text_intern
     sent_text = bot.edit_message_text.call_args.args[0]
     assert len(sent_text) <= TELEGRAM_MESSAGE_LIMIT
     assert sent_text.endswith(second_chunk)
-    assert poller._messages["proj-1"][1] == first_chunk + second_chunk
+    assert poller._messages["proj-1"][1] == f"{first_chunk}\n{second_chunk}"
 
 
 def test_start_does_not_spawn_a_second_task_for_an_already_running_project():

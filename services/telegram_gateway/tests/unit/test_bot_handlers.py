@@ -330,26 +330,26 @@ def _callback(data: str = "approve:thread-123") -> MagicMock:
     return callback
 
 
-def test_handle_approval_callback_resumes_with_parsed_decision_and_thread_id(orchestrator):
+def test_handle_approval_callback_resumes_with_parsed_decision_and_thread_id(orchestrator, poller):
     callback = _callback("approve:thread-123")
 
-    asyncio.run(handle_approval_callback(callback, orchestrator))
+    asyncio.run(handle_approval_callback(callback, orchestrator, poller))
 
     orchestrator.resume.assert_awaited_once_with("thread-123", "approve")
     callback.answer.assert_awaited_once_with("Approved.")
     callback.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
 
 
-def test_handle_approval_callback_uses_real_past_tense_for_reject(orchestrator):
+def test_handle_approval_callback_uses_real_past_tense_for_reject(orchestrator, poller):
     callback = _callback("reject:thread-9")
 
-    asyncio.run(handle_approval_callback(callback, orchestrator))
+    asyncio.run(handle_approval_callback(callback, orchestrator, poller))
 
     orchestrator.resume.assert_awaited_once_with("thread-9", "reject")
     callback.answer.assert_awaited_once_with("Rejected.")
 
 
-def test_handle_approval_callback_pushes_the_next_gates_keyboard(orchestrator):
+def test_handle_approval_callback_pushes_the_next_gates_keyboard(orchestrator, poller):
     """Approving the plan advances the graph straight to the merge gate; its
     approval keyboard must be pushed immediately, not stall until the user
     happens to send another message."""
@@ -363,14 +363,14 @@ def test_handle_approval_callback_pushes_the_next_gates_keyboard(orchestrator):
     orchestrator.resume = AsyncMock(return_value=merge_gate)
     callback = _callback("approve:proj-1")
 
-    asyncio.run(handle_approval_callback(callback, orchestrator))
+    asyncio.run(handle_approval_callback(callback, orchestrator, poller))
 
     args, kwargs = callback.message.answer.call_args
     assert args[0] == "Tests passed -- merge to main?"
     assert "reply_markup" in kwargs
 
 
-def test_handle_approval_callback_reports_terminal_phase_after_reject(orchestrator):
+def test_handle_approval_callback_reports_terminal_phase_after_reject(orchestrator, poller):
     blocked = MagicMock()
     blocked.status_code = 200
     blocked.json.return_value = {
@@ -381,13 +381,13 @@ def test_handle_approval_callback_reports_terminal_phase_after_reject(orchestrat
     orchestrator.resume = AsyncMock(return_value=blocked)
     callback = _callback("reject:proj-1")
 
-    asyncio.run(handle_approval_callback(callback, orchestrator))
+    asyncio.run(handle_approval_callback(callback, orchestrator, poller))
 
     callback.message.answer.assert_awaited_once_with("Project proj-1 is blocked.")
 
 
 def test_handle_approval_callback_acknowledges_and_clears_keyboard_before_the_slow_resume_call(
-    orchestrator,
+    orchestrator, poller,
 ):
     """orchestrator.resume() runs a LangGraph turn synchronously and can take
     a minute+ against a local model (observed: 58-62s in production). Telegram
@@ -404,12 +404,12 @@ def test_handle_approval_callback_acknowledges_and_clears_keyboard_before_the_sl
 
     orchestrator.resume = AsyncMock(side_effect=_resume_after_ack_and_clear)
 
-    asyncio.run(handle_approval_callback(callback, orchestrator))
+    asyncio.run(handle_approval_callback(callback, orchestrator, poller))
 
     orchestrator.resume.assert_awaited_once_with("thread-123", "approve")
 
 
-def test_handle_approval_callback_shows_a_hint_when_the_resume_call_times_out(orchestrator):
+def test_handle_approval_callback_shows_a_hint_when_the_resume_call_times_out(orchestrator, poller):
     """resume() can now run node_coder's task loop through every remaining
     task in one call and outlast even the Gateway's generous httpx timeout
     (observed: 300s+ once real task execution started working). Unlike
@@ -420,18 +420,50 @@ def test_handle_approval_callback_shows_a_hint_when_the_resume_call_times_out(or
     callback = _callback("approve:thread-123")
     orchestrator.resume = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
 
-    asyncio.run(handle_approval_callback(callback, orchestrator))
+    asyncio.run(handle_approval_callback(callback, orchestrator, poller))
 
     callback.message.answer.assert_awaited_once()
 
 
-def test_handle_approval_callback_handles_missing_message_gracefully(orchestrator):
+def test_handle_approval_callback_restarts_progress_polling_for_the_resumed_project(
+    orchestrator, poller
+):
+    """Every gate in this graph needs a human tap (the merge gate always
+    does, per .claude/rules/git.md), and the poller started at /new has
+    normally stopped by then. Without restarting it here nothing watches the
+    execution the approval just unblocked, so the terminal done/blocked
+    notice never arrives."""
+    callback = _callback("approve:proj-1")
+    callback.message.chat.id = 7
+
+    asyncio.run(handle_approval_callback(callback, orchestrator, poller))
+
+    poller.start.assert_called_once_with("proj-1", 7)
+
+
+def test_handle_approval_callback_does_not_start_polling_when_the_resume_call_crashed(
+    orchestrator, poller
+):
+    """A 5xx resume response has no JSON body to read a project_id out of and
+    nothing worth polling for anyway."""
+    crashed = MagicMock()
+    crashed.status_code = 500
+    crashed.json.side_effect = ValueError("not JSON")
+    orchestrator.resume = AsyncMock(return_value=crashed)
+    callback = _callback("approve:proj-1")
+
+    asyncio.run(handle_approval_callback(callback, orchestrator, poller))
+
+    poller.start.assert_not_called()
+
+
+def test_handle_approval_callback_handles_missing_message_gracefully(orchestrator, poller):
     callback = MagicMock()
     callback.data = "reject:thread-9"
     callback.answer = AsyncMock()
     callback.message = None
 
-    asyncio.run(handle_approval_callback(callback, orchestrator))
+    asyncio.run(handle_approval_callback(callback, orchestrator, poller))
 
     orchestrator.resume.assert_awaited_once_with("thread-9", "reject")
 

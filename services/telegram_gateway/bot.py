@@ -224,7 +224,7 @@ async def handle_free_text(
 
 @router.callback_query(F.data.startswith((CALLBACK_APPROVE, CALLBACK_REJECT, CALLBACK_EDIT)))
 async def handle_approval_callback(
-    callback: CallbackQuery, orchestrator: OrchestratorClient
+    callback: CallbackQuery, orchestrator: OrchestratorClient, poller: ProgressPoller
 ) -> None:
     """Resolves an Approve/Reject/Edit button press via POST /resume/{thread_id}.
 
@@ -239,6 +239,13 @@ async def handle_approval_callback(
     project that advances straight to its next gate (plan approval -> merge
     approval) gets that gate's keyboard pushed immediately, instead of
     stalling silently until the user happens to send another message.
+
+    Progress polling is (re)started off the resume response too. A poller
+    started at `/new` has usually stopped by the time a human taps Approve
+    on a later gate, and every gate this graph has requires a human tap
+    (.claude/rules/git.md's merge gate always does), so without this nothing
+    watches the execution that the approval just unblocked -- and the
+    terminal done/blocked notice never arrives.
     """
     decision, thread_id = callback.data.split(":", 1)
     await callback.answer(_DECISION_ACKNOWLEDGMENTS.get(decision, "Done."))
@@ -252,6 +259,7 @@ async def handle_approval_callback(
         return
     if callback.message is None:
         return
+    _start_poller_from_response(poller, response, callback.message.chat.id)
     await _relay_webhook_result(callback.message, response)
 
 
