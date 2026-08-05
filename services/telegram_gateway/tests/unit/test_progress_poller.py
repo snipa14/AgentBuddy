@@ -9,7 +9,11 @@ Gateway's message/callback handlers in test_bot_handlers.py.
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from services.telegram_gateway.progress_poller import TELEGRAM_MESSAGE_LIMIT, ProgressPoller
+from services.telegram_gateway.progress_poller import (
+    _GIVE_UP_MESSAGE,
+    TELEGRAM_MESSAGE_LIMIT,
+    ProgressPoller,
+)
 
 
 def _stream_response(chunks: list[dict]) -> MagicMock:
@@ -95,7 +99,7 @@ def test_poll_once_never_requests_an_already_seen_chunk_again():
     orchestrator.stream.assert_awaited_once_with("proj-1", -1)
 
 
-def test_poll_once_stops_once_the_project_reaches_a_terminal_phase():
+def test_poll_once_stops_and_sends_a_done_message_once_the_project_reaches_done():
     orchestrator = _fake_orchestrator(
         [_stream_response([])],
         [_status_response("done")],
@@ -109,9 +113,26 @@ def test_poll_once_stops_once_the_project_reaches_a_terminal_phase():
 
     assert should_continue is False
     assert "proj-1" not in poller._since_seq
+    bot.send_message.assert_awaited_once_with(7, "\n✅ project done")
 
 
-def test_poll_once_stops_after_idle_timeout():
+def test_poll_once_stops_and_sends_a_blocked_message_once_the_project_reaches_blocked():
+    orchestrator = _fake_orchestrator(
+        [_stream_response([])],
+        [_status_response("blocked")],
+    )
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot)
+    poller._since_seq["proj-1"] = 5
+    poller._idle_polls["proj-1"] = 0
+
+    should_continue = asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    assert should_continue is False
+    bot.send_message.assert_awaited_once_with(7, "\n🚫 project blocked")
+
+
+def test_poll_once_stops_after_idle_timeout_and_sends_a_give_up_message():
     orchestrator = _fake_orchestrator(
         [_stream_response([])],
         [_status_response("implementing")],
@@ -124,6 +145,7 @@ def test_poll_once_stops_after_idle_timeout():
     should_continue = asyncio.run(poller._poll_once("proj-1", chat_id=7))
 
     assert should_continue is False
+    bot.send_message.assert_awaited_once_with(7, _GIVE_UP_MESSAGE)
 
 
 def test_poll_once_resilient_survives_a_transient_orchestrator_error():
@@ -151,6 +173,20 @@ def test_poll_once_resilient_gives_up_after_idle_budget_of_failures():
     should_continue = asyncio.run(poller._poll_once_resilient("proj-1", chat_id=7))
 
     assert should_continue is False
+
+
+def test_poll_once_resilient_sends_a_give_up_message_when_it_exhausts_the_idle_budget():
+    orchestrator = MagicMock()
+    orchestrator.stream = AsyncMock(side_effect=RuntimeError("connection refused"))
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot, max_idle_polls=2)
+    poller._since_seq["proj-1"] = -1
+    poller._idle_polls["proj-1"] = 1
+
+    should_continue = asyncio.run(poller._poll_once_resilient("proj-1", chat_id=7))
+
+    assert should_continue is False
+    bot.send_message.assert_awaited_once_with(7, _GIVE_UP_MESSAGE)
 
 
 def test_poll_once_truncates_the_telegram_message_but_keeps_the_full_text_internally():

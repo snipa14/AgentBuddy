@@ -23,6 +23,10 @@ MAX_IDLE_POLLS = 100
 TERMINAL_PHASES = frozenset({"done", "blocked"})
 TELEGRAM_MESSAGE_LIMIT = 4096
 _TRUNCATION_MARKER = "... [truncated -- showing latest progress] ...\n"
+_GIVE_UP_MESSAGE = (
+    "\n⚠️ Lost track of this project -- no updates in a while. "
+    "Check /status or /continue."
+)
 
 
 def _truncate_for_telegram(text: str) -> str:
@@ -39,6 +43,18 @@ def _truncate_for_telegram(text: str) -> str:
         return text
     tail_budget = TELEGRAM_MESSAGE_LIMIT - len(_TRUNCATION_MARKER)
     return _TRUNCATION_MARKER + text[-tail_budget:]
+
+
+def _terminal_message(phase: str) -> str:
+    """Builds the final relayed line once a project reaches a terminal phase.
+
+    Args:
+        phase: The project's terminal phase, "done" or "blocked".
+
+    Returns:
+        A short status line to append to the project's relayed message.
+    """
+    return "\n✅ project done" if phase == "done" else "\n🚫 project blocked"
 
 
 class ProgressPoller:
@@ -108,6 +124,12 @@ class ProgressPoller:
             logger.warning("project %s: progress poll failed, retrying", project_id, exc_info=True)
             self._idle_polls[project_id] = self._idle_polls.get(project_id, 0) + 1
             if self._idle_polls[project_id] >= self._max_idle_polls:
+                try:
+                    await self._relay(project_id, chat_id, _GIVE_UP_MESSAGE)
+                except Exception:
+                    logger.warning(
+                        "project %s: failed to send give-up message", project_id, exc_info=True
+                    )
                 self._stop(project_id)
                 return False
             return True
@@ -130,7 +152,12 @@ class ProgressPoller:
 
         status_response = await self._orchestrator.get_status(project_id)
         phase = status_response.json().get("phase")
-        if phase in TERMINAL_PHASES or self._idle_polls[project_id] >= self._max_idle_polls:
+        if phase in TERMINAL_PHASES:
+            await self._relay(project_id, chat_id, _terminal_message(phase))
+            self._stop(project_id)
+            return False
+        if self._idle_polls[project_id] >= self._max_idle_polls:
+            await self._relay(project_id, chat_id, _GIVE_UP_MESSAGE)
             self._stop(project_id)
             return False
         return True
