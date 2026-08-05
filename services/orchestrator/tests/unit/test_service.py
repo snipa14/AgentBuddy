@@ -1,5 +1,7 @@
 """Unit tests for OrchestratorService, the global routing layer."""
 
+import logging
+
 import pytest
 
 from services.orchestrator.agents.coder import CoderTask, _TaskList
@@ -20,6 +22,7 @@ from services.orchestrator.graph.tests.unit.planner_fakes import (
     structured,
 )
 from services.orchestrator.memory.global_store import build_global_memory_connection
+from services.orchestrator.progress_buffer import get_chunks_since
 from services.orchestrator.service import OrchestratorService, UnknownProjectError
 from services.orchestrator.stacks import StacksConfig
 
@@ -95,6 +98,39 @@ def test_resume_known_project_progresses_through_merge_gate_to_done(service):
     after_merge_approval = service.resume("my-project", "approve")
     assert after_merge_approval["phase"] == "done"
     assert after_merge_approval["pending_approval"] is None
+
+
+def test_resume_crash_logs_with_project_context_and_records_a_progress_event(tmp_path, caplog):
+    """A node raising mid-run (simulated here the same way
+    test_activate_resumes_execution_when_stuck_mid_task_with_no_pending_approval
+    does -- an under-scripted FakeRouter running out of responses) must
+    leave a project-tagged ERROR log line and a "crashed" progress event
+    behind, not vanish silently. The exception itself must still propagate
+    unchanged, since callers' existing 500-mapping depends on it."""
+    db_path = tmp_path / "foundry_memory.db"
+    checkpointer = build_sqlite_checkpointer(db_path)
+    memory_conn = build_global_memory_connection(db_path)
+    router = FakeRouter([READY_TURN, EMPTY_DRAFT, NO_FINDINGS_CRITIQUE, CURATION_OK])
+    service = OrchestratorService(
+        checkpointer,
+        router,
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("proj-crash", "build me a thing")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(IndexError):
+            service.resume("proj-crash", "approve")
+
+    assert any(
+        "proj-crash" in record.message and "graph run crashed" in record.message
+        for record in caplog.records
+    )
+    chunks = [chunk.text for chunk in get_chunks_since("proj-crash")]
+    assert any(chunk.startswith("❌ crashed:") for chunk in chunks)
 
 
 def test_status_unknown_project_raises(service):

@@ -10,6 +10,7 @@ derived entirely from checkpointer state, which is why they survive a
 process restart without any registry file at all.
 """
 
+import logging
 import sqlite3
 import uuid
 from pathlib import Path
@@ -22,12 +23,14 @@ from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.build import DEFAULT_GLOBAL_COST_THRESHOLD_USD, build_project_graph
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.model_router.router import ModelRouter
-from services.orchestrator.progress_buffer import clear_progress
+from services.orchestrator.progress_buffer import add_progress, clear_progress
 from services.orchestrator.registry.validation import validate_project_id
 from services.orchestrator.stacks import StacksConfig
 
 _TERMINAL_PHASES = frozenset({"done", "blocked"})
 _ACTIVE_PROJECT_FILENAME = ".active_project_id"
+
+logger = logging.getLogger(__name__)
 
 
 class UnknownProjectError(Exception):
@@ -71,6 +74,34 @@ class OrchestratorService:
             stacks_config, global_cost_threshold_usd,
         )
 
+    def _invoke_graph(self, input_: Any, project_id: str) -> None:
+        """Invokes the compiled graph for project_id, making a crash visible.
+
+        A node raising (e.g. a local model returning malformed tool-call
+        JSON deep inside LangChain's client) previously propagated past this
+        service with no project-tagged log line anywhere, and no signal to
+        anyone watching the project's progress. This logs the crash with a
+        full traceback, records a "crashed" progress event any active
+        ProgressPoller will pick up on its next GET /stream poll (safe from
+        the clear_progress race a terminal-phase event would hit, since a
+        crash never flips `phase` into a terminal value), and re-raises
+        unchanged -- every caller's existing exception handling (api.py's
+        HTTPException mapping, the Gateway's 5xx guard in
+        _relay_webhook_result) is untouched.
+
+        Args:
+            input_: The value passed to `_graph.invoke` -- an initial
+                ProjectState, a `Command(resume=...)`, or None to continue
+                from the last checkpoint.
+            project_id: The project thread being invoked.
+        """
+        try:
+            self._graph.invoke(input_, config=self._config(project_id))
+        except Exception as exc:
+            logger.exception("project %s: graph run crashed", project_id)
+            add_progress(project_id, f"❌ crashed: {type(exc).__name__}: {exc}")
+            raise
+
     def handle_webhook(
         self, project_id: str | None, text: str, force_new: bool = False
     ) -> dict[str, Any]:
@@ -112,7 +143,7 @@ class OrchestratorService:
             if not self._project_exists(project_id):
                 validate_project_id(project_id)
                 initial_state = new_project_state(project_id, initial_message=text)
-                self._graph.invoke(initial_state, config=self._config(project_id))
+                self._invoke_graph(initial_state, project_id)
             self._write_active_project_id(project_id)
             return self.status(project_id)
 
@@ -123,16 +154,14 @@ class OrchestratorService:
                 if active_status["phase"] not in _TERMINAL_PHASES:
                     pending = active_status["pending_approval"]
                     if pending is not None and pending.get("kind") == "plan_questions":
-                        self._graph.invoke(
-                            Command(resume=text), config=self._config(active_id)
-                        )
+                        self._invoke_graph(Command(resume=text), active_id)
                         self._write_active_project_id(active_id)
                         return self.status(active_id)
                     return {**active_status, "text_applied": False}
 
         new_id = uuid.uuid4().hex[:12]
         initial_state = new_project_state(new_id, initial_message=text)
-        self._graph.invoke(initial_state, config=self._config(new_id))
+        self._invoke_graph(initial_state, new_id)
         self._write_active_project_id(new_id)
         return self.status(new_id)
 
@@ -155,7 +184,7 @@ class OrchestratorService:
         if not self._project_exists(project_id):
             raise UnknownProjectError(project_id)
         self._write_active_project_id(project_id)
-        self._graph.invoke(Command(resume=decision), config=self._config(project_id))
+        self._invoke_graph(Command(resume=decision), project_id)
         return self.status(project_id)
 
     def activate(self, project_id: str) -> None:
@@ -186,7 +215,7 @@ class OrchestratorService:
         self._write_active_project_id(project_id)
         current = self.status(project_id)
         if current["phase"] not in _TERMINAL_PHASES and current["pending_approval"] is None:
-            self._graph.invoke(None, config=self._config(project_id))
+            self._invoke_graph(None, project_id)
 
     def status(self, project_id: str) -> dict[str, Any]:
         """Reads a project's current phase and any pending approval.
