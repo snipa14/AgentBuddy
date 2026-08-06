@@ -387,7 +387,7 @@ def test_handle_approval_callback_reports_terminal_phase_after_reject(orchestrat
 
 
 def test_handle_approval_callback_acknowledges_and_clears_keyboard_before_the_slow_resume_call(
-    orchestrator, poller,
+    orchestrator, poller
 ):
     """orchestrator.resume() runs a LangGraph turn synchronously and can take
     a minute+ against a local model (observed: 58-62s in production). Telegram
