@@ -482,6 +482,56 @@ def route_after_coder(state: ProjectState) -> str:
     return "coder"
 
 
+def _reopen_last_done_task_or_block(
+    state: ProjectState, feedback: AIMessage, curator_source: str
+) -> dict[str, Any]:
+    """Reopens the most recently completed task for another attempt.
+
+    Shared by node_static_checks and node_plugin (a 'gating' plugin's
+    changes-requested verdict, graph/plugin_node.py) -- both feed a gating
+    finding back to the Coder the same way: reopen the last-done task,
+    honoring MAX_TASK_ATTEMPTS, or block the project if there's no
+    completed task to reopen at all.
+
+    Args:
+        state: The current project state.
+        feedback: The failure/finding message attached to `messages`.
+        curator_source: Recorded as `curator_source` on a blocked outcome,
+            so the Memory Curator's summary can say what blocked it.
+
+    Returns:
+        A state update: task_queue/phase="implementing" on a normal
+        reopen; task_queue/phase="blocked" at MAX_TASK_ATTEMPTS; just
+        phase="blocked" (no task_queue key) when there's no done task at all.
+    """
+    task_queue = state["task_queue"]
+    last_done_index = next(
+        (i for i in range(len(task_queue) - 1, -1, -1) if task_queue[i]["status"] == "done"),
+        None,
+    )
+    if last_done_index is None:
+        return {"phase": "blocked", "curator_source": curator_source, "messages": [feedback]}
+
+    reopened = {
+        **task_queue[last_done_index],
+        "status": "in_progress",
+        "attempts": task_queue[last_done_index]["attempts"] + 1,
+    }
+    if reopened["attempts"] >= MAX_TASK_ATTEMPTS:
+        reopened["status"] = "blocked"
+        return {
+            "task_queue": _replace_task(task_queue, last_done_index, reopened),
+            "phase": "blocked",
+            "curator_source": curator_source,
+            "messages": [feedback],
+        }
+    return {
+        "task_queue": _replace_task(task_queue, last_done_index, reopened),
+        "phase": "implementing",
+        "messages": [feedback],
+    }
+
+
 def node_static_checks(
     state: ProjectState,
     executor_client: ExecutorClient,
@@ -525,52 +575,11 @@ def node_static_checks(
         )
     feedback = AIMessage(content="\n\n".join(failure_lines))
 
-    task_queue = state["task_queue"]
-    last_done_index = next(
-        (
-            i for i in range(len(task_queue) - 1, -1, -1)
-            if task_queue[i]["status"] == "done"
-        ),
-        None,
-    )
-    if last_done_index is None:
-        logger.warning(
-            "project %s: static checks failed with no completed task to reopen",
-            state["project_id"],
-        )
-        return {
-            "phase": "blocked",
-            "curator_source": "static_checks",
-            "messages": [feedback],
-        }
-
-    reopened = {
-        **task_queue[last_done_index],
-        "status": "in_progress",
-        "attempts": task_queue[last_done_index]["attempts"] + 1,
-    }
-    if reopened["attempts"] >= MAX_TASK_ATTEMPTS:
-        reopened["status"] = "blocked"
-        logger.warning(
-            "project %s: static checks exhausted %d attempts, blocking",
-            state["project_id"], reopened["attempts"],
-        )
-        return {
-            "task_queue": _replace_task(task_queue, last_done_index, reopened),
-            "phase": "blocked",
-            "curator_source": "static_checks",
-            "messages": [feedback],
-        }
-
     logger.info(
         "project %s: static checks failed (%d finding set(s)), reopening task",
         state["project_id"], len(outcome.failures),
     )
-    return {
-        "task_queue": _replace_task(task_queue, last_done_index, reopened),
-        "phase": "implementing",
-        "messages": [feedback],
-    }
+    return _reopen_last_done_task_or_block(state, feedback, "static_checks")
 
 
 def route_after_static_checks(state: ProjectState) -> str:

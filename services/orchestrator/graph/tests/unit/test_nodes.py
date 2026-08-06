@@ -12,6 +12,8 @@ runtime-context requirement entirely and lets the bare function run to
 completion, exercising both branches directly without a real graph.
 """
 
+from langchain_core.messages import AIMessage
+
 from services.orchestrator.agents.coder import CoderTask, _TaskList
 from services.orchestrator.agents.frontend_reviewer import FrontendFinding, FrontendReviewResult
 from services.orchestrator.agents.planner import InterviewTurn
@@ -26,6 +28,7 @@ from services.orchestrator.executor_client import TestResult as ExecutorTestResu
 from services.orchestrator.graph.nodes import (
     MAX_REPLANS,
     MAX_TASK_ATTEMPTS,
+    _reopen_last_done_task_or_block,
     node_coder,
     node_done,
     node_frontend_review,
@@ -718,6 +721,36 @@ def test_static_checks_pass_with_nothing_applicable_keeps_reviewing_phase(two_st
     )
 
     assert update == {}
+
+
+def test_reopen_last_done_task_or_block_reopens_the_last_done_task():
+    state = _checked_state([{"description": "t1", "status": "done", "attempts": 0}])
+
+    update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
+
+    assert update["phase"] == "implementing"
+    assert update["task_queue"][0]["status"] == "in_progress"
+    assert update["task_queue"][0]["attempts"] == 1
+
+
+def test_reopen_last_done_task_or_block_blocks_at_max_attempts():
+    state = _checked_state(
+        [{"description": "t1", "status": "done", "attempts": MAX_TASK_ATTEMPTS - 1}]
+    )
+
+    update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
+
+    assert update["phase"] == "blocked"
+    assert update["task_queue"][0]["status"] == "blocked"
+
+
+def test_reopen_last_done_task_or_block_blocks_when_no_done_task_exists():
+    state = _checked_state([])
+
+    update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
+
+    assert update["phase"] == "blocked"
+    assert "task_queue" not in update
 
 
 def test_route_after_static_checks_routes_all_three_outcomes():
