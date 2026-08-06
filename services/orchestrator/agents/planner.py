@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from services.orchestrator.agents.llm import invoke_structured
 from services.orchestrator.model_router.router import ModelRouter
+from skills.loader import load_skill
 
 PLANNER_ROLE = "planner"
 
@@ -92,14 +93,6 @@ _DRAFT_SYSTEM_PROMPT = (
     "You are drafting a software project plan from an interview transcript. "
     "Produce a summary, goals, milestones, risks, and assumptions (the last "
     "four may be empty lists)."
-)
-
-_CRITIQUE_SYSTEM_PROMPT = (
-    "You are the roast-the-plan critique pass (see skills/roast-the-plan/"
-    "SKILL.md): adversarially review the given project plan for unstated "
-    "assumptions, missing edge cases, security gaps, scope creep, and "
-    "untested claims. Produce zero or more findings, plus any additional "
-    "risks/assumptions the plan should carry as a result of your findings."
 )
 
 
@@ -195,7 +188,7 @@ async def critique_plan(router: ModelRouter, plan: DraftPlan) -> tuple[CritiqueR
         f"Assumptions: {plan.assumptions}"
     )
     messages = [
-        SystemMessage(content=_CRITIQUE_SYSTEM_PROMPT),
+        SystemMessage(content=load_skill("roast-the-plan").body),
         HumanMessage(content=plan_text),
     ]
     return await invoke_structured(llm, CritiqueResult, messages)

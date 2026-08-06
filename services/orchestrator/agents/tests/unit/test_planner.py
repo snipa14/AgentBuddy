@@ -134,6 +134,16 @@ def test_critique_plan_returns_findings_and_revisions():
     ]
 
 
+def test_critique_plan_system_prompt_includes_skill_body():
+    router = FakeRouter([structured(CRITIQUE_NO_FINDINGS)])
+    plan = DraftPlan(summary="s")
+
+    asyncio.run(critique_plan(router, plan))
+
+    system_message = router.model.requests[0][0]
+    assert "Unstated assumptions" in system_message.content
+
+
 def test_apply_critique_merges_new_risks_and_assumptions_into_the_plan():
     draft = DraftPlan(
         summary="A small internal tool.",

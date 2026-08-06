@@ -162,6 +162,19 @@ def test_review_frontend_sends_a_system_prompt_with_the_images():
     assert len(image_blocks) == 2
 
 
+def test_review_frontend_system_prompt_includes_skill_body():
+    executor = RecordingExecutorClient(
+        files=["index.html"],
+        screenshots=[ScreenshotResult(image_b64="iVBORw0KGgo=", error=None)],
+    )
+    router = FakeRouter([structured(APPROVE_RESULT)])
+
+    asyncio.run(review_frontend(router, executor, "proj-1"))
+
+    system_message = router.model.requests[0][0]
+    assert "Layout breakage" in system_message.content
+
+
 # -- _build_findings_text tests ----------------------------------------------------
 
 def test_build_findings_text_formats_single_finding():

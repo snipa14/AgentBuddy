@@ -220,6 +220,16 @@ def test_run_coder_task_finishes_immediately_when_model_makes_no_tool_calls():
     assert executor.calls == []
 
 
+def test_run_coder_task_system_prompt_includes_skill_body():
+    router = FakeRouter([_done_message()])
+    executor = RecordingExecutorClient()
+
+    asyncio.run(run_coder_task(router, executor, "proj-1", "add a function"))
+
+    system_message = router.model.requests[0][0]
+    assert "Match the task, not more" in system_message.content
+
+
 def test_run_coder_task_includes_recalled_lessons_in_the_prompt():
     router = FakeRouter([_done_message()])
     executor = RecordingExecutorClient()

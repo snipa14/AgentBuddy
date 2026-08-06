@@ -21,25 +21,21 @@ from pydantic import BaseModel, Field
 from services.orchestrator.agents.llm import invoke_structured
 from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.model_router.router import ModelRouter
+from skills.loader import load_skill
 
 logger = logging.getLogger(__name__)
 
 FRONTEND_REVIEWER_ROLE = "frontend_reviewer"
 
-_FRONTEND_SYSTEM_PROMPT = (
-    "You are a frontend reviewer. You will receive screenshots of a web application\n"
-    "that was just built by a Coder agent inside a workspace container.\n\n"
-    "Review each screenshot for:\n"
-    "- Layout breakage (overlapping elements, broken grids, truncated text)\n"
-    "- Accessibility issues (low contrast text, missing alt text indicators,\n"
-    "  focus order problems visible in the layout)\n"
-    "- Responsiveness (content clipped at this viewport width, horizontal\n"
-    "  scrollbars, elements too small to tap on mobile)\n\n"
-    "For each issue found, report an approximate location on the screen, a "
-    "severity ('critical' or 'warning'), and a description of what you see. "
-    "If there are no issues, the verdict must be 'approve' and findings must "
-    "be empty."
+_FRONTEND_HARNESS_PREFACE = (
+    "You will receive screenshots of a web application that was just built "
+    "by a Coder agent inside a workspace container."
 )
+
+
+def _build_frontend_system_prompt() -> str:
+    return f"{load_skill('frontend-review').body}\n\n{_FRONTEND_HARNESS_PREFACE}"
+
 
 _FRONTEND_EXTENSIONS = {".html", ".css", ".js", ".ts", ".jsx", ".tsx", ".vue", ".svelte"}
 
@@ -168,7 +164,7 @@ async def review_frontend(
         )
 
     messages = [
-        SystemMessage(content=_FRONTEND_SYSTEM_PROMPT),
+        SystemMessage(content=_build_frontend_system_prompt()),
         HumanMessage(content=content_blocks),
     ]
     result, ai_message = await invoke_structured(llm, FrontendReviewResult, messages)

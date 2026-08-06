@@ -16,27 +16,20 @@ from pydantic import BaseModel, Field
 
 from services.orchestrator.agents.llm import invoke_structured
 from services.orchestrator.model_router.router import ModelRouter
+from skills.loader import load_skill
 
 logger = logging.getLogger(__name__)
 
 REVIEWER_ROLE = "reviewer"
 
-_REVIEW_SYSTEM_PROMPT = (
-    "You are a code reviewer. You will receive the contents of files that were "
-    "just written by a Coder agent inside a workspace container.\n\n"
-    "Review each file for:\n"
-    "- Security issues (hardcoded secrets, injection vulnerabilities, missing null checks)\n"
-    "- Logic errors (off-by-one, unhandled edge cases, incorrect assumptions)\n"
-    "- Scope creep (code outside the stated plan goals)\n\n"
-    "For each issue found, report the file, an approximate line number, a "
-    "severity ('critical' or 'warning'), and a concise message. If there are "
-    "no issues, the verdict must be 'approve' and findings must be empty.\n\n"
-    "If an issue is not fixable by editing the current diff—because a task's "
-    "premise is false, a dependency the plan assumed doesn't exist, or the "
-    "approach is structurally wrong—set replan_needed to true with a concrete "
-    "replan_reason, and still report the findings. Otherwise leave replan_needed "
-    "false and replan_reason empty."
+_REVIEW_HARNESS_PREFACE = (
+    "You will receive the contents of files that were just written by a "
+    "Coder agent inside a workspace container."
 )
+
+
+def _build_review_system_prompt() -> str:
+    return f"{load_skill('review-code').body}\n\n{_REVIEW_HARNESS_PREFACE}"
 
 
 class ReviewFinding(BaseModel):
@@ -134,7 +127,7 @@ async def review_changes(
             logger.warning("project %s: failed to list files for review: %s", project_id, exc)
 
     messages = [
-        SystemMessage(content=_REVIEW_SYSTEM_PROMPT),
+        SystemMessage(content=_build_review_system_prompt()),
         HumanMessage(content=_build_user_prompt(project_id, files)),
     ]
     result, ai_message = await invoke_structured(llm, ReviewResult, messages)

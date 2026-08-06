@@ -124,6 +124,16 @@ def test_review_changes_sends_system_and_user_messages():
     assert "models.py" in sent_messages[1].content
 
 
+def test_review_changes_system_prompt_includes_skill_body():
+    router = FakeRouter([structured(APPROVE_RESULT)])
+    executor = RecordingExecutorClient(files={"models.py": "class User: pass\n"})
+
+    asyncio.run(review_changes(router, executor, "proj-1"))
+
+    system_message = router.model.requests[0][0]
+    assert "Correctness bugs" in system_message.content
+
+
 def test_review_result_defaults_to_no_replan():
     result = ReviewResult(verdict="approve")
     assert result.replan_needed is False

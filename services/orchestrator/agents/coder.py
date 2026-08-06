@@ -38,6 +38,7 @@ from services.orchestrator.agents.llm import invoke_structured
 from services.orchestrator.executor_client import ExecutorClient, ExecutorClientError
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.progress_buffer import add_progress
+from skills.loader import load_skill
 
 CODER_ROLE = "coder"
 logger = logging.getLogger(__name__)
@@ -70,12 +71,14 @@ _DECOMPOSE_SYSTEM_PROMPT = (
     "(e.g. 'Add a User model with email and password_hash fields')."
 )
 
-_CODER_SYSTEM_PROMPT = (
-    "You are implementing one task inside a project's workspace container. "
-    "Use the read_file/write_file/run_command tools as needed to implement "
-    "and verify the task. Once it is fully implemented and verified, "
-    "respond with no further tool calls."
+_CODER_HARNESS_PREFACE = (
+    "Your tools are read_file, write_file, and run_command. Once the task "
+    "is fully implemented and verified, respond with no further tool calls."
 )
+
+
+def _build_coder_system_prompt() -> str:
+    return f"{load_skill('develop-python').body}\n\n{_CODER_HARNESS_PREFACE}"
 
 
 def _build_tools(executor_client: ExecutorClient, project_id: str, stack: str) -> list[BaseTool]:
@@ -238,7 +241,7 @@ async def run_coder_task(
             f"\n\nLessons recorded from previous projects that may be relevant:\n{lessons_text}"
         )
     messages: list[BaseMessage] = [
-        SystemMessage(content=_CODER_SYSTEM_PROMPT),
+        SystemMessage(content=_build_coder_system_prompt()),
         HumanMessage(content=task_prompt),
     ]
     transcript: list[str] = []
