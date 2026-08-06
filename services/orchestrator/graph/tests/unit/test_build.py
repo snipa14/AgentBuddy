@@ -1,12 +1,19 @@
 """Unit tests for plugin wiring in build_project_graph."""
 
+from pathlib import Path
+
+import pytest
+
 from services.orchestrator.executor_client import CommandResult, TestResult
 from services.orchestrator.graph.build import build_project_graph
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
 from services.orchestrator.graph.tests.unit.planner_fakes import FakeRouter
-from services.orchestrator.plugins.discovery import LoadedPlugin
+from services.orchestrator.plugins.discovery import LoadedPlugin, discover_plugins
 from services.orchestrator.plugins.manifest import PluginManifest
 from services.orchestrator.stacks import StacksConfig
+
+
+FIXTURE_PLUGINS_DIR = Path(__file__).parents[3] / "plugins" / "tests" / "fixtures"
 
 
 class _StubExecutorClient:
@@ -137,3 +144,16 @@ def test_build_project_graph_chains_two_plugins_in_the_same_slot(
     node_names = set(graph.get_graph().nodes)
     assert "plugin_first_reviewer" in node_names
     assert "plugin_second_reviewer" in node_names
+
+
+def test_discovered_fixture_plugin_wires_into_a_real_graph_build(
+    tmp_path, memory_conn, projects_root
+):
+    pytest.importorskip("yaml")
+
+    plugins = discover_plugins(FIXTURE_PLUGINS_DIR, known_roles=frozenset({"reviewer", "coder"}))
+    assert [p.manifest.name for p in plugins] == ["example-plugin"]
+
+    graph = _build_graph(tmp_path, memory_conn, projects_root, plugins=plugins)
+
+    assert "plugin_example_reviewer" in set(graph.get_graph().nodes)

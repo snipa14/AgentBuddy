@@ -1,0 +1,5 @@
+name: example-plugin
+role: example_reviewer
+slot: after_reviewer
+mode: advisory
+requires: [tool_calling]
