@@ -99,7 +99,7 @@ def _start_intake(project_id: str, description: str) -> None:
         memory_conn,
         config.projects_root,
         stacks_config,
-        config.global_cost_threshold_usd,
+        global_cost_threshold_usd=config.global_cost_threshold_usd,
     ).handle_webhook(project_id, description)
 
 

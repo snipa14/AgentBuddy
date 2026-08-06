@@ -40,11 +40,65 @@ from services.orchestrator.graph.nodes import (
     route_after_reviewer,
     route_after_static_checks,
 )
+from services.orchestrator.graph.plugin_node import node_plugin, route_after_plugin
 from services.orchestrator.graph.state import ProjectState
 from services.orchestrator.model_router.router import ModelRouter
+from services.orchestrator.plugins.discovery import LoadedPlugin
 from services.orchestrator.stacks import StacksConfig
 
 DEFAULT_GLOBAL_COST_THRESHOLD_USD = 50.0
+
+
+def _plugin_node_name(manifest) -> str:
+    return f"plugin_{manifest.role}"
+
+
+def _wire_plugin_slot(
+    builder: StateGraph,
+    plugins: list[LoadedPlugin],
+    router: ModelRouter,
+    executor_client: ExecutorClient,
+    exit_node: str,
+) -> str:
+    """Adds one node per plugin, chained in order and ending at exit_node.
+
+    Args:
+        builder: The graph builder being constructed.
+        plugins: This slot's plugins, in the order they should run.
+        router: Threaded through to every plugin node.
+        executor_client: Threaded through to every plugin node.
+        exit_node: The slot's real destination once every plugin in the
+            chain has passed (or if the chain is empty).
+
+    Returns:
+        The entry node name the slot's fixed predecessor edge should route
+        to -- exit_node itself if plugins is empty, degrading to a pure
+        passthrough exactly like static_checks with nothing to check.
+    """
+    if not plugins:
+        return exit_node
+
+    chain_targets = [_plugin_node_name(p.manifest) for p in plugins] + [exit_node]
+    for position, plugin in enumerate(plugins):
+        node_name = chain_targets[position]
+        next_node = chain_targets[position + 1]
+        builder.add_node(
+            node_name,
+            functools.partial(
+                node_plugin,
+                router=router,
+                executor_client=executor_client,
+                manifest=plugin.manifest,
+                skill_body=plugin.skill_body,
+                next_node=next_node,
+            ),
+        )
+        builder.add_conditional_edges(
+            node_name,
+            functools.partial(route_after_plugin, next_node=next_node),
+            {"coder": "coder", "memory_curator": "memory_curator", next_node: next_node},
+        )
+    return chain_targets[0]
 
 
 def build_project_graph(
@@ -54,6 +108,7 @@ def build_project_graph(
     memory_conn: sqlite3.Connection,
     projects_root: Path,
     stacks_config: StacksConfig,
+    plugins: list[LoadedPlugin] | None = None,
     global_cost_threshold_usd: float = DEFAULT_GLOBAL_COST_THRESHOLD_USD,
 ) -> CompiledStateGraph:
     """Builds and compiles the per-project subgraph.
@@ -98,6 +153,9 @@ def build_project_graph(
             declared) means every stack's check_commands resolve to nothing
             to run, so static_checks always passes through to the Reviewer
             unchanged -- the node degrades to a no-op rather than blocking.
+        plugins: Discovered plugins (services/orchestrator/plugins/discovery.py),
+            already validated and role-collision-filtered. None or an empty
+            list wires the graph exactly as before this feature existed.
         global_cost_threshold_usd: The global weekly USD threshold
             node_cost_check gates on (TODO.md Phase 18) -- summed across
             every active project's checkpointed cost_usd_weekly, not just
@@ -108,6 +166,7 @@ def build_project_graph(
         A compiled graph ready for `.invoke()`/`.get_state()` calls keyed by
         `{"configurable": {"thread_id": project_id}}`.
     """
+    plugins = plugins or []
     builder = StateGraph(ProjectState)
     builder.add_node("intake", node_intake)
     builder.add_node("planner_ask", functools.partial(node_planner_ask, router=router))
@@ -166,6 +225,22 @@ def build_project_graph(
         "done", functools.partial(node_done, executor_client=executor_client)
     )
 
+    plugins_by_slot: dict[str, list[LoadedPlugin]] = {
+        "after_coder": [], "after_reviewer": [], "after_tester": [],
+    }
+    for plugin in plugins:
+        plugins_by_slot[plugin.manifest.slot].append(plugin)
+
+    after_coder_entry = _wire_plugin_slot(
+        builder, plugins_by_slot["after_coder"], router, executor_client, "reviewer"
+    )
+    after_reviewer_entry = _wire_plugin_slot(
+        builder, plugins_by_slot["after_reviewer"], router, executor_client, "frontend_review"
+    )
+    after_tester_entry = _wire_plugin_slot(
+        builder, plugins_by_slot["after_tester"], router, executor_client, "memory_curator"
+    )
+
     builder.add_edge(START, "intake")
     builder.add_edge("intake", "planner_ask")
     builder.add_conditional_edges(
@@ -196,7 +271,7 @@ def build_project_graph(
         route_after_static_checks,
         {
             "coder": "coder",
-            "reviewer": "reviewer",
+            "reviewer": after_coder_entry,
             "memory_curator": "memory_curator",
         },
     )
@@ -205,7 +280,7 @@ def build_project_graph(
         route_after_reviewer,
         {
             "coder": "coder",
-            "frontend_review": "frontend_review",
+            "frontend_review": after_reviewer_entry,
             "memory_curator": "memory_curator",
         },
     )
@@ -220,7 +295,7 @@ def build_project_graph(
     builder.add_conditional_edges(
         "cost_wait", route_after_cost_wait, {"memory_curator": "memory_curator"}
     )
-    builder.add_edge("testing", "memory_curator")
+    builder.add_edge("testing", after_tester_entry)
     builder.add_conditional_edges(
         "merge_wait", route_after_merge_wait, {"memory_curator": "memory_curator"}
     )

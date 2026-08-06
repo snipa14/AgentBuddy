@@ -23,6 +23,7 @@ from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.build import DEFAULT_GLOBAL_COST_THRESHOLD_USD, build_project_graph
 from services.orchestrator.graph.state import new_project_state
 from services.orchestrator.model_router.router import ModelRouter
+from services.orchestrator.plugins.discovery import LoadedPlugin
 from services.orchestrator.progress_buffer import add_progress, clear_progress
 from services.orchestrator.registry.validation import validate_project_id
 from services.orchestrator.stacks import StacksConfig
@@ -48,6 +49,7 @@ class OrchestratorService:
         memory_conn: sqlite3.Connection,
         projects_root: Path,
         stacks_config: StacksConfig,
+        plugins: list[LoadedPlugin] | None = None,
         global_cost_threshold_usd: float = DEFAULT_GLOBAL_COST_THRESHOLD_USD,
     ) -> None:
         """Builds the service.
@@ -62,6 +64,10 @@ class OrchestratorService:
             projects_root: The projects/ root directory for per-project LEARNINGS.md.
             stacks_config: The loaded stack registry (ADR-045) static_checks
                 runs its deterministic commands from.
+            plugins: Discovered plugins (services/orchestrator/plugins/discovery.py),
+                threaded straight through to build_project_graph. None or an
+                empty list wires the graph exactly as before this feature
+                existed.
             global_cost_threshold_usd: The global weekly USD cost-gate
                 threshold (TODO.md Phase 18); defaults to
                 DEFAULT_GLOBAL_COST_THRESHOLD_USD. A real deployment passes
@@ -71,7 +77,7 @@ class OrchestratorService:
         self._projects_root = projects_root
         self._graph = build_project_graph(
             checkpointer, router, executor_client, memory_conn, projects_root,
-            stacks_config, global_cost_threshold_usd,
+            stacks_config, plugins, global_cost_threshold_usd,
         )
 
     def _invoke_graph(self, input_: Any, project_id: str) -> None:
