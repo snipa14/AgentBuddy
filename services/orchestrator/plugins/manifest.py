@@ -25,8 +25,10 @@ class PluginManifest(BaseModel):
 
     Attributes:
         name: The plugin's kebab-case identifier, used in log messages and
-            as the plugin node's chain position. Independent of its
-            directory name (the loader also enforces they match, Task 4).
+            as the plugin node's chain position. Not required to match its
+            directory name -- the loader (discovery.py) reads it from the
+            manifest content only and never compares it against the
+            directory it was found in.
         role: The snake_case model_router role name this plugin resolves
             through -- must not collide with a built-in role or another
             plugin's role (enforced by the loader, Task 4).
