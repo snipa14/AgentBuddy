@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from services.orchestrator.model_router.config import AnthropicProviderConfig, ModelsConfig, RoleConfig
 from services.orchestrator.plugins.discovery import (
     LoadedPlugin,
     _reject_role_collisions,
     discover_plugins,
+    synthesize_plugin_roles,
 )
 from services.orchestrator.plugins.manifest import PluginManifest
 
@@ -116,3 +118,37 @@ def test_discover_plugins_skips_missing_skill_file(tmp_path: Path, caplog):
 
     assert loaded == []
     assert "no-skill" in caplog.text
+
+
+def _base_models_config() -> ModelsConfig:
+    return ModelsConfig(
+        roles={"reviewer": RoleConfig(requires=["tool_calling"], prefer=["claude_sonnet"])},
+        providers={
+            "claude_sonnet": AnthropicProviderConfig(
+                type="anthropic", model="claude-sonnet-5",
+                capabilities=["tool_calling"],
+                cost_per_1m_input_tokens=3.0, cost_per_1m_output_tokens=15.0,
+            )
+        },
+    )
+
+
+def test_synthesize_plugin_roles_adds_new_role_with_default_prefer():
+    config = _base_models_config()
+    plugin = LoadedPlugin(manifest=_manifest("audit", "security_audit_reviewer"), skill_body="x")
+
+    result = synthesize_plugin_roles(config, [plugin])
+
+    assert result.roles["security_audit_reviewer"].prefer == ["local", "claude_sonnet"]
+    assert result.roles["security_audit_reviewer"].requires == []
+    assert "reviewer" in result.roles  # existing roles untouched
+
+
+def test_synthesize_plugin_roles_does_not_override_an_explicit_entry():
+    config = _base_models_config()
+    config.roles["security_audit_reviewer"] = RoleConfig(requires=[], prefer=["claude_opus"])
+    plugin = LoadedPlugin(manifest=_manifest("audit", "security_audit_reviewer"), skill_body="x")
+
+    result = synthesize_plugin_roles(config, [plugin])
+
+    assert result.roles["security_audit_reviewer"].prefer == ["claude_opus"]

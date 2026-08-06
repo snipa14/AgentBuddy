@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from services.orchestrator.model_router.config import ModelsConfig, RoleConfig
 from services.orchestrator.plugins.manifest import PluginManifest
 from skills.loader import load_skill_from_path
 
@@ -115,3 +116,32 @@ def discover_plugins(plugins_dir: Path, known_roles: frozenset[str]) -> list[Loa
         if plugin is not None
     ]
     return _reject_role_collisions(loaded, known_roles)
+
+
+DEFAULT_PLUGIN_PREFER = ["local", "claude_sonnet"]
+"""Matches the built-in 'reviewer' role's own default prefer chain (a
+plugin role's job -- render a verdict on a diff -- is the same shape)."""
+
+
+def synthesize_plugin_roles(
+    models_config: ModelsConfig, plugins: list[LoadedPlugin]
+) -> ModelsConfig:
+    """Adds a model_router role entry per plugin lacking an explicit one.
+
+    Args:
+        models_config: The loaded, validated models.yaml contents.
+        plugins: Plugins that survived discovery (Task 4).
+
+    Returns:
+        A new ModelsConfig with one additional roles entry per plugin whose
+        role name isn't already declared in models_config.roles -- an
+        operator-declared entry always wins over a synthesized one.
+    """
+    new_roles = dict(models_config.roles)
+    for plugin in plugins:
+        if plugin.manifest.role in new_roles:
+            continue
+        new_roles[plugin.manifest.role] = RoleConfig(
+            requires=plugin.manifest.requires, prefer=list(DEFAULT_PLUGIN_PREFER)
+        )
+    return models_config.model_copy(update={"roles": new_roles})
