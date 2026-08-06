@@ -487,9 +487,9 @@ def _reopen_last_done_task_or_block(
 ) -> dict[str, Any]:
     """Reopens the most recently completed task for another attempt.
 
-    Shared by node_static_checks and node_plugin (a 'gating' plugin's
-    changes-requested verdict, graph/plugin_node.py) -- both feed a gating
-    finding back to the Coder the same way: reopen the last-done task,
+    Shared by node_static_checks and node_plugin (Task 7; a 'gating'
+    plugin's changes-requested verdict, graph/plugin_node.py) -- both feed
+    a gating finding back to the Coder the same way: reopen the last-done task,
     honoring MAX_TASK_ATTEMPTS, or block the project if there's no
     completed task to reopen at all.
 
@@ -574,12 +574,25 @@ def node_static_checks(
             f"$ {' '.join(failure.command)} (exit {failure.exit_code})\n{failure.output}"
         )
     feedback = AIMessage(content="\n\n".join(failure_lines))
+    update = _reopen_last_done_task_or_block(state, feedback, "static_checks")
 
-    logger.info(
-        "project %s: static checks failed (%d finding set(s)), reopening task",
-        state["project_id"], len(outcome.failures),
-    )
-    return _reopen_last_done_task_or_block(state, feedback, "static_checks")
+    if update["phase"] != "blocked":
+        logger.info(
+            "project %s: static checks failed (%d finding set(s)), reopening task",
+            state["project_id"], len(outcome.failures),
+        )
+    elif "task_queue" not in update:
+        logger.warning(
+            "project %s: static checks failed with no completed task to reopen",
+            state["project_id"],
+        )
+    else:
+        blocked_task = next(t for t in update["task_queue"] if t["status"] == "blocked")
+        logger.warning(
+            "project %s: static checks exhausted %d attempts, blocking",
+            state["project_id"], blocked_task["attempts"],
+        )
+    return update
 
 
 def route_after_static_checks(state: ProjectState) -> str:

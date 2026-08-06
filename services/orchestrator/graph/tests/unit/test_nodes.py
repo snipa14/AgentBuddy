@@ -726,7 +726,9 @@ def test_static_checks_pass_with_nothing_applicable_keeps_reviewing_phase(two_st
 def test_reopen_last_done_task_or_block_reopens_the_last_done_task():
     state = _checked_state([{"description": "t1", "status": "done", "attempts": 0}])
 
-    update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
+    update = _reopen_last_done_task_or_block(
+        state, AIMessage(content="feedback"), "static_checks"
+    )
 
     assert update["phase"] == "implementing"
     assert update["task_queue"][0]["status"] == "in_progress"
@@ -738,7 +740,9 @@ def test_reopen_last_done_task_or_block_blocks_at_max_attempts():
         [{"description": "t1", "status": "done", "attempts": MAX_TASK_ATTEMPTS - 1}]
     )
 
-    update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
+    update = _reopen_last_done_task_or_block(
+        state, AIMessage(content="feedback"), "static_checks"
+    )
 
     assert update["phase"] == "blocked"
     assert update["task_queue"][0]["status"] == "blocked"
@@ -747,7 +751,9 @@ def test_reopen_last_done_task_or_block_blocks_at_max_attempts():
 def test_reopen_last_done_task_or_block_blocks_when_no_done_task_exists():
     state = _checked_state([])
 
-    update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
+    update = _reopen_last_done_task_or_block(
+        state, AIMessage(content="feedback"), "static_checks"
+    )
 
     assert update["phase"] == "blocked"
     assert "task_queue" not in update
