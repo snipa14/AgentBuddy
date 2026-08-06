@@ -252,15 +252,15 @@ def test_review_changes_system_prompt_includes_skill_body():
     asyncio.run(review_changes(router, executor, "proj-1"))
 
     system_message = router.model.requests[0][0]
-    assert "Correctness bugs" in system_message.content  # from skills/review-code/SKILL.md
+    assert "Correctness bugs" in system_message.content
 ```
 
+`"Correctness bugs"` is `skills/review-code/SKILL.md`'s checklist item 1 heading — proof the loaded skill body, not the old hardcoded string, reached the model.
+
+Add to `services/orchestrator/agents/tests/unit/test_frontend_reviewer.py`. A real screenshot result (not an error) is required so `review_frontend` actually reaches the LLM call — `test_review_frontend_approves_when_no_screenshots`' all-failed-screenshots case short-circuits before ever calling the model, so this test instead mirrors `test_review_frontend_returns_changes_requested_on_finding`'s fixture shape:
+
 ```python
-# services/orchestrator/agents/tests/unit/test_frontend_reviewer.py -- add this test
 def test_review_frontend_system_prompt_includes_skill_body():
-    # A real screenshot (not an error result) is required so review_frontend
-    # actually reaches the LLM call -- test_review_frontend_approves_when_no_screenshots'
-    # all-failed-screenshots case short-circuits before ever calling the model.
     executor = RecordingExecutorClient(
         files=["index.html"],
         screenshots=[ScreenshotResult(image_b64="iVBORw0KGgo=", error=None)],
@@ -270,11 +270,14 @@ def test_review_frontend_system_prompt_includes_skill_body():
     asyncio.run(review_frontend(router, executor, "proj-1"))
 
     system_message = router.model.requests[0][0]
-    assert "Layout breakage" in system_message.content  # from skills/frontend-review/SKILL.md
+    assert "Layout breakage" in system_message.content
 ```
 
+`"Layout breakage"` is `skills/frontend-review/SKILL.md`'s checklist item 1 heading.
+
+Add to `services/orchestrator/agents/tests/unit/test_planner.py`:
+
 ```python
-# services/orchestrator/agents/tests/unit/test_planner.py -- add this test
 def test_critique_plan_system_prompt_includes_skill_body():
     router = FakeRouter([structured(CRITIQUE_NO_FINDINGS)])
     plan = DraftPlan(summary="s")
@@ -282,20 +285,25 @@ def test_critique_plan_system_prompt_includes_skill_body():
     asyncio.run(critique_plan(router, plan))
 
     system_message = router.model.requests[0][0]
-    assert "Unstated assumptions" in system_message.content  # from skills/roast-the-plan/SKILL.md
+    assert "Unstated assumptions" in system_message.content
 ```
 
+`"Unstated assumptions"` is `skills/roast-the-plan/SKILL.md`'s checklist item 1 heading.
+
+Add to `services/orchestrator/agents/tests/unit/test_coder.py`, reusing this file's existing `_done_message()` no-tool-calls fixture (used by `test_run_coder_task_finishes_immediately_when_model_makes_no_tool_calls`):
+
 ```python
-# services/orchestrator/agents/tests/unit/test_coder.py -- add this test
 def test_run_coder_task_system_prompt_includes_skill_body():
-    router = FakeRouter([_done_message()])  # this file's existing no-tool-calls fixture, line ~213
+    router = FakeRouter([_done_message()])
     executor = RecordingExecutorClient()
 
     asyncio.run(run_coder_task(router, executor, "proj-1", "add a function"))
 
     system_message = router.model.requests[0][0]
-    assert "Match the task, not more" in system_message.content  # from skills/develop-python/SKILL.md
+    assert "Match the task, not more" in system_message.content
 ```
+
+`"Match the task, not more"` is `skills/develop-python/SKILL.md`'s checklist item 1 heading.
 
 - [ ] **Step 2: Run the four new tests to verify they fail**
 
@@ -304,10 +312,9 @@ Expected (on a machine with `langchain_core` installed): 4 new tests FAIL — th
 
 - [ ] **Step 3: Write the implementation**
 
-`reviewer.py`:
+`reviewer.py`: delete the `_REVIEW_SYSTEM_PROMPT` constant and replace it with:
 
 ```python
-# replace the _REVIEW_SYSTEM_PROMPT constant with:
 from skills.loader import load_skill
 
 _REVIEW_HARNESS_PREFACE = (
@@ -320,10 +327,9 @@ def _build_review_system_prompt() -> str:
     return f"{load_skill('review-code').body}\n\n{_REVIEW_HARNESS_PREFACE}"
 ```
 
+In `review_changes()`, replace `SystemMessage(content=_REVIEW_SYSTEM_PROMPT)` with:
+
 ```python
-# in review_changes(), replace:
-#     SystemMessage(content=_REVIEW_SYSTEM_PROMPT),
-# with:
         SystemMessage(content=_build_review_system_prompt()),
 ```
 
@@ -344,14 +350,15 @@ def _build_frontend_system_prompt() -> str:
 
 Replace `SystemMessage(content=_FRONTEND_SYSTEM_PROMPT)` with `SystemMessage(content=_build_frontend_system_prompt())`.
 
-`planner.py`:
+`planner.py`: delete the `_CRITIQUE_SYSTEM_PROMPT` constant entirely. Add the import:
 
 ```python
 from skills.loader import load_skill
+```
 
-# delete _CRITIQUE_SYSTEM_PROMPT entirely; in critique_plan(), replace:
-#     SystemMessage(content=_CRITIQUE_SYSTEM_PROMPT),
-# with:
+In `critique_plan()`, replace `SystemMessage(content=_CRITIQUE_SYSTEM_PROMPT)` with:
+
+```python
         SystemMessage(content=load_skill("roast-the-plan").body),
 ```
 
@@ -976,37 +983,40 @@ Pure refactor, no behavior change for `node_static_checks` — this task's test 
 
 - [ ] **Step 1: Write the failing test**
 
+Reuses this file's existing `_checked_state(task_queue, stack="python")` helper (already defined above `test_static_checks_pass_keeps_reviewing_phase`, line 640 — builds `new_project_state("proj-1")` with `phase="reviewing"` and the given `task_queue`), the same fixture shape `node_static_checks`'s own pre-existing tests already use for these exact reopen/exhaust/no-done-task scenarios:
+
 ```python
-# services/orchestrator/graph/tests/unit/test_nodes.py -- add this test
-# (find this file's existing static_checks fixtures -- a task_queue with one
-# "done" task at MAX_TASK_ATTEMPTS - 1 attempts -- and reuse the same shape)
 from langchain_core.messages import AIMessage
 
 from services.orchestrator.graph.nodes import _reopen_last_done_task_or_block
 
 
 def test_reopen_last_done_task_or_block_reopens_the_last_done_task():
-    state = _make_state(  # this file's existing state-building helper
-        task_queue=[{"description": "t1", "status": "done", "attempts": 0}]
-    )
+    state = _checked_state([{"description": "t1", "status": "done", "attempts": 0}])
+
     update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
+
     assert update["phase"] == "implementing"
     assert update["task_queue"][0]["status"] == "in_progress"
     assert update["task_queue"][0]["attempts"] == 1
 
 
 def test_reopen_last_done_task_or_block_blocks_at_max_attempts():
-    state = _make_state(
-        task_queue=[{"description": "t1", "status": "done", "attempts": MAX_TASK_ATTEMPTS - 1}]
+    state = _checked_state(
+        [{"description": "t1", "status": "done", "attempts": MAX_TASK_ATTEMPTS - 1}]
     )
+
     update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
+
     assert update["phase"] == "blocked"
     assert update["task_queue"][0]["status"] == "blocked"
 
 
 def test_reopen_last_done_task_or_block_blocks_when_no_done_task_exists():
-    state = _make_state(task_queue=[])
+    state = _checked_state([])
+
     update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
+
     assert update["phase"] == "blocked"
     assert "task_queue" not in update
 ```
@@ -1123,6 +1133,7 @@ from services.orchestrator.graph.plugin_node import (
     route_after_plugin,
     run_plugin_review,
 )
+from services.orchestrator.graph.state import ProjectState, new_project_state
 from services.orchestrator.plugins.manifest import PluginManifest
 
 APPROVE = PluginVerdict(verdict="approve", findings=[])
@@ -1158,6 +1169,14 @@ def _advisory_manifest() -> PluginManifest:
     )
 
 
+def _state(task_queue: list[dict], changed_files: list[str]) -> ProjectState:
+    state = new_project_state("proj-1")
+    state["phase"] = "reviewing"
+    state["task_queue"] = task_queue
+    state["changed_files"] = changed_files
+    return state
+
+
 def test_run_plugin_review_reads_changed_files_and_returns_verdict():
     router = FakeRouter([structured(APPROVE)])
     executor = RecordingExecutorClient(files={"a.py": "print(1)\n"})
@@ -1174,7 +1193,7 @@ def test_run_plugin_review_reads_changed_files_and_returns_verdict():
 def test_node_plugin_gating_changes_requested_reopens_task_and_routes_to_coder():
     router = FakeRouter([structured(CHANGES_REQUESTED)])
     executor = RecordingExecutorClient(files={"a.py": "x"})
-    state = _make_state(  # this test module's own state-building helper
+    state = _state(
         task_queue=[{"description": "t1", "status": "done", "attempts": 0}],
         changed_files=["a.py"],
     )
@@ -1192,21 +1211,22 @@ def test_node_plugin_gating_changes_requested_reopens_task_and_routes_to_coder()
 def test_node_plugin_gating_approve_continues_to_next_node():
     router = FakeRouter([structured(APPROVE)])
     executor = RecordingExecutorClient(files={"a.py": "x"})
-    state = _make_state(task_queue=[], changed_files=["a.py"])
+    state = _state(task_queue=[], changed_files=["a.py"])
 
     update = node_plugin(
         state, router=router, executor_client=executor,
         manifest=_gating_manifest(), skill_body="Skill body.", next_node="frontend_review",
     )
 
-    assert update == {"cost_usd_session": state["cost_usd_session"], "cost_usd_weekly": state["cost_usd_weekly"]}
+    assert set(update) == {"cost_usd_session", "cost_usd_weekly"}
+    assert update["cost_usd_session"] > state["cost_usd_session"]
     assert route_after_plugin({**state, **update}, next_node="frontend_review") == "frontend_review"
 
 
 def test_node_plugin_advisory_changes_requested_never_reopens_a_task():
     router = FakeRouter([structured(CHANGES_REQUESTED)])
     executor = RecordingExecutorClient(files={"a.py": "x"})
-    state = _make_state(
+    state = _state(
         task_queue=[{"description": "t1", "status": "done", "attempts": 0}],
         changed_files=["a.py"],
     )
@@ -1219,8 +1239,6 @@ def test_node_plugin_advisory_changes_requested_never_reopens_a_task():
     assert "task_queue" not in update
     assert route_after_plugin({**state, **update}, next_node="reviewer") == "reviewer"
 ```
-
-(`_make_state` follows this test module's own convention for building a minimal `ProjectState`; match whatever helper `test_nodes.py` already uses for the same purpose, including `cost_usd_session`/`cost_usd_weekly` starting at `0.0`.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1404,38 +1422,69 @@ git commit -m "feat(orchestrator): add generic plugin graph node"
 ### Task 8: Wire plugins into `graph/build.py` and `main.py`
 
 **Files:**
-- Modify: `services/orchestrator/graph/build.py` (`build_project_graph` gains a `plugins: list[LoadedPlugin]` parameter; add `_wire_plugin_slot` and `_plugin_node_name`; remap the `static_checks`→reviewer, `reviewer`→frontend_review, and `testing`→memory_curator edges through it)
+- Modify: `services/orchestrator/graph/build.py` (`build_project_graph` gains an optional `plugins: list[LoadedPlugin] | None = None` parameter; add `_wire_plugin_slot` and `_plugin_node_name`; remap the `static_checks`→reviewer, `reviewer`→frontend_review, and `testing`→memory_curator edges through it)
 - Modify: `services/orchestrator/service.py` (`OrchestratorService.__init__` threads `plugins` through to `build_project_graph`, mirroring how it already threads `stacks_config`)
 - Modify: `services/orchestrator/main.py` (`main()` calls `discover_plugins`/`synthesize_plugin_roles` before building the router, and passes the filtered plugin list to `OrchestratorService`)
 - Test: `services/orchestrator/graph/tests/unit/test_build.py` (create if it doesn't already exist, or extend it)
 
 **Interfaces:**
 - Consumes: everything from Tasks 3-7.
-- Produces: `build_project_graph(..., plugins: list[LoadedPlugin])`; no other public signature changes.
+- Produces: `build_project_graph(..., plugins: list[LoadedPlugin] | None = None)`; no other public signature changes.
 
 Hand-traced in this sandbox (`langgraph` dependency).
 
 - [ ] **Step 1: Write the failing test**
 
+This file doesn't exist yet. `graph/tests/unit/test_graph_end_to_end.py` is the established precedent for constructing a real compiled graph in a test: a real `build_sqlite_checkpointer(tmp_path / "foundry_memory.db")`, the `memory_conn`/`projects_root` pytest fixtures already shared via `graph/tests/unit/conftest.py` (injected by parameter name, not called), `StacksConfig(stacks={})` for a project that needs no static checks, and `FakeRouter`/`structured` imported from this directory's own `planner_fakes.py` (a separate fake from `agents/tests/unit/router_fakes.py`, used specifically by graph-level tests) — follow that same shape:
+
 ```python
-# services/orchestrator/graph/tests/unit/test_build.py -- add this test
-# (reuses this file's/graph/tests/unit's existing checkpointer/router/executor_client
-# fixtures -- match whatever build_project_graph's other tests already construct)
+# services/orchestrator/graph/tests/unit/test_build.py
+"""Unit tests for plugin wiring in build_project_graph."""
+
+from services.orchestrator.executor_client import CommandResult, TestResult
+from services.orchestrator.graph.build import build_project_graph
+from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
+from services.orchestrator.graph.tests.unit.planner_fakes import FakeRouter
 from services.orchestrator.plugins.discovery import LoadedPlugin
 from services.orchestrator.plugins.manifest import PluginManifest
+from services.orchestrator.stacks import StacksConfig
 
 
-def test_build_project_graph_with_no_plugins_wires_exactly_as_before():
-    graph = build_project_graph(
-        checkpointer(), router(), executor_client(), memory_conn(), projects_root(),
-        stacks_config(), plugins=[],
+class _StubExecutorClient:
+    """Never actually invoked by these tests -- build_project_graph only
+    binds it into node closures via functools.partial, and these tests
+    inspect the compiled graph's node names without calling .invoke()."""
+
+    async def run_tests(
+        self, project_id: str, framework: str = "pytest", stack: str = "python"
+    ) -> TestResult:
+        return TestResult(passed=1, failed=0, coverage_pct=100.0, report="1 passed")
+
+    async def run_command(self, project_id: str, command, timeout=None, stack: str = "python"):
+        return CommandResult(stdout="", stderr="", exit_code=0)
+
+
+def _build_graph(tmp_path, memory_conn, projects_root, plugins):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    return build_project_graph(
+        checkpointer, FakeRouter(), _StubExecutorClient(), memory_conn, projects_root,
+        StacksConfig(stacks={}), plugins=plugins,
     )
+
+
+def test_build_project_graph_with_no_plugins_wires_exactly_as_before(
+    tmp_path, memory_conn, projects_root
+):
+    graph = _build_graph(tmp_path, memory_conn, projects_root, plugins=[])
+
     node_names = set(graph.get_graph().nodes)
     assert "reviewer" in node_names
     assert not any(name.startswith("plugin_") for name in node_names)
 
 
-def test_build_project_graph_wires_an_after_reviewer_plugin_between_reviewer_and_frontend_review():
+def test_build_project_graph_wires_an_after_reviewer_plugin_between_reviewer_and_frontend_review(
+    tmp_path, memory_conn, projects_root
+):
     manifest = PluginManifest.model_validate(
         {
             "name": "security-audit-reviewer", "role": "security_audit_reviewer",
@@ -1444,10 +1493,7 @@ def test_build_project_graph_wires_an_after_reviewer_plugin_between_reviewer_and
     )
     plugin = LoadedPlugin(manifest=manifest, skill_body="Audit for security issues.")
 
-    graph = build_project_graph(
-        checkpointer(), router(), executor_client(), memory_conn(), projects_root(),
-        stacks_config(), plugins=[plugin],
-    )
+    graph = _build_graph(tmp_path, memory_conn, projects_root, plugins=[plugin])
 
     node_names = set(graph.get_graph().nodes)
     assert "plugin_security_audit_reviewer" in node_names
@@ -1521,7 +1567,19 @@ def _wire_plugin_slot(
     return chain_targets[0]
 ```
 
-In `build_project_graph`'s signature, add `plugins: list[LoadedPlugin]` as a new required parameter (after `stacks_config`, before `global_cost_threshold_usd`) and update its docstring's `Args` section to describe it (mirrors `stacks_config`'s own doc style: "Discovered plugins (services/orchestrator/plugins/discovery.py), already validated and role-collision-filtered -- an empty list wires the graph exactly as before this feature existed").
+In `build_project_graph`'s signature, add a new parameter after `stacks_config` and before `global_cost_threshold_usd`:
+
+```python
+    plugins: list[LoadedPlugin] | None = None,
+```
+
+Immediately inside the function body, before the existing `builder = StateGraph(ProjectState)` line, add:
+
+```python
+    plugins = plugins or []
+```
+
+`None`-then-normalize (rather than a mutable `[]` default) avoids the shared-mutable-default-argument bug, and keeps every pre-existing `build_project_graph(...)` call site across `graph/tests/unit/test_graph_end_to_end.py` (16 call sites), `test_concurrency.py` (1), and `test_integrator.py` (1) compiling unchanged — none of those 18 call sites need editing, since omitting `plugins` degrades to the exact prior graph topology. Update the docstring's `Args` section to describe the new parameter (mirrors `stacks_config`'s own doc style: "Discovered plugins (services/orchestrator/plugins/discovery.py), already validated and role-collision-filtered. None or an empty list wires the graph exactly as before this feature existed").
 
 After the existing `builder.add_node(...)` calls (before the `add_edge`/`add_conditional_edges` block), insert:
 
@@ -1535,28 +1593,39 @@ After the existing `builder.add_node(...)` calls (before the `add_edge`/`add_con
     after_tester_entry = _wire_plugin_slot(builder, plugins_by_slot["after_tester"], router, executor_client, "memory_curator")
 ```
 
-Then change exactly three existing lines:
+Then change exactly three existing lines (no comments in the real edit — shown here only so the diff is unambiguous):
+
+Change the `static_checks` conditional edges' target dict from
+`{"coder": "coder", "reviewer": "reviewer", "memory_curator": "memory_curator"}` to:
 
 ```python
-    # was: {"coder": "coder", "reviewer": "reviewer", "memory_curator": "memory_curator"}
     builder.add_conditional_edges(
         "static_checks",
         route_after_static_checks,
         {"coder": "coder", "reviewer": after_coder_entry, "memory_curator": "memory_curator"},
     )
-    # was: {"coder": "coder", "frontend_review": "frontend_review", "memory_curator": "memory_curator"}
+```
+
+Change the `reviewer` conditional edges' target dict from
+`{"coder": "coder", "frontend_review": "frontend_review", "memory_curator": "memory_curator"}` to:
+
+```python
     builder.add_conditional_edges(
         "reviewer",
         route_after_reviewer,
         {"coder": "coder", "frontend_review": after_reviewer_entry, "memory_curator": "memory_curator"},
     )
-    # was: builder.add_edge("testing", "memory_curator")
+```
+
+Change `builder.add_edge("testing", "memory_curator")` to:
+
+```python
     builder.add_edge("testing", after_tester_entry)
 ```
 
 No other line in `build_project_graph` changes. `route_after_static_checks`/`route_after_reviewer` themselves are untouched (Design decision from the brainstorm: the dict *values* passed to `add_conditional_edges` change, not the routing functions' own logic).
 
-`service.py`: add a `plugins: list[LoadedPlugin]` parameter to `OrchestratorService.__init__` (same position/style as `stacks_config`) and pass it straight through to the one `build_project_graph(...)` call site.
+`service.py`: add `plugins: list[LoadedPlugin] | None = None` to `OrchestratorService.__init__` (same position/style as `stacks_config`, but with the same `None`-default treatment as `build_project_graph` — `test_service.py` alone has 15 pre-existing `OrchestratorService(...)` call sites, plus more in `test_api.py`, that must keep compiling unchanged) and pass it straight through, unnormalized, to the one `build_project_graph(...)` call site (that function's own `plugins or []` already handles `None`).
 
 `main.py`:
 
@@ -1595,7 +1664,7 @@ Replace the old `_build_router()` function and its one call site in `main()` wit
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest services/orchestrator/graph/tests/unit/test_build.py -v`
-Expected (dependencies installed): all pass, plus every pre-existing `graph/tests/unit` test still passes with `plugins=[]` added to each of their `build_project_graph(...)` call sites (grep every existing call site in that test directory and add the new argument — none of their assertions should need to change, since an empty plugin list degrades to the exact prior topology). In this sandbox: hand-trace the three edge-remapping changes against `build.py`'s full pre-change text (read in full during planning) to confirm no other line depends on `"reviewer"`/`"frontend_review"`/`"memory_curator"` being literal, hardcoded destinations elsewhere in the file.
+Expected (dependencies installed): all pass, plus every pre-existing `graph/tests/unit` test still passes unmodified (their `build_project_graph(...)` calls omit `plugins`, which defaults to `None` and normalizes to `[]`, reproducing the exact prior topology). In this sandbox: hand-trace the three edge-remapping changes against `build.py`'s full pre-change text (read in full during planning) to confirm no other line depends on `"reviewer"`/`"frontend_review"`/`"memory_curator"` being literal, hardcoded destinations elsewhere in the file.
 
 - [ ] **Step 5: Commit**
 
@@ -1616,26 +1685,31 @@ git commit -m "feat(orchestrator): wire discovered plugins into the graph at the
 
 - [ ] **Step 1: Write the failing test**
 
+Add to the top of `services/orchestrator/graph/tests/unit/test_build.py` (Task 8's file):
+
 ```python
-# services/orchestrator/graph/tests/unit/test_build.py -- add this test
 from pathlib import Path
+
+import pytest
 
 from services.orchestrator.plugins.discovery import discover_plugins
 
 FIXTURE_PLUGINS_DIR = Path(__file__).parents[3] / "plugins" / "tests" / "fixtures"
+```
 
+Then add the test, reusing Task 8's `_build_graph` helper:
 
-def test_discovered_fixture_plugin_wires_into_a_real_graph_build():
-    import pytest
+```python
+def test_discovered_fixture_plugin_wires_into_a_real_graph_build(
+    tmp_path, memory_conn, projects_root
+):
     pytest.importorskip("yaml")
 
     plugins = discover_plugins(FIXTURE_PLUGINS_DIR, known_roles=frozenset({"reviewer", "coder"}))
     assert [p.manifest.name for p in plugins] == ["example-plugin"]
 
-    graph = build_project_graph(
-        checkpointer(), router(), executor_client(), memory_conn(), projects_root(),
-        stacks_config(), plugins=plugins,
-    )
+    graph = _build_graph(tmp_path, memory_conn, projects_root, plugins=plugins)
+
     assert "plugin_example_reviewer" in set(graph.get_graph().nodes)
 ```
 
