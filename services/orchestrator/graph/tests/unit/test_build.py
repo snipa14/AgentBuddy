@@ -146,6 +146,57 @@ def test_build_project_graph_chains_two_plugins_in_the_same_slot(
     assert "plugin_second_reviewer" in node_names
 
 
+def test_build_project_graph_testing_edge_is_conditional_not_a_plain_passthrough(
+    tmp_path, memory_conn, projects_root
+):
+    """A testing-failure state must never reach an after_tester plugin node.
+
+    node_testing's failure branch sets phase="implementing"; route_after_testing
+    (services/orchestrator/graph/nodes.py) sends that phase straight to
+    "memory_curator", bypassing the after_tester plugin chain entirely --
+    only a passing run (phase != "implementing") continues into the chain.
+    This test can only assert on the compiled graph's static edge structure
+    (get_graph() doesn't expose per-branch runtime behavior); the
+    phase-based branching itself is proven directly by
+    test_route_after_testing_routes_failure_to_memory_curator_and_pass_to_after_tester
+    in test_nodes.py. Together the two tests establish the property this
+    finding required.
+    """
+    manifest = PluginManifest.model_validate(
+        {
+            "name": "coverage-auditor", "role": "coverage_auditor",
+            "slot": "after_tester", "mode": "advisory", "requires": [],
+        }
+    )
+    plugin = LoadedPlugin(manifest=manifest, skill_body="Audit coverage.")
+
+    graph = _build_graph(tmp_path, memory_conn, projects_root, plugins=[plugin])
+
+    testing_edges = [e for e in graph.get_graph().edges if e.source == "testing"]
+    targets = {e.target for e in testing_edges}
+    assert "memory_curator" in targets
+    assert "plugin_coverage_auditor" in targets
+    assert any(e.conditional for e in testing_edges)
+
+
+def test_build_project_graph_testing_edge_with_no_plugins_still_conditional(
+    tmp_path, memory_conn, projects_root
+):
+    """Same property with an empty after_tester slot: the "testing" node's
+    outgoing edge stays a conditional_edges mapping (not builder.add_edge)
+    even though both of route_after_testing's branches resolve to the same
+    "memory_curator" target when no after_tester plugin exists -- this
+    keeps the topology's shape uniform regardless of whether a plugin is
+    installed, per this finding's fix.
+    """
+    graph = _build_graph(tmp_path, memory_conn, projects_root, plugins=[])
+
+    testing_edges = [e for e in graph.get_graph().edges if e.source == "testing"]
+    targets = {e.target for e in testing_edges}
+    assert targets == {"memory_curator"}
+    assert any(e.conditional for e in testing_edges)
+
+
 def test_discovered_fixture_plugin_wires_into_a_real_graph_build(
     tmp_path, memory_conn, projects_root
 ):

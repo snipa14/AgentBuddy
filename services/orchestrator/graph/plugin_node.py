@@ -8,7 +8,7 @@ behavior supplied by the plugin instead of hardcoded.
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -35,7 +35,7 @@ class PluginFinding(BaseModel):
 class PluginVerdict(BaseModel):
     """A plugin role's verdict and structured findings."""
 
-    verdict: str = Field(
+    verdict: Literal["approve", "changes-requested"] = Field(
         description="'approve' if no issues; 'changes-requested' if at least one finding"
     )
     findings: list[PluginFinding] = Field(default_factory=list)

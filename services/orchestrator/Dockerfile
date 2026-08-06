@@ -37,6 +37,7 @@ RUN pip install --no-cache-dir \
 
 COPY services/__init__.py services/__init__.py
 COPY services/orchestrator/ services/orchestrator/
+COPY skills/ skills/
 
 ENV PYTHONPATH=/app
 

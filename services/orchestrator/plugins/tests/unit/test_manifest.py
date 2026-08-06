@@ -69,3 +69,23 @@ def test_manifest_accepts_explicit_skill_path():
         }
     )
     assert manifest.skill == "skill-body.md"
+
+
+def test_manifest_rejects_skill_path_with_traversal():
+    with pytest.raises(ValidationError, match="skill"):
+        PluginManifest.model_validate(
+            {
+                "name": "x", "role": "x", "slot": "after_tester",
+                "mode": "advisory", "requires": [], "skill": "../../../etc/passwd",
+            }
+        )
+
+
+def test_manifest_rejects_absolute_skill_path():
+    with pytest.raises(ValidationError, match="skill"):
+        PluginManifest.model_validate(
+            {
+                "name": "x", "role": "x", "slot": "after_tester",
+                "mode": "advisory", "requires": [], "skill": "/etc/passwd",
+            }
+        )

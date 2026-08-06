@@ -14,7 +14,11 @@ from services.orchestrator.memory.global_store import build_global_memory_connec
 from services.orchestrator.model_router.config import load_models_config
 from services.orchestrator.model_router.errors import NoCapableProviderError
 from services.orchestrator.model_router.router import ModelRouter
-from services.orchestrator.plugins.discovery import discover_plugins, synthesize_plugin_roles
+from services.orchestrator.plugins.discovery import (
+    LoadedPlugin,
+    discover_plugins,
+    synthesize_plugin_roles,
+)
 from services.orchestrator.service import OrchestratorService
 from services.orchestrator.stacks import load_stacks_config
 
@@ -24,7 +28,7 @@ DEFAULT_PLUGINS_DIR = "plugins"
 DEFAULT_SECRETS_DIR = Path("/run/secrets")
 
 
-def _build_router_and_plugins() -> tuple[ModelRouter, list]:
+def _build_router_and_plugins() -> tuple[ModelRouter, list[LoadedPlugin]]:
     """Loads model routing config, discovers plugins, and builds the router.
 
     Discovered plugins whose declared role can't resolve to a configured

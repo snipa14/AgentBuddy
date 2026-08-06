@@ -7,6 +7,7 @@ docs/superpowers/specs/2026-08-06-dynamic-skills-and-plugins-design.md).
 """
 
 import re
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -66,4 +67,11 @@ class PluginManifest(BaseModel):
             raise ValueError(
                 f"role must be lowercase snake_case (e.g. 'security_audit_reviewer'), got {value!r}"
             )
+        return value
+
+    @field_validator("skill")
+    @classmethod
+    def _skill_has_no_path_traversal(cls, value: str) -> str:
+        if Path(value).is_absolute() or ".." in Path(value).parts:
+            raise ValueError(f"skill path must be relative with no '..' components, got {value!r}")
         return value

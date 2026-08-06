@@ -64,12 +64,14 @@ services:
       PROJECTS_ROOT: /data/projects
       MODELS_CONFIG_PATH: /app/config/models.yaml
       STACKS_CONFIG_PATH: /app/config/stacks.yaml
+      PLUGINS_DIR: /app/plugins
     secrets:
       - claude_api_key
       - github_token
     volumes:
       - ./projects:/data/projects
       - ./config:/app/config:ro
+      - ./plugins:/app/plugins:ro
       - foundry_memory:/data/memory
     depends_on:
       - executor

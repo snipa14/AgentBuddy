@@ -59,7 +59,9 @@ def test_run_plugin_review_reads_changed_files_and_returns_verdict():
     executor = RecordingExecutorClient(files={"a.py": "print(1)\n"})
 
     result, message = asyncio.run(
-        run_plugin_review(router, executor, "proj-1", "security_audit_reviewer", "Skill body.", ["a.py"])
+        run_plugin_review(
+            router, executor, "proj-1", "security_audit_reviewer", "Skill body.", ["a.py"]
+        )
     )
 
     assert result.verdict == "approve"

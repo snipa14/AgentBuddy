@@ -5,11 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from services.orchestrator.model_router.config import (
-    AnthropicProviderConfig,
-    ModelsConfig,
-    RoleConfig,
-)
 from services.orchestrator.plugins.discovery import (
     LoadedPlugin,
     _reject_role_collisions,
@@ -78,7 +73,8 @@ def test_discover_plugins_loads_valid_plugin(tmp_path: Path):
         "requires: [tool_calling]\n"
     )
     (plugin_dir / "SKILL.md").write_text(
-        "---\nname: security-audit-reviewer\ndescription: Audits for security issues.\n---\n\nBody text.\n"
+        "---\nname: security-audit-reviewer\n"
+        "description: Audits for security issues.\n---\n\nBody text.\n"
     )
 
     loaded = discover_plugins(tmp_path, known_roles=frozenset({"reviewer"}))
@@ -124,7 +120,13 @@ def test_discover_plugins_skips_missing_skill_file(tmp_path: Path, caplog):
     assert "no-skill" in caplog.text
 
 
-def _base_models_config() -> ModelsConfig:
+def _base_models_config():
+    from services.orchestrator.model_router.config import (
+        AnthropicProviderConfig,
+        ModelsConfig,
+        RoleConfig,
+    )
+
     return ModelsConfig(
         roles={"reviewer": RoleConfig(requires=["tool_calling"], prefer=["claude_sonnet"])},
         providers={
@@ -138,6 +140,7 @@ def _base_models_config() -> ModelsConfig:
 
 
 def test_synthesize_plugin_roles_adds_new_role_with_default_prefer():
+    pytest.importorskip("yaml")
     config = _base_models_config()
     plugin = LoadedPlugin(manifest=_manifest("audit", "security_audit_reviewer"), skill_body="x")
 
@@ -145,10 +148,11 @@ def test_synthesize_plugin_roles_adds_new_role_with_default_prefer():
 
     assert result.roles["security_audit_reviewer"].prefer == ["local", "claude_sonnet"]
     assert result.roles["security_audit_reviewer"].requires == []
-    assert "reviewer" in result.roles  # existing roles untouched
+    assert "reviewer" in result.roles
 
 
 def test_synthesize_plugin_roles_does_not_override_an_explicit_entry():
+    pytest.importorskip("yaml")
     config = _base_models_config()
     config.roles["security_audit_reviewer"] = RoleConfig(requires=[], prefer=["claude_opus"])
     plugin = LoadedPlugin(manifest=_manifest("audit", "security_audit_reviewer"), skill_body="x")

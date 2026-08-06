@@ -6,15 +6,20 @@ static_checks (ADR-046) skips a check whose tool/config is absent rather
 than failing the whole node.
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from services.orchestrator.model_router.config import ModelsConfig, RoleConfig
 from services.orchestrator.plugins.manifest import PluginManifest
 from skills.loader import load_skill_from_path
+
+if TYPE_CHECKING:
+    from services.orchestrator.model_router.config import ModelsConfig, RoleConfig
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +142,8 @@ def synthesize_plugin_roles(
         role name isn't already declared in models_config.roles -- an
         operator-declared entry always wins over a synthesized one.
     """
+    from services.orchestrator.model_router.config import RoleConfig
+
     new_roles = dict(models_config.roles)
     for plugin in plugins:
         if plugin.manifest.role in new_roles:

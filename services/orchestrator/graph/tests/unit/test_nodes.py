@@ -51,6 +51,7 @@ from services.orchestrator.graph.nodes import (
     route_after_replan_wait,
     route_after_reviewer,
     route_after_static_checks,
+    route_after_testing,
 )
 from services.orchestrator.graph.nodes import node_cost_check as cost_check
 from services.orchestrator.graph.state import new_project_state
@@ -770,6 +771,16 @@ def test_route_after_static_checks_routes_all_three_outcomes():
 
     state["phase"] = "blocked"
     assert route_after_static_checks(state) == "memory_curator"
+
+
+def test_route_after_testing_routes_failure_to_memory_curator_and_pass_to_after_tester():
+    state = new_project_state("proj-1")
+
+    state["phase"] = "implementing"
+    assert route_after_testing(state) == "memory_curator"
+
+    state["phase"] = "awaiting_merge_approval"
+    assert route_after_testing(state) == "after_tester"
 
 
 class _FakeCheckpointer:

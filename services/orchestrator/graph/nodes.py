@@ -604,6 +604,20 @@ def route_after_static_checks(state: ProjectState) -> str:
     return "reviewer"
 
 
+def route_after_testing(state: ProjectState) -> str:
+    """Routes a test failure straight to the Memory Curator, skipping any
+    after_tester plugin chain entirely -- a failing run isn't ready for an
+    additional review pass, and node_testing's failure path must always
+    reach curation the same way it did before the after_tester slot existed
+    (ADR-046's precedent: static_checks/reviewer are filtered the same way).
+    Only a passing run continues into the slot's plugin chain (or straight to
+    memory_curator if the slot is empty, since the entry node IS
+    memory_curator in that case)."""
+    if state["phase"] == "implementing":
+        return "memory_curator"
+    return "after_tester"
+
+
 def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: ExecutorClient) -> dict[str, Any]:
     """Reviews project files after the Coder finishes implementing.
 

@@ -39,17 +39,19 @@ from services.orchestrator.graph.nodes import (
     route_after_replan_wait,
     route_after_reviewer,
     route_after_static_checks,
+    route_after_testing,
 )
 from services.orchestrator.graph.plugin_node import node_plugin, route_after_plugin
 from services.orchestrator.graph.state import ProjectState
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.plugins.discovery import LoadedPlugin
+from services.orchestrator.plugins.manifest import PluginManifest
 from services.orchestrator.stacks import StacksConfig
 
 DEFAULT_GLOBAL_COST_THRESHOLD_USD = 50.0
 
 
-def _plugin_node_name(manifest) -> str:
+def _plugin_node_name(manifest: PluginManifest) -> str:
     return f"plugin_{manifest.role}"
 
 
@@ -295,7 +297,11 @@ def build_project_graph(
     builder.add_conditional_edges(
         "cost_wait", route_after_cost_wait, {"memory_curator": "memory_curator"}
     )
-    builder.add_edge("testing", after_tester_entry)
+    builder.add_conditional_edges(
+        "testing",
+        route_after_testing,
+        {"memory_curator": "memory_curator", "after_tester": after_tester_entry},
+    )
     builder.add_conditional_edges(
         "merge_wait", route_after_merge_wait, {"memory_curator": "memory_curator"}
     )
