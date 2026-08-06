@@ -134,6 +134,30 @@ def test_review_changes_system_prompt_includes_skill_body():
     assert "Correctness bugs" in system_message.content
 
 
+def test_review_changes_system_prompt_includes_replan_trigger_examples():
+    router = FakeRouter([structured(APPROVE_RESULT)])
+    executor = RecordingExecutorClient(files={"models.py": "class User: pass\n"})
+
+    asyncio.run(review_changes(router, executor, "proj-1"))
+
+    system_message = router.model.requests[0][0]
+    assert "a task's premise is false" in system_message.content
+    assert "a dependency the plan assumed doesn't exist" in system_message.content
+    assert "the approach is structurally wrong" in system_message.content
+    assert "still report the findings" in system_message.content
+
+
+def test_review_changes_system_prompt_clarifies_no_clean_category_findings():
+    router = FakeRouter([structured(APPROVE_RESULT)])
+    executor = RecordingExecutorClient(files={"models.py": "class User: pass\n"})
+
+    asyncio.run(review_changes(router, executor, "proj-1"))
+
+    system_message = router.model.requests[0][0]
+    assert "not a finding" in system_message.content
+    assert "empty findings list" in system_message.content
+
+
 def test_review_result_defaults_to_no_replan():
     result = ReviewResult(verdict="approve")
     assert result.replan_needed is False

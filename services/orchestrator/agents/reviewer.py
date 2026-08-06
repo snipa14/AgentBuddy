@@ -24,7 +24,15 @@ REVIEWER_ROLE = "reviewer"
 
 _REVIEW_HARNESS_PREFACE = (
     "You will receive the contents of files that were just written by a "
-    "Coder agent inside a workspace container."
+    "Coder agent inside a workspace container.\n\n"
+    "If an issue is not fixable by editing the current diff -- because a "
+    "task's premise is false, a dependency the plan assumed doesn't exist, "
+    "or the approach is structurally wrong -- set replan_needed to true "
+    "with a concrete replan_reason, and still report the findings in "
+    "findings. Otherwise leave replan_needed false and replan_reason empty.\n\n"
+    "Only add an entry to findings for an actual defect -- 'checked this "
+    "category, no issues' is not a finding. If every category is clean, "
+    "verdict must be 'approve' with an empty findings list."
 )
 
 

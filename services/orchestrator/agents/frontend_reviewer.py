@@ -29,7 +29,10 @@ FRONTEND_REVIEWER_ROLE = "frontend_reviewer"
 
 _FRONTEND_HARNESS_PREFACE = (
     "You will receive screenshots of a web application that was just built "
-    "by a Coder agent inside a workspace container."
+    "by a Coder agent inside a workspace container.\n\n"
+    "Only add an entry to findings for an actual defect -- 'checked this "
+    "category, no issues' is not a finding. If every category is clean, "
+    "verdict must be 'approve' with an empty findings list."
 )
 
 

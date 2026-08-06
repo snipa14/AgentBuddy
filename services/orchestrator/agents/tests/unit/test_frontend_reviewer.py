@@ -175,6 +175,20 @@ def test_review_frontend_system_prompt_includes_skill_body():
     assert "Layout breakage" in system_message.content
 
 
+def test_review_frontend_system_prompt_clarifies_no_clean_category_findings():
+    executor = RecordingExecutorClient(
+        files=["index.html"],
+        screenshots=[ScreenshotResult(image_b64="iVBORw0KGgo=", error=None)],
+    )
+    router = FakeRouter([structured(APPROVE_RESULT)])
+
+    asyncio.run(review_frontend(router, executor, "proj-1"))
+
+    system_message = router.model.requests[0][0]
+    assert "not a finding" in system_message.content
+    assert "empty findings list" in system_message.content
+
+
 # -- _build_findings_text tests ----------------------------------------------------
 
 def test_build_findings_text_formats_single_finding():

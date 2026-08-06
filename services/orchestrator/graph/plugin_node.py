@@ -64,7 +64,9 @@ async def run_plugin_review(
         project_id: The project identifier.
         role: The plugin's model_router role name.
         skill_body: The plugin's SKILL.md body, sent as the system prompt.
-        changed_files: File paths modified during coding.
+        changed_files: File paths modified during coding. If empty, every
+            non-directory entry in the project root is read instead (mirrors
+            review_changes()'s fallback in agents/reviewer.py).
 
     Returns:
         A tuple of (PluginVerdict, raw AIMessage) -- the raw message carries
@@ -72,13 +74,30 @@ async def run_plugin_review(
     """
     llm = router.resolve(role)
     files: dict[str, str] = {}
-    for path in changed_files:
+    if changed_files:
+        for path in changed_files:
+            try:
+                files[path] = await executor_client.read_file(project_id, path)
+            except Exception as exc:
+                logger.warning(
+                    "project %s: plugin role '%s' failed to read '%s': %s",
+                    project_id, role, path, exc,
+                )
+    else:  # no changed_files list — list all and read each one
         try:
-            files[path] = await executor_client.read_file(project_id, path)
+            entries = await executor_client.list_files(project_id, ".")
+            for entry in entries:
+                if not entry.is_dir:
+                    try:
+                        files[entry.name] = await executor_client.read_file(project_id, entry.name)
+                    except Exception as exc:
+                        logger.warning(
+                            "project %s: plugin role '%s' failed to read '%s': %s",
+                            project_id, role, entry.name, exc,
+                        )
         except Exception as exc:
             logger.warning(
-                "project %s: plugin role '%s' failed to read '%s': %s",
-                project_id, role, path, exc,
+                "project %s: plugin role '%s' failed to list files: %s", project_id, role, exc
             )
 
     messages = [
@@ -100,9 +119,13 @@ def node_plugin(
 
     A 'gating' plugin's changes-requested verdict reopens the most recently
     completed task for another Coder attempt (MAX_TASK_ATTEMPTS-bounded,
-    same contract node_static_checks uses). Every other outcome --
-    'gating' approve, or any 'advisory' verdict -- is a cost-only update;
-    route_after_plugin sends control to `next_node`.
+    same contract node_static_checks uses), and clears any `pending_approval`
+    already armed on state -- the only slot where this can be non-None going
+    in is `after_tester`, since `node_testing`'s success branch arms a
+    merge_approval there; leaving it set would desync the merge gate once
+    control routes back to `coder` instead of offering that approval. Every
+    other outcome -- 'gating' approve, or any 'advisory' verdict -- is a
+    cost-only update; route_after_plugin sends control to `next_node`.
 
     Args:
         state: The current project state.
@@ -133,6 +156,7 @@ def node_plugin(
         )
         feedback = AIMessage(content=f"{manifest.name} feedback:\n{findings_text}")
         update = _reopen_last_done_task_or_block(state, feedback, manifest.name)
+        update["pending_approval"] = None
         return _with_cost(state, update, cost)
 
     if result.verdict == "changes-requested":
