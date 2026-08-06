@@ -94,6 +94,32 @@ def test_run_plugin_review_lists_whole_workspace_when_changed_files_empty():
     assert "b.py" in user_message.content
 
 
+def test_run_plugin_review_skips_unreadable_files_gracefully_in_fallback():
+    router = FakeRouter([structured(APPROVE)])
+
+    class FailingExecutorClient:
+        async def list_files(self, project_id, path="."):
+            from services.orchestrator.executor_client import FileEntry
+
+            return [FileEntry(name="a.py", is_dir=False), FileEntry(name="bad.py", is_dir=False)]
+
+        async def read_file(self, project_id, path):
+            if path == "bad.py":
+                raise FileNotFoundError("nope")
+            return "print(1)\n"
+
+    result, _ = asyncio.run(
+        run_plugin_review(
+            router, FailingExecutorClient(), "proj-1", "security_audit_reviewer", "Skill body.", []
+        )
+    )
+
+    assert result.verdict == "approve"
+    user_message = router.model.requests[0][1]
+    assert "a.py" in user_message.content
+    assert "bad.py" not in user_message.content
+
+
 def test_node_plugin_gating_changes_requested_reopens_task_and_routes_to_coder():
     router = FakeRouter([structured(CHANGES_REQUESTED)])
     executor = RecordingExecutorClient(files={"a.py": "x"})
