@@ -36,7 +36,7 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
-testpaths = ["services"]
+testpaths = ["services", "skills"]
 pythonpath = ["."]
 markers = [
     "integration: exercises real I/O -- Docker, filesystem, or network (see .claude/rules/testing.md)",
@@ -44,7 +44,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["services"]
+source = ["services", "skills"]
 
 [tool.coverage.report]
 show_missing = true

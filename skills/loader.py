@@ -1,10 +1,9 @@
 """Loads Agent-Skills-format SKILL.md files by name (ARCHITECTURE.md §4.8, ADR-014).
 
-Every packaged skill's frontmatter is flat scalar key: value pairs (no
-nested lists/dicts) -- verified against every SKILL.md this repo and the
-superpowers plugin ship. A minimal hand-written parser covers this without
-a pyyaml dependency, which matters because pyyaml is not guaranteed to be
-installed in every environment this module is imported from.
+Every observed SKILL.md frontmatter in this repo is flat scalar key: value
+pairs (no nested lists/dicts) -- verified against every packaged skill and
+the superpowers plugin's own skills. A minimal hand-written parser covers
+this job without pulling in a full YAML parser for this simple use case.
 """
 
 import functools
