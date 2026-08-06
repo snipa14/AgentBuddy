@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from services.orchestrator.model_router.config import AnthropicProviderConfig, ModelsConfig, RoleConfig
+from services.orchestrator.model_router.config import (
+    AnthropicProviderConfig,
+    ModelsConfig,
+    RoleConfig,
+)
 from services.orchestrator.plugins.discovery import (
     LoadedPlugin,
     _reject_role_collisions,
