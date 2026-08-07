@@ -27,8 +27,8 @@ roles:
 providers:
   local:
     type: openai_compatible
-    base_url: http://192.168.1.50:1234/v1
-    model: qwen/qwen3-coder-30b
+    base_url: http://192.168.8.246:1234/v1
+    model: qwen3.6-35b-a3b
     capabilities: [tool_calling]
     # Self-hosted -- no per-token billing.
     cost_per_1m_input_tokens: 0

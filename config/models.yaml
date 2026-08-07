@@ -1,11 +1,21 @@
-# Default model routing config: local-first for cost, Claude API as the
-# fallback/escalation tier. See docs/model-router.md for how to add a new
+# Active model routing config, loaded by default (docker-compose.yml's
+# MODELS_CONFIG_PATH). See docs/model-router.md for how to add a new
 # provider or role; config/models.claude-only.yaml for the GPU-less preset;
-# config/models.remote-llm.yaml for a GPU on another machine (LM Studio etc.).
+# config/models.remote-llm.yaml for the openai_compatible-based remote-GPU
+# preset this deployment started from.
+#
+# This deployment (ADR-048/ADR-050): the GPU lives on another machine
+# running LM Studio's Anthropic-Messages-API-compatible endpoint, reached
+# through the `local` provider's `type: anthropic` + `base_url` override, not
+# `openai_compatible` -- LM Studio's OpenAI-compatible endpoint doesn't
+# surface a reasoning model's post-thinking answer in a usable form (see the
+# `local` provider's comment below). No Ollama container runs on the Foundry
+# host. Declaring the provider is the enable switch: if the server is
+# unreachable, calls fail after retries like any remote-provider outage.
 roles:
   planner:
     requires: [tool_calling, long_context]
-    prefer: [claude_opus, local]
+    prefer: [local]
   coder:
     requires: [tool_calling]
     prefer: [local, claude_sonnet]
@@ -21,10 +31,20 @@ roles:
 
 providers:
   local:
-    type: ollama
-    base_url: http://ollama:11434
-    model: qwen3-coder:30b-a3b
-    capabilities: [tool_calling]
+    # type: anthropic + base_url (ADR-050): kept on the Anthropic-compatible
+    # endpoint since it's the already-proven-working path from this
+    # deployment's earlier debugging -- try openai_compatible as a fallback
+    # if tool-calling misbehaves here.
+    type: anthropic
+    base_url: http://192.168.8.246:1234
+    model: qwen3.6-27b-claude-opus-deepseek-distilled-imatrix-mtp
+    # long_context: NOT independently verified for this specific model/quant
+    # (unlike qwen3-coder-30b, which this deployment ran previously and
+    # whose 256K native context is documented on Qwen's Hugging Face model
+    # card). Confirm this distilled model's real context window before
+    # relying on it for long_context roles -- see the `planner` role above,
+    # which requires long_context and has no non-local fallback configured.
+    capabilities: [tool_calling, long_context]
     # Self-hosted -- no per-token billing.
     cost_per_1m_input_tokens: 0
     cost_per_1m_output_tokens: 0
