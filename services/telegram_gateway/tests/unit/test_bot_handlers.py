@@ -91,6 +91,20 @@ def test_handle_new_starts_progress_polling_for_the_new_project(message, orchest
     poller.start.assert_called_once_with("proj-1", 7)
 
 
+def test_handle_new_shows_a_hint_when_the_orchestrator_is_unreachable(
+    message, orchestrator, poller
+):
+    """httpx.ConnectError is a sibling of httpx.TimeoutException, not a
+    subclass -- it needs its own guard, e.g. during the startup window
+    before the Orchestrator's FastAPI server is accepting connections."""
+    orchestrator.send_webhook = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+
+    asyncio.run(handle_new(message, orchestrator, poller))
+
+    message.answer.assert_awaited_once()
+    poller.start.assert_not_called()
+
+
 def test_handle_status_never_touches_the_webhook(message, orchestrator):
     """A status lookup must be read-only -- forwarding it to POST /webhook
     used to start a junk project (and a real Planner LLM call) per check."""
@@ -272,6 +286,19 @@ def test_handle_continue_shows_a_hint_when_the_orchestrator_call_times_out(
     fallback those already have."""
     message.text = "/continue proj-1"
     orchestrator.activate = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+
+    asyncio.run(handle_continue(message, orchestrator, poller))
+
+    message.answer.assert_awaited_once()
+
+
+def test_handle_continue_shows_a_hint_when_the_orchestrator_is_unreachable(
+    message, orchestrator, poller
+):
+    """httpx.ConnectError is a sibling of httpx.TimeoutException, not a
+    subclass -- it needs its own guard here too."""
+    message.text = "/continue proj-1"
+    orchestrator.activate = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
 
     asyncio.run(handle_continue(message, orchestrator, poller))
 
@@ -489,6 +516,19 @@ def test_handle_approval_callback_shows_a_hint_when_the_resume_call_times_out(or
     callback.message.answer.assert_awaited_once()
 
 
+def test_handle_approval_callback_shows_a_hint_when_the_orchestrator_is_unreachable(
+    orchestrator, poller
+):
+    """httpx.ConnectError is a sibling of httpx.TimeoutException, not a
+    subclass -- it needs its own guard here too."""
+    callback = _callback("approve:thread-123")
+    orchestrator.resume = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+
+    asyncio.run(handle_approval_callback(callback, orchestrator, poller))
+
+    callback.message.answer.assert_awaited_once()
+
+
 def test_handle_approval_callback_restarts_progress_polling_for_the_resumed_project(
     orchestrator, poller
 ):
@@ -652,6 +692,17 @@ def test_handle_reply_callback_shows_a_hint_when_the_activate_call_times_out(orc
     callback.message.answer.assert_awaited_once()
 
 
+def test_handle_reply_callback_shows_a_hint_when_the_orchestrator_is_unreachable(orchestrator):
+    """httpx.ConnectError is a sibling of httpx.TimeoutException, not a
+    subclass -- it needs its own guard here too."""
+    callback = _callback("reply:proj-1")
+    orchestrator.activate = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+
+    asyncio.run(handle_reply_callback(callback, orchestrator))
+
+    callback.message.answer.assert_awaited_once()
+
+
 def test_handle_free_text_shows_a_hint_when_the_orchestrator_call_times_out(
     message, orchestrator, poller
 ):
@@ -659,6 +710,19 @@ def test_handle_free_text_shows_a_hint_when_the_orchestrator_call_times_out(
     even though the Orchestrator keeps running server-side (main.py's
     DEFAULT_HTTP_TIMEOUT). The user must get some reply, not silence."""
     orchestrator.send_webhook = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+
+    asyncio.run(handle_free_text(message, orchestrator, poller))
+
+    message.answer.assert_awaited_once()
+    poller.start.assert_not_called()
+
+
+def test_handle_free_text_shows_a_hint_when_the_orchestrator_is_unreachable(
+    message, orchestrator, poller
+):
+    """httpx.ConnectError is a sibling of httpx.TimeoutException, not a
+    subclass -- it needs its own guard here too."""
+    orchestrator.send_webhook = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
 
     asyncio.run(handle_free_text(message, orchestrator, poller))
 

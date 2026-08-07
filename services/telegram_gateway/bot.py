@@ -128,12 +128,15 @@ async def _relay_webhook_result(message: Message, response) -> None:
 
 
 async def _answer_timeout_hint(message: Message) -> None:
-    """Tells the user their message was received but the Orchestrator hasn't
-    replied within the Gateway's client timeout. The graph run keeps going
+    """Tells the user their message was received but no reply has come back yet.
+
+    Covers both httpx.TimeoutException (the graph run keeps going
     server-side regardless -- POST /webhook runs it synchronously to the next
-    interrupt and a slow local-model chain (e.g. interview -> plan ->
-    critique) can outlast the client's read timeout -- so this isn't a
-    failure, just a slow turn.
+    interrupt and a slow local-model chain, e.g. interview -> plan ->
+    critique, can outlast the client's read timeout) and httpx.ConnectError
+    (the Orchestrator isn't accepting connections yet, e.g. during the
+    startup window before its FastAPI server comes up) -- a plain retry
+    covers both without the user needing to know which happened.
     """
     await message.answer(
         "Still working on that -- a local-model turn can take a while, "
@@ -156,7 +159,7 @@ async def handle_new(
         response = await orchestrator.send_webhook(
             message.from_user.id, message.text, force_new=True
         )
-    except httpx.TimeoutException:
+    except (httpx.TimeoutException, httpx.ConnectError):
         await _answer_timeout_hint(message)
         return
     _start_poller_from_response(poller, response, message.chat.id)
@@ -220,7 +223,7 @@ async def handle_continue(
         return
     try:
         response = await orchestrator.activate(project_id)
-    except httpx.TimeoutException:
+    except (httpx.TimeoutException, httpx.ConnectError):
         await _answer_timeout_hint(message)
         return
     if response.status_code == 404:
@@ -251,7 +254,7 @@ async def handle_free_text(
     """Forwards any other free-text message to the Orchestrator."""
     try:
         response = await orchestrator.send_webhook(message.from_user.id, message.text)
-    except httpx.TimeoutException:
+    except (httpx.TimeoutException, httpx.ConnectError):
         await _answer_timeout_hint(message)
         return
     _start_poller_from_response(poller, response, message.chat.id)
@@ -289,7 +292,7 @@ async def handle_approval_callback(
         await callback.message.edit_reply_markup(reply_markup=None)
     try:
         response = await orchestrator.resume(thread_id, decision)
-    except httpx.TimeoutException:
+    except (httpx.TimeoutException, httpx.ConnectError):
         if callback.message is not None:
             await _answer_timeout_hint(callback.message)
         return
@@ -331,7 +334,7 @@ async def handle_reply_callback(callback: CallbackQuery, orchestrator: Orchestra
         await callback.message.edit_reply_markup(reply_markup=None)
     try:
         response = await orchestrator.activate(project_id)
-    except httpx.TimeoutException:
+    except (httpx.TimeoutException, httpx.ConnectError):
         if callback.message is not None:
             await _answer_timeout_hint(callback.message)
         return
