@@ -10,13 +10,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-REQUIRED_SECRETS=(telegram_bot_token telegram_allowed_user_id claude_api_key github_token)
-for name in "${REQUIRED_SECRETS[@]}"; do
-  if [[ ! -f "secrets/$name" ]]; then
-    "$ROOT_DIR/scripts/setup.sh"
-    break
-  fi
-done
+# setup.sh's own prompt_secret calls are the single source of truth for
+# which secrets are required -- it's idempotent (skips any secret that
+# already has a file), so it's safe to always run rather than keeping a
+# second, separately-maintained list of secret names here that could drift
+# out of sync with setup.sh's actual prompt sequence.
+"$ROOT_DIR/scripts/setup.sh"
 
 # docker-compose.yml hard-requires PROJECTS_HOST_PATH (the Executor needs the
 # *host* absolute path of projects/ -- see services/executor/SECURITY.md), so

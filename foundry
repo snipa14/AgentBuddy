@@ -29,11 +29,15 @@ case "$command" in
         exec "$ROOT_DIR/scripts/stop.sh"
         ;;
     status)
-        exec docker compose -f "$ROOT_DIR/docker-compose.yml" ps
+        # Both -f files unconditionally, like scripts/stop.sh: this script
+        # has no record of whether `up` was run with --local-llm, and a
+        # service definition from an overlay that was never started is a
+        # harmless no-op here, not an error.
+        exec docker compose -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.local-llm.yml" ps
         ;;
     logs)
         shift
-        exec docker compose -f "$ROOT_DIR/docker-compose.yml" logs -f "$@"
+        exec docker compose -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.local-llm.yml" logs -f "$@"
         ;;
     new-project)
         shift
