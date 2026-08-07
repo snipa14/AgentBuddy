@@ -252,6 +252,19 @@ async def run_coder_task(
         ai_message_chunk: AIMessageChunk | None = None
         async for chunk in llm_with_tools.astream(messages):
             ai_message_chunk = chunk if ai_message_chunk is None else ai_message_chunk + chunk
+
+        if ai_message_chunk is None:
+            logger.warning(
+                "project %s: provider streamed zero chunks for a turn, aborting task",
+                project_id,
+            )
+            transcript.append("error: provider returned an empty response")
+            return CoderTaskResult(
+                success=False,
+                transcript=transcript,
+                written_files=written_files,
+                cost_usd=total_cost,
+            )
         ai_message: AIMessage = ai_message_chunk
 
         total_cost += router.cost_usd(CODER_ROLE, ai_message.usage_metadata)
@@ -267,13 +280,19 @@ async def run_coder_task(
 
         for call in ai_message.tool_calls:
             tool_fn = tools_by_name.get(call["name"])
-            observation = (
-                await tool_fn.ainvoke(call["args"])
-                if tool_fn is not None
-                else f"error: unknown tool {call['name']!r}"
-            )
+            if tool_fn is None:
+                observation = f"error: unknown tool {call['name']!r}"
+            else:
+                try:
+                    observation = await tool_fn.ainvoke(call["args"])
+                except Exception as exc:
+                    logger.warning(
+                        "project %s: tool call %s(%s) raised before dispatch: %s",
+                        project_id, call["name"], call["args"], exc,
+                    )
+                    observation = f"error: invalid arguments for {call['name']!r}: {exc}"
             transcript.append(f"{call['name']}({call['args']}) -> {observation}")
-            if call["name"] == "write_file":
+            if call["name"] == "write_file" and "path" in call["args"]:
                 written_files.append(call["args"]["path"])
             messages.append(ToolMessage(content=str(observation), tool_call_id=call["id"]))
 
