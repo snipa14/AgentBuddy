@@ -560,6 +560,98 @@ def test_anthropic_provider_with_base_url_override_is_throttled():
     assert isinstance(model._model, ChatAnthropic)
 
 
+def test_anthropic_provider_with_base_url_override_uses_placeholder_api_key():
+    from services.orchestrator.model_router.router import ANTHROPIC_BASE_URL_PLACEHOLDER_API_KEY
+
+    config = _config(
+        {
+            "roles": {"coder": {"requires": ["tool_calling"], "prefer": ["local"]}},
+            "providers": {
+                "local": {
+                    "type": "anthropic",
+                    "model": "qwen3.6-35b-a3b",
+                    "base_url": "http://192.168.8.246:1234",
+                    "capabilities": ["tool_calling"],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                }
+            },
+        }
+    )
+    router = ModelRouter(config, ollama_enabled=False, anthropic_api_key="real-secret-key")
+
+    model = router.resolve("coder")
+
+    assert (
+        model._model.anthropic_api_key.get_secret_value()
+        == ANTHROPIC_BASE_URL_PLACEHOLDER_API_KEY
+    )
+
+
+def test_anthropic_provider_with_no_base_url_uses_real_api_key():
+    config = _config(
+        {
+            "roles": {"coder": {"requires": [], "prefer": ["claude_sonnet"]}},
+            "providers": {
+                "claude_sonnet": {
+                    "type": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 3.0,
+                    "cost_per_1m_output_tokens": 15.0,
+                }
+            },
+        }
+    )
+    router = ModelRouter(config, ollama_enabled=False, anthropic_api_key="real-secret-key")
+
+    model = router.resolve("coder")
+
+    assert model.anthropic_api_key.get_secret_value() == "real-secret-key"
+
+
+def test_anthropic_provider_with_base_url_needs_no_real_anthropic_api_key():
+    config = _config(
+        {
+            "roles": {"coder": {"requires": [], "prefer": ["local"]}},
+            "providers": {
+                "local": {
+                    "type": "anthropic",
+                    "model": "qwen3.6-35b-a3b",
+                    "base_url": "http://192.168.8.246:1234",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 0,
+                    "cost_per_1m_output_tokens": 0,
+                }
+            },
+        }
+    )
+
+    router = ModelRouter(config, ollama_enabled=False, anthropic_api_key=None)
+
+    assert "local" in router.configured_providers()
+
+
+def test_router_still_requires_real_anthropic_api_key_when_base_url_less_provider_declared():
+    config = _config(
+        {
+            "roles": {"coder": {"requires": [], "prefer": ["claude_sonnet"]}},
+            "providers": {
+                "claude_sonnet": {
+                    "type": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "capabilities": [],
+                    "cost_per_1m_input_tokens": 3.0,
+                    "cost_per_1m_output_tokens": 15.0,
+                }
+            },
+        }
+    )
+
+    with pytest.raises(ValueError):
+        ModelRouter(config, ollama_enabled=False, anthropic_api_key=None)
+
+
 def test_anthropic_providers_sharing_base_url_share_a_semaphore_across_types():
     """An openai_compatible entry and an anthropic-typed entry pointed at the
     same LM Studio instance must serialize against each other too -- the

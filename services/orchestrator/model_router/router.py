@@ -22,6 +22,9 @@ OPENAI_COMPATIBLE_PLACEHOLDER_API_KEY = "not-needed"
 vLLM without --api-key): the OpenAI client requires a non-empty key even when
 the server never checks it. Not a secret. Servers requiring real
 authentication are out of scope (see the 2026-07-25 spec)."""
+ANTHROPIC_BASE_URL_PLACEHOLDER_API_KEY = "not-needed"
+"""Sent to anthropic-typed providers with a `base_url` override in place of
+the real anthropic_api_key. Not a secret."""
 
 
 class _ThrottledChatModel:
@@ -140,11 +143,16 @@ class ModelRouter:
                 this deployment. Defaults to reading the OLLAMA_ENABLED env var
                 if not given explicitly.
             anthropic_api_key: The Claude API key. Required only if config
-                declares at least one "anthropic"-type provider.
+                declares at least one "anthropic"-type provider with no
+                `base_url` override (i.e. one that actually talks to the real
+                Anthropic API). "anthropic"-type providers with a `base_url`
+                override are self-hosted, non-Anthropic endpoints and are
+                constructed with a placeholder key instead, so they never need
+                this argument.
 
         Raises:
-            ValueError: If config declares an "anthropic"-type provider but no
-                anthropic_api_key was given.
+            ValueError: If config declares an "anthropic"-type provider with no
+                `base_url` override but no anthropic_api_key was given.
         """
         if ollama_enabled is None:
             ollama_enabled = os.environ.get(OLLAMA_ENABLED_ENV_VAR, "false").lower() == "true"
@@ -175,13 +183,18 @@ class ModelRouter:
                 )
                 self._models[provider_name] = _ThrottledChatModel(raw_model, semaphore)
             else:
-                if anthropic_api_key is None:
-                    raise ValueError(
-                        f"provider '{provider_name}' requires an anthropic_api_key"
-                    )
+                if provider_config.base_url is None:
+                    if anthropic_api_key is None:
+                        raise ValueError(
+                            f"provider '{provider_name}' requires an anthropic_api_key"
+                        )
+                    api_key = anthropic_api_key
+                else:
+                    api_key = ANTHROPIC_BASE_URL_PLACEHOLDER_API_KEY
+
                 raw_model = ChatAnthropic(
                     model=provider_config.model,
-                    api_key=anthropic_api_key,
+                    api_key=api_key,
                     base_url=provider_config.base_url,
                     max_retries=PROVIDER_MAX_RETRIES,
                 )
