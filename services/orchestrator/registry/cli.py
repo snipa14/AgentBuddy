@@ -26,7 +26,17 @@ from services.orchestrator.registry.registration import (
     register_greenfield,
 )
 
-DEFAULT_PROJECTS_ROOT = Path("/data/projects")
+_raw_projects_root = os.environ.get("PROJECTS_ROOT")
+DEFAULT_PROJECTS_ROOT = Path(_raw_projects_root) if _raw_projects_root else Path("/data/projects")
+"""Mirrors `services.orchestrator.config.OrchestratorConfig.from_env`'s
+`PROJECTS_ROOT` resolution exactly, including its `if raw_projects else
+DEFAULT` fallback (an explicitly empty PROJECTS_ROOT, e.g. from unset
+docker-compose variable interpolation, must resolve to the same default
+here as it does there, not to `Path("")`). Must stay in sync with it:
+`_start_intake` below builds an `OrchestratorConfig` from the environment to
+start the intake graph, and if registration wrote the project's
+directory/memory files under a different root than the one that config
+resolves to, the intake graph can't find what registration just created."""
 DEFAULT_REGISTRY_PATH = DEFAULT_PROJECTS_ROOT / "projects.yaml"
 
 

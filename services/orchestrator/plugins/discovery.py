@@ -45,7 +45,7 @@ def _load_one_plugin(plugin_dir: Path) -> LoadedPlugin | None:
     try:
         raw = yaml.safe_load(manifest_path.read_text())
         manifest = PluginManifest.model_validate(raw)
-    except (OSError, yaml.YAMLError, ValidationError) as exc:
+    except (OSError, ValueError, yaml.YAMLError, ValidationError) as exc:
         logger.warning("plugin '%s': invalid plugin.yaml, skipping: %s", plugin_dir.name, exc)
         return None
 

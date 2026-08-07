@@ -105,6 +105,31 @@ def test_discover_plugins_skips_malformed_manifest_and_continues(tmp_path: Path,
     assert "bad-plugin" in caplog.text
 
 
+def test_discover_plugins_skips_non_utf8_manifest_and_continues(tmp_path: Path, caplog):
+    """A non-UTF-8 plugin.yaml raises UnicodeDecodeError from read_text() --
+    a ValueError subclass, but not one the except tuple used to list
+    explicitly, so it crashed discover_plugins() for every plugin instead of
+    just being skipped like any other malformed manifest."""
+    pytest.importorskip("yaml")
+    bad_dir = tmp_path / "bad-encoding"
+    bad_dir.mkdir()
+    (bad_dir / "plugin.yaml").write_bytes(b"name: \xff\xfe bad bytes\n")
+    (bad_dir / "SKILL.md").write_text("---\nname: bad\ndescription: x\n---\n\nBody.\n")
+
+    good_dir = tmp_path / "good-plugin"
+    good_dir.mkdir()
+    (good_dir / "plugin.yaml").write_text(
+        "name: good-plugin\nrole: good_plugin\nslot: after_tester\nmode: advisory\nrequires: []\n"
+    )
+    (good_dir / "SKILL.md").write_text("---\nname: good-plugin\ndescription: x\n---\n\nBody.\n")
+
+    with caplog.at_level(logging.WARNING):
+        loaded = discover_plugins(tmp_path, known_roles=frozenset())
+
+    assert [p.manifest.name for p in loaded] == ["good-plugin"]
+    assert "bad-encoding" in caplog.text
+
+
 def test_discover_plugins_skips_missing_skill_file(tmp_path: Path, caplog):
     pytest.importorskip("yaml")
     plugin_dir = tmp_path / "no-skill"
@@ -153,6 +178,8 @@ def test_synthesize_plugin_roles_adds_new_role_with_default_prefer():
 
 def test_synthesize_plugin_roles_does_not_override_an_explicit_entry():
     pytest.importorskip("yaml")
+    from services.orchestrator.model_router.config import RoleConfig
+
     config = _base_models_config()
     config.roles["security_audit_reviewer"] = RoleConfig(requires=[], prefer=["claude_opus"])
     plugin = LoadedPlugin(manifest=_manifest("audit", "security_audit_reviewer"), skill_body="x")
