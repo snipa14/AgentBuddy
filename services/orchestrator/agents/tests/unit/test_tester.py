@@ -81,6 +81,22 @@ def test_evaluate_gate_passes_when_no_coverage_data():
     assert outcome.verdict == "pass"
 
 
+def test_evaluate_gate_fails_when_no_tests_ran_hard_mode():
+    outcome = _evaluate_gate(
+        passed=0, failed=0, coverage_pct=None, threshold=80, gate_mode="hard"
+    )
+    assert outcome.verdict == "fail"
+    assert "no tests" in outcome.report.lower()
+
+
+def test_evaluate_gate_fails_when_no_tests_ran_soft_mode_does_not_rescue():
+    outcome = _evaluate_gate(
+        passed=0, failed=0, coverage_pct=None, threshold=80, gate_mode="soft"
+    )
+    assert outcome.verdict == "fail"
+    assert "no tests" in outcome.report.lower()
+
+
 # -- _parse_failing_tests tests ------------------------------------------------
 
 def test_parse_failing_tests_extracts_single_failure():
@@ -167,6 +183,34 @@ def test_run_tests_uses_npm_framework_for_a_node_stack_project():
     asyncio.run(run_tests(executor, "proj-1", threshold=80, stack="node"))
 
     assert ("run_tests", "proj-1", "npm", "node") in executor.calls
+
+
+def test_run_tests_fails_and_explains_when_no_tests_collected():
+    from services.orchestrator.executor_client import TestResult as ExecutorTestResult
+
+    executor = RecordingExecutorClient(
+        test_result=ExecutorTestResult(passed=0, failed=0, coverage_pct=None, report="")
+    )
+    outcome = asyncio.run(run_tests(executor, "proj-1", threshold=80))
+    assert outcome.verdict == "fail"
+    assert "no tests" in outcome.report.lower()
+
+
+def test_run_tests_no_tests_collected_preserves_raw_executor_diagnostics():
+    from services.orchestrator.executor_client import TestResult as ExecutorTestResult
+
+    executor = RecordingExecutorClient(
+        test_result=ExecutorTestResult(
+            passed=0,
+            failed=0,
+            coverage_pct=None,
+            report="ImportError while loading conftest.py: No module named 'foo'",
+        )
+    )
+    outcome = asyncio.run(run_tests(executor, "proj-1", threshold=80))
+    assert outcome.verdict == "fail"
+    assert "no tests" in outcome.report.lower()
+    assert "ImportError while loading conftest.py: No module named 'foo'" in outcome.report
 
 
 def test_run_tests_returns_fail_when_coverage_below_threshold():

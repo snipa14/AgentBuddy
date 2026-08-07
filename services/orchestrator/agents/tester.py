@@ -146,7 +146,14 @@ def _evaluate_gate(
             project config (treated as hard for now).
 
     Returns:
-        A TestOutcome with verdict and all result fields.
+        A TestOutcome with verdict and all result fields. Verdict is 'fail'
+        if any test failed; 'fail' if no tests were collected at all
+        (``passed == 0 and failed == 0``), regardless of gate_mode — soft
+        mode only tolerates low coverage on tests that ran, not the absence
+        of any evidence that tests ran; 'fail' if coverage is below
+        threshold under 'hard'/'configurable' mode; 'pass' otherwise
+        (including 'soft' mode with low coverage, or no coverage data at
+        all with at least one test collected).
     """
     if failed > 0:
         return TestOutcome(
@@ -154,6 +161,17 @@ def _evaluate_gate(
             failed=failed,
             coverage_pct=coverage_pct,
             report="",
+            gate_mode=gate_mode,
+            verdict="fail",
+        )
+
+    if passed == 0 and failed == 0:
+        return TestOutcome(
+            passed=passed,
+            failed=failed,
+            coverage_pct=coverage_pct,
+            report="no tests were collected — check test paths, working "
+            "directory, and stack config",
             gate_mode=gate_mode,
             verdict="fail",
         )
@@ -222,12 +240,20 @@ async def run_tests(
             (pytest for python, `npm test` for node) and the Executor's
             workspace image/cache volume. A node-stack project has no
             coverage report parsed yet, so its coverage_pct is always None
-            (the gate treats missing coverage data as passing, regardless
-            of gate_mode -- see _evaluate_gate).
+            (the gate treats missing coverage data as passing when at least
+            one test ran, regardless of gate_mode -- see _evaluate_gate;
+            zero tests collected still fails the gate regardless of
+            coverage_pct or gate_mode).
 
     Returns:
         A TestOutcome with verdict ('pass' or 'fail'), coverage_pct, and all
-        result fields populated from the Executor's response.
+        result fields populated from the Executor's response. `report` is
+        the Executor's raw output, prefixed with `_evaluate_gate`'s
+        "no tests were collected" explanation when that's the verdict
+        reason -- the raw output (e.g. an import error or collection
+        traceback) is never dropped in favor of that explanation, since
+        node_testing's Coder feedback relies on it to diagnose exactly why
+        nothing ran.
     """
     framework = _FRAMEWORK_FOR_STACK.get(stack, "pytest")
     result = await executor_client.run_tests(project_id, framework=framework, stack=stack)
@@ -239,7 +265,10 @@ async def run_tests(
         threshold=threshold,
         gate_mode=gate_mode,
     )
-    outcome.report = result.report
+    if result.report:
+        outcome.report = (
+            f"{outcome.report}\n\n{result.report}" if outcome.report else result.report
+        )
 
     logger.info(
         "project %s: tests %d passed, %d failed, coverage %.1f%% (verdict=%s)",

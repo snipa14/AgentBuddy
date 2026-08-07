@@ -10,17 +10,37 @@ Skip semantics keep the checks honest on projects that legitimately lack a
 tool: a check whose requires_file is absent from the project is skipped
 before it runs, and a check whose executable is missing from the workspace
 image (exec exit codes 126/127) is skipped after -- neither is a failure.
+
+A container/network blip during either Executor call (the requires_file
+probe or the check itself) is a different case: it isn't evidence the tool
+is missing or inapplicable, so it is recorded as a StaticCheckFailure
+(exit_code=INFRA_FAILURE_EXIT_CODE) rather than silently skipped -- this
+fails closed, matching how run_coder_task's tool wrappers surface Executor
+errors as feedback instead of swallowing them, and lets the existing
+reopen-last-done-task-or-block path in node_static_checks (graph/nodes.py)
+give the Coder a chance to retry a transient failure, escalating to
+"blocked" only if it doesn't clear within MAX_TASK_ATTEMPTS. Both an
+ExecutorClientError (the Executor reachable but returning a non-2xx
+response) and an httpx.RequestError (the Executor unreachable at all --
+connection refused, DNS failure, timeout, the more literal reading of
+"network blip") are treated this way.
 """
 
 import logging
 
+import httpx
 from pydantic import BaseModel, Field
 
+from services.orchestrator.executor_client import ExecutorClientError
 from services.orchestrator.stacks import StacksConfig
 
 logger = logging.getLogger(__name__)
 
 TOOL_MISSING_EXIT_CODES = frozenset({126, 127})
+INFRA_FAILURE_EXIT_CODE = -1
+"""Sentinel StaticCheckFailure.exit_code for a container/network failure that
+prevented a check from running at all, distinguishable from any real process
+exit code (0-255)."""
 
 
 class StaticCheckFailure(BaseModel):
@@ -58,6 +78,59 @@ class StaticCheckOutcome(BaseModel):
         return not self.failures
 
 
+async def _run_or_record_infra_failure(
+    executor_client,
+    project_id: str,
+    stack: str,
+    argv: list[str],
+    record_command: list[str],
+    context: str,
+    outcome: StaticCheckOutcome,
+):
+    """Runs argv through the Executor, converting an infra failure to a StaticCheckFailure.
+
+    Shared by both Executor calls in run_static_checks (the requires_file
+    probe and the check command itself) -- each wants the same fail-closed
+    treatment of an infra failure, differing only in which argv actually
+    runs, which command gets attributed to the resulting StaticCheckFailure
+    (always the check's own command, even when argv is the probe's), and the
+    text describing what was being attempted.
+
+    Args:
+        executor_client: The Executor client to run argv through.
+        project_id: The project whose workspace container to use.
+        stack: The project's declared stack.
+        argv: The command to actually execute.
+        record_command: The command attributed to the StaticCheckFailure on
+            failure -- the check's own command, not necessarily argv.
+        context: Human-readable description of what argv is doing (e.g.
+            "probing for tsconfig.json" or "running ruff check ."), used in
+            both the warning log and the recorded failure's output.
+        outcome: The in-progress StaticCheckOutcome; a failure is appended
+            to it directly so callers don't have to.
+
+    Returns:
+        The Executor's CommandResult on success, or None if an
+        ExecutorClientError (non-2xx response) or an httpx.RequestError
+        (connection failure, timeout -- a genuine network blip, as opposed
+        to a live Executor returning an error) was raised and recorded.
+    """
+    try:
+        return await executor_client.run_command(project_id, argv, stack=stack)
+    except (ExecutorClientError, httpx.RequestError) as exc:
+        logger.warning(
+            "project %s: executor infra failure %s: %s", project_id, context, exc
+        )
+        outcome.failures.append(
+            StaticCheckFailure(
+                command=list(record_command),
+                exit_code=INFRA_FAILURE_EXIT_CODE,
+                output=f"executor infra failure {context}: {exc}",
+            )
+        )
+        return None
+
+
 async def run_static_checks(
     executor_client,
     project_id: str,
@@ -77,7 +150,14 @@ async def run_static_checks(
     Returns:
         A StaticCheckOutcome; `.passed` is True when nothing applicable
         failed, including when the stack has no registry entry or no
-        check_commands at all.
+        check_commands at all. A container/network failure from the
+        Executor while probing requires_file or running a check's command
+        is recorded as a StaticCheckFailure with
+        exit_code=INFRA_FAILURE_EXIT_CODE rather than raised, so this
+        function always returns cleanly -- neither an ExecutorClientError
+        (a live Executor returning a non-2xx response) nor an
+        httpx.RequestError (a connection failure or timeout reaching the
+        Executor at all) propagates out of it.
     """
     outcome = StaticCheckOutcome()
     entry = stacks_config.stacks.get(stack)
@@ -92,9 +172,17 @@ async def run_static_checks(
     for check in entry.check_commands:
         rendered = " ".join(check.command)
         if check.requires_file is not None:
-            probe = await executor_client.run_command(
-                project_id, ["test", "-f", check.requires_file], stack=stack
+            probe = await _run_or_record_infra_failure(
+                executor_client,
+                project_id,
+                stack,
+                ["test", "-f", check.requires_file],
+                check.command,
+                f"probing for {check.requires_file}",
+                outcome,
             )
+            if probe is None:
+                continue
             if probe.exit_code != 0:
                 outcome.skipped.append(
                     f"{rendered} -- requires {check.requires_file}, "
@@ -108,9 +196,18 @@ async def run_static_checks(
                 )
                 continue
 
-        result = await executor_client.run_command(
-            project_id, check.command, stack=stack
+        result = await _run_or_record_infra_failure(
+            executor_client,
+            project_id,
+            stack,
+            check.command,
+            check.command,
+            f"running {rendered}",
+            outcome,
         )
+        if result is None:
+            continue
+
         if result.exit_code in TOOL_MISSING_EXIT_CODES:
             outcome.skipped.append(
                 f"{rendered} -- tool missing (exit {result.exit_code})"
