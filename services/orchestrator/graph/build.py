@@ -1,7 +1,6 @@
 """Compiles the per-project subgraph (ARCHITECTURE.md §4.2, §5)."""
 
 import functools
-import sqlite3
 from pathlib import Path
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -43,6 +42,7 @@ from services.orchestrator.graph.nodes import (
 )
 from services.orchestrator.graph.plugin_node import node_plugin, route_after_plugin
 from services.orchestrator.graph.state import ProjectState
+from services.orchestrator.memory.global_store import GlobalMemoryConnection
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.plugins.discovery import LoadedPlugin
 from services.orchestrator.plugins.manifest import PluginManifest
@@ -107,7 +107,7 @@ def build_project_graph(
     checkpointer: BaseCheckpointSaver,
     router: ModelRouter,
     executor_client: ExecutorClient,
-    memory_conn: sqlite3.Connection,
+    memory_conn: GlobalMemoryConnection,
     projects_root: Path,
     stacks_config: StacksConfig,
     plugins: list[LoadedPlugin] | None = None,
@@ -148,7 +148,8 @@ def build_project_graph(
             read_file/write_file/run_command actions through, the Reviewer uses
             to read file contents for review, and the Tester uses to run pytest
             inside a workspace container.
-        memory_conn: An open global memory connection for the Memory Curator.
+        memory_conn: A GlobalMemoryConnection (sqlite3.Connection + a lock
+            serializing concurrent access to it) for the Memory Curator.
         projects_root: The projects/ root directory for per-project LEARNINGS.md.
         stacks_config: The loaded stack registry (ADR-045) static_checks runs
             its deterministic commands from. An empty registry (no stacks

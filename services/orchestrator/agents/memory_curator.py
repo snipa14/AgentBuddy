@@ -7,7 +7,6 @@ summary for the project's `LEARNINGS.md` and zero or more rows for the
 global, cross-project memory store.
 """
 
-import sqlite3
 from pathlib import Path
 from typing import Literal
 
@@ -15,7 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from services.orchestrator.agents.llm import invoke_structured
-from services.orchestrator.memory.global_store import record_memory
+from services.orchestrator.memory.global_store import GlobalMemoryConnection, record_memory
 from services.orchestrator.memory.project_memory import append_memory_entry
 from services.orchestrator.model_router.router import ModelRouter
 
@@ -78,7 +77,7 @@ async def curate_phase(
 async def curate_and_store_phase(
     router: ModelRouter,
     projects_root: Path,
-    conn: sqlite3.Connection,
+    conn: GlobalMemoryConnection,
     project_id: str,
     phase_events: list[str],
     created_at: str,
@@ -89,7 +88,8 @@ async def curate_and_store_phase(
         router: A ModelRouter to resolve the "memory_curator" role from.
         projects_root: The projects/ root directory, for the per-project
             LEARNINGS.md file.
-        conn: An open global memory connection from build_global_memory_connection().
+        conn: A GlobalMemoryConnection from build_global_memory_connection()
+            (sqlite3.Connection + a lock serializing concurrent access to it).
         project_id: The project the phase belongs to.
         phase_events: Raw event strings from the completed phase's log.
         created_at: An ISO-8601 timestamp applied to every global memory row

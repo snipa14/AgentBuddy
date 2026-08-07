@@ -10,7 +10,9 @@ itself doesn't support querying on.
 import logging
 import re
 import sqlite3
+import threading
 from pathlib import Path
+from typing import Any
 
 from services.orchestrator.memory.schemas import Memory, MemoryType
 
@@ -46,7 +48,41 @@ END;
 """
 
 
-def build_global_memory_connection(db_path: Path) -> sqlite3.Connection:
+class GlobalMemoryConnection:
+    """Pairs the shared global-memory sqlite3.Connection with the lock that
+    serializes every thread's access to it.
+
+    The Orchestrator holds exactly one of these for its whole process
+    lifetime (main.py), shared across every project's graph invocation, so
+    `check_same_thread=False` alone is not enough: it only disables
+    sqlite3's same-thread check, it does not make a single sqlite3.Connection
+    safe for concurrent statement execution. FastAPI can run concurrent sync
+    route handlers in its threadpool -- e.g. one project's Telegram approval
+    callback resuming its graph while another project's webhook is
+    mid-flight -- so two threads calling record_memory/recall at close to
+    the same time can otherwise corrupt cursor/transaction state or raise
+    sqlite3.OperationalError. Every function in this module that touches
+    `.conn` acquires `.lock` first, mirroring how model_router.router's
+    _ThrottledChatModel wraps a shared model with the semaphore that
+    serializes access to it -- one lock per shared connection, held only for
+    the execute()/commit() (or execute()/fetchall()) sequence that needs it.
+
+    Delegates any attribute not defined here (close(), etc.) straight to the
+    wrapped connection, so callers that treat the return value of
+    build_global_memory_connection() as an opaque handle -- the common case
+    -- don't need to change how they use it.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, lock: threading.Lock) -> None:
+        self.conn = conn
+        self.lock = lock
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegates any attribute not defined on this wrapper to the wrapped connection."""
+        return getattr(self.conn, name)
+
+
+def build_global_memory_connection(db_path: Path) -> GlobalMemoryConnection:
     """Opens the global memory database, creating and migrating it if needed.
 
     Args:
@@ -54,17 +90,22 @@ def build_global_memory_connection(db_path: Path) -> sqlite3.Connection:
             created if missing.
 
     Returns:
-        An open sqlite3.Connection with the memories/memories_fts schema applied.
+        A GlobalMemoryConnection wrapping an open sqlite3.Connection (with
+        the memories/memories_fts schema applied) and a threading.Lock
+        that's 1:1 with this connection -- every read/write in this module
+        acquires it before touching the connection, since the connection is
+        shared across every project's graph invocation for the Orchestrator
+        process's lifetime and is not safe for unsynchronized concurrent use.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.executescript(_SCHEMA)
     conn.commit()
-    return conn
+    return GlobalMemoryConnection(conn, threading.Lock())
 
 
 def record_memory(
-    conn: sqlite3.Connection,
+    memory_conn: GlobalMemoryConnection,
     project_id: str | None,
     type_: MemoryType,
     content: str,
@@ -74,7 +115,10 @@ def record_memory(
     """Inserts a single global memory row.
 
     Args:
-        conn: An open connection from build_global_memory_connection().
+        memory_conn: A GlobalMemoryConnection from build_global_memory_connection().
+            The insert and its commit happen under `memory_conn.lock`, so
+            concurrent callers on the shared connection serialize instead of
+            racing.
         project_id: The project this memory originated from, or None for a
             memory that isn't tied to any single project.
         type_: One of "error_pattern", "fix", "preference", "skill_usage".
@@ -87,17 +131,18 @@ def record_memory(
     Returns:
         The new row's id.
     """
-    cursor = conn.execute(
-        "INSERT INTO memories (project_id, type, content, tags, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (project_id, type_, content, tags, created_at),
-    )
-    conn.commit()
-    return cursor.lastrowid
+    with memory_conn.lock:
+        cursor = memory_conn.conn.execute(
+            "INSERT INTO memories (project_id, type, content, tags, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (project_id, type_, content, tags, created_at),
+        )
+        memory_conn.conn.commit()
+        return cursor.lastrowid
 
 
 def recall_for_task(
-    conn: sqlite3.Connection, task_description: str, limit: int = 5
+    memory_conn: GlobalMemoryConnection, task_description: str, limit: int = 5
 ) -> list[str]:
     """Recalls cross-project lessons relevant to a free-text task description.
 
@@ -110,7 +155,7 @@ def recall_for_task(
     first few together.
 
     Args:
-        conn: An open connection from build_global_memory_connection().
+        memory_conn: A GlobalMemoryConnection from build_global_memory_connection().
         task_description: The task's free-text description (a task_queue
             item's `description`).
         limit: Maximum number of lesson strings to return, best-ranked first.
@@ -130,18 +175,22 @@ def recall_for_task(
         return []
     query = " OR ".join(tokens)
     try:
-        memories = recall(conn, query)
+        memories = recall(memory_conn, query)
     except sqlite3.OperationalError:
         logger.warning("recall_for_task query failed for %r", query, exc_info=True)
         return []
     return [memory.content for memory in memories[:limit]]
 
 
-def recall(conn: sqlite3.Connection, query: str, project_id: str | None = None) -> list[Memory]:
+def recall(
+    memory_conn: GlobalMemoryConnection, query: str, project_id: str | None = None
+) -> list[Memory]:
     """Full-text searches memory content and tags via FTS5 MATCH.
 
     Args:
-        conn: An open connection from build_global_memory_connection().
+        memory_conn: A GlobalMemoryConnection from build_global_memory_connection().
+            The query runs under `memory_conn.lock`, so concurrent callers
+            on the shared connection serialize instead of racing.
         query: An FTS5 match expression (e.g. a plain word or phrase).
         project_id: If given, restricts results to that project's memories.
             If None, searches across every project.
@@ -162,7 +211,8 @@ def recall(conn: sqlite3.Connection, query: str, project_id: str | None = None) 
         params.append(project_id)
     sql += " ORDER BY rank"
 
-    rows = conn.execute(sql, params).fetchall()
+    with memory_conn.lock:
+        rows = memory_conn.conn.execute(sql, params).fetchall()
     return [
         Memory(
             id=row[0],

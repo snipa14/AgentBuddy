@@ -11,7 +11,6 @@ process restart without any registry file at all.
 """
 
 import logging
-import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any
@@ -22,6 +21,7 @@ from langgraph.types import Command
 from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.build import DEFAULT_GLOBAL_COST_THRESHOLD_USD, build_project_graph
 from services.orchestrator.graph.state import new_project_state
+from services.orchestrator.memory.global_store import GlobalMemoryConnection
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.plugins.discovery import LoadedPlugin
 from services.orchestrator.progress_buffer import add_progress, clear_progress
@@ -46,7 +46,7 @@ class OrchestratorService:
         checkpointer: BaseCheckpointSaver,
         router: ModelRouter,
         executor_client: ExecutorClient,
-        memory_conn: sqlite3.Connection,
+        memory_conn: GlobalMemoryConnection,
         projects_root: Path,
         stacks_config: StacksConfig,
         plugins: list[LoadedPlugin] | None = None,
@@ -60,7 +60,8 @@ class OrchestratorService:
                 and later Reviewer/Tester) resolves its role from.
             executor_client: The Executor client the Coder dispatches
                 read_file/write_file/run_command actions through.
-            memory_conn: An open global memory connection for the Memory Curator.
+            memory_conn: A GlobalMemoryConnection (sqlite3.Connection + a lock
+                serializing concurrent access to it) for the Memory Curator.
             projects_root: The projects/ root directory for per-project LEARNINGS.md.
             stacks_config: The loaded stack registry (ADR-045) static_checks
                 runs its deterministic commands from.

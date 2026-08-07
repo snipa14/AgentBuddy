@@ -1,6 +1,7 @@
 """Two-layer memory system: per-project markdown + global SQLite/FTS5 (ADR-007)."""
 
 from services.orchestrator.memory.global_store import (
+    GlobalMemoryConnection,
     build_global_memory_connection,
     recall,
     record_memory,
@@ -14,6 +15,7 @@ from services.orchestrator.memory.schemas import Memory, MemoryType
 
 __all__ = [
     "MEMORY_FILENAMES",
+    "GlobalMemoryConnection",
     "Memory",
     "MemoryType",
     "append_memory_entry",

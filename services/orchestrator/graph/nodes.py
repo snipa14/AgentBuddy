@@ -69,7 +69,6 @@ graph async just for the nodes that need an LLM or network call (ADR-019).
 import asyncio
 import datetime
 import logging
-import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +98,7 @@ from services.orchestrator.agents.tester import run_tests
 from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.cost_aggregator import other_projects_cost_usd_weekly
 from services.orchestrator.graph.state import ProjectState
-from services.orchestrator.memory.global_store import recall_for_task
+from services.orchestrator.memory.global_store import GlobalMemoryConnection, recall_for_task
 from services.orchestrator.integrator_client import IntegratorClient
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.progress_buffer import add_progress
@@ -334,7 +333,7 @@ def node_coder(
     state: ProjectState,
     router: ModelRouter,
     executor_client: ExecutorClient,
-    memory_conn: sqlite3.Connection | None = None,
+    memory_conn: GlobalMemoryConnection | None = None,
 ) -> dict[str, Any]:
     """Implements one task-or-retry-attempt per execution.
 
@@ -1041,7 +1040,7 @@ def node_done(
 def node_memory_curator(
     state: ProjectState,
     projects_root: Path,
-    conn: sqlite3.Connection,
+    conn: GlobalMemoryConnection,
     router: ModelRouter,
 ) -> dict[str, Any]:
     """Runs the Memory Curator after phase transitions and approval resolutions.
@@ -1061,7 +1060,8 @@ def node_memory_curator(
         state: The current project state, including ``curator_source`` that
             indicates which transition triggered curation.
         projects_root: The projects/ root directory for per-project memory files.
-        conn: An open global memory connection from build_global_memory_connection().
+        conn: A GlobalMemoryConnection from build_global_memory_connection()
+            (sqlite3.Connection + a lock serializing concurrent access to it).
         router: A ModelRouter to resolve the "memory_curator" role from.
 
     Returns:
