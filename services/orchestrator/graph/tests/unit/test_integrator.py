@@ -5,7 +5,6 @@ first, not last (TODO.md Phase 13).
 """
 
 import asyncio
-import os
 from unittest.mock import MagicMock, patch
 
 from langgraph.types import Command
@@ -118,13 +117,14 @@ class TestBlockedWithoutApproval:
 class TestAutoMode:
     """pr_mode=auto: commit, push, and open a PR via GitHub API."""
 
-    def test_node_done_auto_creates_pr(self, monkeypatch):
+    def test_node_done_auto_creates_pr(self, tmp_path):
         executor = _RecordingExecutorClient()
         state = new_project_state("proj-auto", initial_message="test")
         state["phase"] = "done"
         state["git_branch"] = "feature/proj-auto"
         state["git_remote_url"] = "git@github.com:matete/foundry.git"
         state["pr_mode"] = "auto"
+        (tmp_path / "github_token").write_text("ghp_fake123")
 
         with patch("services.orchestrator.integrator_client.Github") as mock_gh_cls:
             mock_repo = MagicMock()
@@ -133,9 +133,7 @@ class TestAutoMode:
             mock_repo.create_pull.return_value = mock_pr
             mock_gh_cls.return_value.get_repo.return_value = mock_repo
 
-            monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake123")
-
-            update = node_done(state, executor)
+            update = node_done(state, executor, secrets_dir=tmp_path)
 
         assert update == {"phase": "done"}
         cmd_calls = [c for c in executor.calls if c[0] == "run_command"]
@@ -147,7 +145,7 @@ class TestAutoMode:
         assert call_kwargs["head"] == "feature/proj-auto"
         assert call_kwargs["base"] == "main"
 
-    def test_node_done_auto_pr_creation_failure_still_completes(self, monkeypatch):
+    def test_node_done_auto_pr_creation_failure_still_completes(self, tmp_path):
         """PR creation failure should not block the done phase."""
         executor = _RecordingExecutorClient()
         state = new_project_state("proj-auto-fail", initial_message="test")
@@ -155,15 +153,14 @@ class TestAutoMode:
         state["git_branch"] = "feature/proj-auto-fail"
         state["git_remote_url"] = "git@github.com:matete/foundry.git"
         state["pr_mode"] = "auto"
+        (tmp_path / "github_token").write_text("ghp_fake123")
 
         with patch("services.orchestrator.integrator_client.Github") as mock_gh_cls:
             mock_repo = MagicMock()
             mock_repo.create_pull.side_effect = Exception("API rate limit exceeded")
             mock_gh_cls.return_value.get_repo.return_value = mock_repo
 
-            monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake123")
-
-            update = node_done(state, executor)
+            update = node_done(state, executor, secrets_dir=tmp_path)
 
         assert update == {"phase": "done"}
 
@@ -190,7 +187,7 @@ class TestManualMode:
         assert any(c[2][:2] == ("git", "commit") for c in cmd_calls)
         assert any(c[2][:2] == ("git", "push") for c in cmd_calls)
 
-    def test_node_done_manual_no_pr_call_without_github_token(self):
+    def test_node_done_manual_no_pr_call_without_github_token(self, tmp_path):
         """Manual mode should not attempt GitHub API calls regardless of token."""
         executor = _RecordingExecutorClient()
         state = new_project_state("proj-manual-no-token", initial_message="test")
@@ -199,12 +196,7 @@ class TestManualMode:
         state["git_remote_url"] = "git@github.com:matete/foundry.git"
         state["pr_mode"] = "manual"
 
-        saved_token = os.environ.pop("GITHUB_TOKEN", None)
-        try:
-            update = node_done(state, executor)
-        finally:
-            if saved_token is not None:
-                os.environ["GITHUB_TOKEN"] = saved_token
+        update = node_done(state, executor, secrets_dir=tmp_path)
 
         assert update == {"phase": "done"}
         cmd_calls = [c for c in executor.calls if c[0] == "run_command"]
@@ -388,9 +380,10 @@ class TestEdgeCases:
 class TestIntegratorClientPR:
     """Tests for IntegratorClient.create_pull_request."""
 
-    def test_create_pr_success(self, monkeypatch):
+    def test_create_pr_success(self, tmp_path):
         executor = _RecordingExecutorClient()
-        client = IntegratorClient(executor)
+        (tmp_path / "github_token").write_text("ghp_test")
+        client = IntegratorClient(executor, secrets_dir=tmp_path)
 
         with patch("services.orchestrator.integrator_client.Github") as mock_gh_cls:
             mock_repo = MagicMock()
@@ -398,8 +391,6 @@ class TestIntegratorClientPR:
             mock_pr.html_url = "https://github.com/test/repo/pull/1"
             mock_repo.create_pull.return_value = mock_pr
             mock_gh_cls.return_value.get_repo.return_value = mock_repo
-
-            monkeypatch.setenv("GITHUB_TOKEN", "ghp_test")
 
             success, detail = asyncio.run(
                 client.create_pull_request(
@@ -420,34 +411,27 @@ class TestIntegratorClientPR:
             base="main",
         )
 
-    def test_create_pr_no_token(self, monkeypatch):
+    def test_create_pr_no_token(self, tmp_path):
         executor = _RecordingExecutorClient()
-        client = IntegratorClient(executor)
+        client = IntegratorClient(executor, secrets_dir=tmp_path)
 
-        saved_token = os.environ.pop("GITHUB_TOKEN", None)
-
-        try:
-            success, detail = asyncio.run(
-                client.create_pull_request(
-                    title="Test PR",
-                    body="Test body",
-                    head_branch="feature/test",
-                    remote_url="git@github.com:test/repo.git",
-                )
+        success, detail = asyncio.run(
+            client.create_pull_request(
+                title="Test PR",
+                body="Test body",
+                head_branch="feature/test",
+                remote_url="git@github.com:test/repo.git",
             )
-            assert success is False
-            assert "GITHUB_TOKEN" in detail
-        finally:
-            if saved_token:
-                os.environ["GITHUB_TOKEN"] = saved_token
+        )
+        assert success is False
+        assert "github_token" in detail
 
-    def test_create_pr_invalid_remote(self, monkeypatch):
+    def test_create_pr_invalid_remote(self, tmp_path):
         executor = _RecordingExecutorClient()
-        client = IntegratorClient(executor)
+        (tmp_path / "github_token").write_text("ghp_test")
+        client = IntegratorClient(executor, secrets_dir=tmp_path)
 
         with patch("services.orchestrator.integrator_client.Github") as mock_gh_cls:
-            monkeypatch.setenv("GITHUB_TOKEN", "ghp_test")
-
             success, detail = asyncio.run(
                 client.create_pull_request(
                     title="Test PR",

@@ -978,6 +978,7 @@ def route_after_replan_wait(state: ProjectState) -> str:
 def node_done(
     state: ProjectState,
     executor_client: ExecutorClient,
+    secrets_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Terminal node; commits and (when configured) pushes/opens a PR.
 
@@ -997,12 +998,19 @@ def node_done(
     - **auto**: opens a PR via the GitHub API
     - **manual**: reports the pushed branch name for manual PR creation
     - **configurable / other**: pushes the branch only (no PR automation)
+
+    Args:
+        state: The project's current graph state.
+        executor_client: The Executor client to run git commands through.
+        secrets_dir: Directory containing Docker secret files, forwarded to
+            IntegratorClient. Defaults to /run/secrets; overridable so tests
+            can point at a tmp_path instead.
     """
     project_id = state["project_id"]
     branch = state.get("git_branch") or f"feature/{project_id}"
     remote_url = state.get("git_remote_url")
     pr_mode = state.get("pr_mode", "manual")
-    integrator = IntegratorClient(executor_client)
+    integrator = IntegratorClient(executor_client, secrets_dir=secrets_dir)
 
     pushed_branch, pushed_remote = asyncio.run(
         integrator.commit_and_push(

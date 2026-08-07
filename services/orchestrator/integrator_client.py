@@ -5,10 +5,11 @@ All git operations go through the Executor's ``run_command`` as an argv list
 workspace container with no shell involved (services.executor.containers.
 exec_in_container passes the command straight to the Docker SDK's
 ``exec_run``); shell operators like ``&&`` are never interpreted. GitHub API
-calls use PyGithub with a token read from the ``GITHUB_TOKEN`` environment
-variable (injected via Docker secrets at deployment time) at call time, not
-at import time, so tests (and a real deployment reading secrets after
-process start) always see the current value.
+calls use PyGithub with a token read from the ``github_token`` Docker secret
+file (docker-compose.yml mounts it at ``/run/secrets/github_token``, the same
+mechanism main.py uses for ``claude_api_key``) at call time, not at import
+time, so tests (and a real deployment reading secrets after process start)
+always see the current value.
 
 The client is intentionally stateless: every method takes the project ID and
 current state it needs as parameters rather than caching anything. This makes
@@ -16,7 +17,7 @@ the class trivially testable with a mock executor client.
 """
 
 import logging
-import os
+from pathlib import Path
 
 from github import Github
 from github.PullRequest import PullRequest
@@ -25,12 +26,23 @@ from services.orchestrator.executor_client import ExecutorClient
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_SECRETS_DIR = Path("/run/secrets")
+
 
 class IntegratorClient:
     """Performs git operations via the Executor and GitHub API calls directly."""
 
-    def __init__(self, executor_client: ExecutorClient):
+    def __init__(self, executor_client: ExecutorClient, secrets_dir: Path | None = None):
+        """Builds the client.
+
+        Args:
+            executor_client: The Executor client to run git commands through.
+            secrets_dir: Directory containing Docker secret files. Defaults
+                to /run/secrets (the real Docker Compose secrets mount);
+                overridable so tests can point at a tmp_path instead.
+        """
         self._executor = executor_client
+        self._secrets_dir = secrets_dir if secrets_dir is not None else DEFAULT_SECRETS_DIR
 
     async def commit_and_push(
         self,
@@ -125,9 +137,9 @@ class IntegratorClient:
     ) -> tuple[bool, str]:
         """Create a GitHub pull request via the GitHub API.
 
-        Uses PyGithub with ``GITHUB_TOKEN`` read from the environment at call
-        time. Returns a ``(success, detail)`` tuple -- on success ``detail``
-        is the PR URL; on failure it is an error message.
+        Uses PyGithub with a token read from the ``github_token`` Docker
+        secret file at call time. Returns a ``(success, detail)`` tuple -- on
+        success ``detail`` is the PR URL; on failure it is an error message.
 
         Args:
             title: PR title.
@@ -140,10 +152,13 @@ class IntegratorClient:
             A ``(success, detail)`` tuple. When successful, ``detail`` is the PR
             URL string. On failure it is a human-readable error message.
         """
-        github_token = os.environ.get("GITHUB_TOKEN", "")
+        try:
+            github_token = (self._secrets_dir / "github_token").read_text().strip()
+        except FileNotFoundError:
+            github_token = ""
         if not github_token:
-            logger.warning("no GITHUB_TOKEN configured, skipping PR creation")
-            return False, "GITHUB_TOKEN not configured"
+            logger.warning("no github_token secret configured, skipping PR creation")
+            return False, "github_token secret not configured"
 
         repo_slug = self._extract_repo_slug(remote_url or "")
         if not repo_slug:
