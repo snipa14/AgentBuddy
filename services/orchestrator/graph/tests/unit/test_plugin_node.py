@@ -2,8 +2,11 @@
 
 import asyncio
 
+import pytest
+
 from services.orchestrator.agents.tests.unit.router_fakes import FakeRouter, structured
 from services.orchestrator.graph.plugin_node import (
+    PluginFileReadError,
     PluginFinding,
     PluginVerdict,
     node_plugin,
@@ -118,6 +121,144 @@ def test_run_plugin_review_skips_unreadable_files_gracefully_in_fallback():
     user_message = router.model.requests[0][1]
     assert "a.py" in user_message.content
     assert "bad.py" not in user_message.content
+
+
+def test_run_plugin_review_raises_when_all_changed_files_fail_to_read():
+    router = FakeRouter([])
+
+    class AlwaysFailingExecutorClient:
+        async def read_file(self, project_id, path):
+            raise TimeoutError("executor unreachable")
+
+    with pytest.raises(PluginFileReadError):
+        asyncio.run(
+            run_plugin_review(
+                router, AlwaysFailingExecutorClient(), "proj-1", "security_audit_reviewer",
+                "Skill body.", ["a.py", "b.py"],
+            )
+        )
+
+    assert router.model.requests == []
+
+
+def test_run_plugin_review_raises_when_list_files_fails_in_fallback():
+    router = FakeRouter([])
+
+    class ListFailingExecutorClient:
+        async def list_files(self, project_id, path="."):
+            raise ConnectionError("executor unreachable")
+
+        async def read_file(self, project_id, path):
+            raise AssertionError("read_file should not be called when list_files fails")
+
+    with pytest.raises(PluginFileReadError):
+        asyncio.run(
+            run_plugin_review(
+                router, ListFailingExecutorClient(), "proj-1", "security_audit_reviewer",
+                "Skill body.", [],
+            )
+        )
+
+    assert router.model.requests == []
+
+
+def test_run_plugin_review_raises_when_all_listed_files_fail_to_read_in_fallback():
+    router = FakeRouter([])
+
+    class AllReadsFailExecutorClient:
+        async def list_files(self, project_id, path="."):
+            from services.orchestrator.executor_client import FileEntry
+
+            return [FileEntry(name="a.py", is_dir=False), FileEntry(name="b.py", is_dir=False)]
+
+        async def read_file(self, project_id, path):
+            raise TimeoutError("executor unreachable")
+
+    with pytest.raises(PluginFileReadError):
+        asyncio.run(
+            run_plugin_review(
+                router, AllReadsFailExecutorClient(), "proj-1", "security_audit_reviewer",
+                "Skill body.", [],
+            )
+        )
+
+    assert router.model.requests == []
+
+
+def test_run_plugin_review_proceeds_when_fallback_lists_zero_files():
+    router = FakeRouter([structured(APPROVE)])
+
+    class EmptyProjectExecutorClient:
+        async def list_files(self, project_id, path="."):
+            return []
+
+        async def read_file(self, project_id, path):
+            raise AssertionError("read_file should not be called for an empty listing")
+
+    result, _ = asyncio.run(
+        run_plugin_review(
+            router, EmptyProjectExecutorClient(), "proj-1", "security_audit_reviewer",
+            "Skill body.", [],
+        )
+    )
+
+    assert result.verdict == "approve"
+
+
+class _AlwaysFailingExecutorClient:
+    async def read_file(self, project_id, path):
+        raise TimeoutError("executor unreachable")
+
+
+def test_node_plugin_gating_file_read_failure_reopens_task_instead_of_approving():
+    router = FakeRouter([])
+    state = _state(
+        task_queue=[{"description": "t1", "status": "done", "attempts": 0}],
+        changed_files=["a.py"],
+    )
+
+    update = node_plugin(
+        state, router=router, executor_client=_AlwaysFailingExecutorClient(),
+        manifest=_gating_manifest(), skill_body="Skill body.", next_node="frontend_review",
+    )
+
+    assert router.model.requests == []
+    assert update["phase"] == "implementing"
+    assert update["task_queue"][0]["attempts"] == 1
+    assert update["pending_approval"] is None
+    assert route_after_plugin({**state, **update}, next_node="frontend_review") == "coder"
+
+
+def test_node_plugin_gating_file_read_failure_blocks_with_no_reopenable_task():
+    router = FakeRouter([])
+    state = _state(task_queue=[], changed_files=["a.py"])
+
+    update = node_plugin(
+        state, router=router, executor_client=_AlwaysFailingExecutorClient(),
+        manifest=_gating_manifest(), skill_body="Skill body.", next_node="frontend_review",
+    )
+
+    assert router.model.requests == []
+    assert update["phase"] == "blocked"
+    assert update["curator_source"] == _gating_manifest().name
+    assert route_after_plugin({**state, **update}, next_node="frontend_review") == "memory_curator"
+
+
+def test_node_plugin_advisory_file_read_failure_continues_to_next_node():
+    router = FakeRouter([])
+    state = _state(
+        task_queue=[{"description": "t1", "status": "done", "attempts": 0}],
+        changed_files=["a.py"],
+    )
+
+    update = node_plugin(
+        state, router=router, executor_client=_AlwaysFailingExecutorClient(),
+        manifest=_advisory_manifest(), skill_body="Skill body.", next_node="reviewer",
+    )
+
+    assert router.model.requests == []
+    assert update == {}
+    assert route_after_plugin({**state, **update}, next_node="reviewer") == "reviewer"
 
 
 def test_node_plugin_gating_changes_requested_reopens_task_and_routes_to_coder():

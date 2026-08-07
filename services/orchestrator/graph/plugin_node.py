@@ -41,6 +41,29 @@ class PluginVerdict(BaseModel):
     findings: list[PluginFinding] = Field(default_factory=list)
 
 
+class PluginFileReadError(Exception):
+    """Raised when run_plugin_review cannot obtain any file content to review.
+
+    Fired when every expected file read fails -- either every entry in a
+    non-empty `changed_files` list fails to read, or (in the no-`changed_files`
+    fallback) the `list_files` call itself fails, or every file it lists
+    fails to read. In all of these cases `files` would otherwise end up
+    empty, and the caller would proceed to send the LLM a prompt with zero
+    code in it. For a gating plugin role that is unsafe: the LLM can very
+    plausibly return `verdict="approve"` when shown nothing, which would
+    silently rubber-stamp a change it never actually saw instead of failing
+    closed. This exception exists so `run_plugin_review` never reaches that
+    LLM call in a total-failure case.
+
+    A partial failure -- at least one file read successfully -- is not a
+    trigger for this exception; those are logged as warnings per file and
+    the review proceeds with whatever content was obtained. Likewise, a
+    project that genuinely has zero files (the fallback `list_files` call
+    succeeds but returns an empty listing) is not a failure and does not
+    raise this.
+    """
+
+
 def _build_user_prompt(project_id: str, files: dict[str, str]) -> str:
     parts = [f"Project: {project_id}\n\n"]
     for path, content in sorted(files.items()):
@@ -71,6 +94,16 @@ async def run_plugin_review(
     Returns:
         A tuple of (PluginVerdict, raw AIMessage) -- the raw message carries
         usage_metadata for the calling node to price via ModelRouter.cost_usd().
+
+    Raises:
+        PluginFileReadError: If every file this call expected to review
+            fails to read -- either all of a non-empty `changed_files`, or
+            (in the fallback) the `list_files` call itself, or all of its
+            listed entries. This is a total-failure case, not merely "the
+            project has no files"; it stops the review before any LLM call
+            so a gating plugin role can never approve a change it never
+            actually saw. Partial failures (some files read fine) do not
+            raise -- the review proceeds over whatever content it got.
     """
     llm = router.resolve(role)
     files: dict[str, str] = {}
@@ -83,21 +116,35 @@ async def run_plugin_review(
                     "project %s: plugin role '%s' failed to read '%s': %s",
                     project_id, role, path, exc,
                 )
+        if not files:
+            raise PluginFileReadError(
+                f"project {project_id}: plugin role '{role}' failed to read all "
+                f"{len(changed_files)} changed file(s); refusing to review with no content"
+            )
     else:  # no changed_files list — list all and read each one
         try:
             entries = await executor_client.list_files(project_id, ".")
-            for entry in entries:
-                if not entry.is_dir:
-                    try:
-                        files[entry.name] = await executor_client.read_file(project_id, entry.name)
-                    except Exception as exc:
-                        logger.warning(
-                            "project %s: plugin role '%s' failed to read '%s': %s",
-                            project_id, role, entry.name, exc,
-                        )
         except Exception as exc:
             logger.warning(
                 "project %s: plugin role '%s' failed to list files: %s", project_id, role, exc
+            )
+            raise PluginFileReadError(
+                f"project {project_id}: plugin role '{role}' failed to list files"
+            ) from exc
+
+        file_entries = [entry for entry in entries if not entry.is_dir]
+        for entry in file_entries:
+            try:
+                files[entry.name] = await executor_client.read_file(project_id, entry.name)
+            except Exception as exc:
+                logger.warning(
+                    "project %s: plugin role '%s' failed to read '%s': %s",
+                    project_id, role, entry.name, exc,
+                )
+        if file_entries and not files:
+            raise PluginFileReadError(
+                f"project {project_id}: plugin role '{role}' failed to read all "
+                f"{len(file_entries)} listed file(s); refusing to review with no content"
             )
 
     messages = [
@@ -127,6 +174,17 @@ def node_plugin(
     other outcome -- 'gating' approve, or any 'advisory' verdict -- is a
     cost-only update; route_after_plugin sends control to `next_node`.
 
+    A `PluginFileReadError` from `run_plugin_review` (every expected file
+    failed to read, so there is no LLM verdict at all) is handled the same
+    way node_static_checks handles an Executor infra failure: for a
+    'gating' plugin it reopens the last-done task via the same
+    MAX_TASK_ATTEMPTS-bounded retry a changes-requested verdict gets --
+    the failure was never a silent approval, and the run self-heals within
+    the same graph execution instead of crashing it. An 'advisory' plugin
+    never gates progress on a real verdict either, so on this error it just
+    logs and falls through to the cost-only, empty-update path -- there is
+    nothing to gate.
+
     Args:
         state: The current project state.
         router: The ModelRouter this plugin's role resolves through.
@@ -139,15 +197,29 @@ def node_plugin(
 
     Returns:
         A state update: task_queue/phase/messages on a gating
-        changes-requested outcome (or a blocked transition at
-        MAX_TASK_ATTEMPTS); a cost-only update otherwise.
+        changes-requested verdict or a gating file-read failure (or a
+        blocked transition at MAX_TASK_ATTEMPTS); a cost-only update
+        otherwise, including an advisory file-read failure.
     """
-    result, ai_message = asyncio.run(
-        run_plugin_review(
-            router, executor_client, state["project_id"], manifest.role, skill_body,
-            state["changed_files"],
+    try:
+        result, ai_message = asyncio.run(
+            run_plugin_review(
+                router, executor_client, state["project_id"], manifest.role, skill_body,
+                state["changed_files"],
+            )
         )
-    )
+    except PluginFileReadError as exc:
+        logger.warning(
+            "project %s: plugin '%s' could not be reviewed: %s",
+            state["project_id"], manifest.name, exc,
+        )
+        if manifest.mode != "gating":
+            return {}
+        feedback = AIMessage(content=f"{manifest.name} could not review this change: {exc}")
+        update = _reopen_last_done_task_or_block(state, feedback, manifest.name)
+        update["pending_approval"] = None
+        return update
+
     cost = router.cost_usd(manifest.role, ai_message.usage_metadata)
 
     if manifest.mode == "gating" and result.verdict == "changes-requested":
