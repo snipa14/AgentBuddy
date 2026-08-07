@@ -15,20 +15,39 @@ WORKSPACE_CONTAINER_UID = 1000
 """Must match services/executor/containers.py's WORKSPACE_UID -- the fixed,
 non-root user every Executor-spawned workspace container runs as
 (.claude/rules/security.md). The Orchestrator's own Dockerfile has no USER
-directive, so this module (the first thing that ever creates
-projects/<project_id>/, via the Memory Curator's first-phase curation call)
-runs as root, leaving the project directory root-owned at 755. A root-owned,
-non-group-writable directory blocks the non-root workspace container from
-creating anything inside it -- create()/start() succeed, but every
-write_file's `mkdir -p` fails with a permission error, observed in
+directive, so this process runs as root, and anything that creates
+projects/<project_id>/ (registry registration, or -- on a path that never
+went through registration -- the Memory Curator's first-phase curation call)
+leaves the project directory root-owned at 755 unless it chowns it. A
+root-owned, non-group-writable directory blocks the non-root workspace
+container from creating anything inside it -- create()/start() succeed, but
+every write_file's `mkdir -p` fails with a permission error, observed in
 production as every write_file call 500ing while read_file/run_command kept
 succeeding. Chowning the top-level project directory (not its memory/
 subdirectory, which the workspace container never writes to -- only the
 Memory Curator does, from the Orchestrator's own root process) to this UID
-fixes that without loosening it to world-writable. Only attempted when
-actually running as root (os.geteuid() == 0): a non-root dev/test process
-can't chown to an arbitrary UID at all, and would otherwise crash every
-call to append_memory_entry with PermissionError."""
+fixes that without loosening it to world-writable. `chown_to_workspace_uid`
+is only effectful when actually running as root (os.geteuid() == 0): a
+non-root dev/test process can't chown to an arbitrary UID at all, and would
+otherwise crash every caller with PermissionError."""
+
+
+def chown_to_workspace_uid(path: Path) -> None:
+    """Chowns *path* to the workspace container's fixed UID/GID, if running as root.
+
+    Called both by `services.orchestrator.registry.registration` right after
+    a project's directory is created (so the very first Coder task in a
+    freshly-registered project can write to it) and by `append_memory_entry`
+    below (so a project that reached this module by some other path is still
+    covered). A no-op when the calling process isn't root, since only root
+    can chown to an arbitrary UID.
+
+    Args:
+        path: The directory (or symlink to one) to chown. Symlinks are
+            followed, matching `os.chown`'s default behavior.
+    """
+    if os.geteuid() == 0:
+        os.chown(path, WORKSPACE_CONTAINER_UID, WORKSPACE_CONTAINER_UID)
 
 
 def project_memory_dir(projects_root: Path, project_id: str) -> Path:
@@ -84,8 +103,7 @@ def append_memory_entry(projects_root: Path, project_id: str, filename: str, ent
     _validate_filename(filename)
     directory = project_memory_dir(projects_root, project_id)
     directory.mkdir(parents=True, exist_ok=True)
-    if os.geteuid() == 0:
-        os.chown(projects_root / project_id, WORKSPACE_CONTAINER_UID, WORKSPACE_CONTAINER_UID)
+    chown_to_workspace_uid(projects_root / project_id)
     text = entry if entry.endswith("\n") else entry + "\n"
     with (directory / filename).open("a", encoding="utf-8") as handle:
         handle.write(text)

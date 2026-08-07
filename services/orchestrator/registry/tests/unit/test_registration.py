@@ -141,3 +141,23 @@ def test_register_brownfield_from_git_raises_on_clone_failure(
             registry_path, projects_root, "my-project", "My Project",
             str(tmp_path / "not-a-repo"), "python",
         )
+
+
+@pytest.mark.parametrize("disallowed_remote", ["ext::sh -c 'touch /tmp/pwned'", "fd::3"])
+def test_register_brownfield_from_git_rejects_remote_helper_transports(
+    registry_path, projects_root, tmp_path, disallowed_remote
+):
+    """git's `ext::`/`fd::` remote helpers run an arbitrary command instead of
+    fetching over a real transport -- `git clone` must never even be
+    attempted with one of these, or new-project becomes a command-injection
+    vector for whoever can call it."""
+    marker = tmp_path / "pwned"
+    remote = disallowed_remote.replace("/tmp/pwned", str(marker))
+
+    with pytest.raises(BrownfieldSourceError, match="disallowed transport"):
+        register_brownfield_from_git(
+            registry_path, projects_root, "evil-project", "Evil Project", remote, "python",
+        )
+
+    assert not marker.exists()
+    assert not (projects_root / "evil-project").exists()
