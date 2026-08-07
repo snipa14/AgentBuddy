@@ -180,27 +180,28 @@ def test_handle_status_shows_a_hint_on_server_error(message, orchestrator):
     response.json.assert_not_called()
 
 
-def test_handle_continue_without_argument_shows_usage(message, orchestrator):
+def test_handle_continue_without_argument_shows_usage(message, orchestrator, poller):
     message.text = "/continue"
     orchestrator.activate = AsyncMock()
 
-    asyncio.run(handle_continue(message, orchestrator))
+    asyncio.run(handle_continue(message, orchestrator, poller))
 
     orchestrator.activate.assert_not_awaited()
     message.answer.assert_awaited_once_with("Usage: /continue <project_id>")
 
 
-def test_handle_continue_reports_unknown_project_on_404(message, orchestrator):
+def test_handle_continue_reports_unknown_project_on_404(message, orchestrator, poller):
     message.text = "/continue nope"
     orchestrator.activate = AsyncMock(return_value=_status_response(status_code=404))
 
-    asyncio.run(handle_continue(message, orchestrator))
+    asyncio.run(handle_continue(message, orchestrator, poller))
 
     orchestrator.activate.assert_awaited_once_with("nope")
     message.answer.assert_awaited_once_with("Unknown project 'nope'. Try /projects.")
+    poller.start.assert_not_called()
 
 
-def test_handle_continue_reactivates_and_shows_pending_approval(message, orchestrator):
+def test_handle_continue_reactivates_and_shows_pending_approval(message, orchestrator, poller):
     """The main use case: no message with buttons is available anymore (e.g.
     after a Docker stack restart), so /continue <id> must both reactivate
     the project (so a later free-text reply routes to it) and immediately
@@ -215,7 +216,7 @@ def test_handle_continue_reactivates_and_shows_pending_approval(message, orchest
         )
     )
 
-    asyncio.run(handle_continue(message, orchestrator))
+    asyncio.run(handle_continue(message, orchestrator, poller))
 
     orchestrator.activate.assert_awaited_once_with("proj-1")
     args, kwargs = message.answer.call_args
@@ -223,7 +224,22 @@ def test_handle_continue_reactivates_and_shows_pending_approval(message, orchest
     assert "reply_markup" in kwargs
 
 
-def test_handle_continue_shows_task_progress_when_no_gate_pending(message, orchestrator):
+def test_handle_continue_starts_progress_polling_for_the_resumed_project(
+    message, orchestrator, poller
+):
+    """activate() can now resume a stuck project's execution from checkpoint
+    and run the LangGraph synchronously, just like /webhook and /resume do --
+    it needs the same live progress relay those already start, or the
+    operator gets no updates while a long resumed run is in flight."""
+    message.text = "/continue proj-1"
+    orchestrator.activate = AsyncMock(return_value=_status_response(project_id="proj-1"))
+
+    asyncio.run(handle_continue(message, orchestrator, poller))
+
+    poller.start.assert_called_once_with("proj-1", 7)
+
+
+def test_handle_continue_shows_task_progress_when_no_gate_pending(message, orchestrator, poller):
     message.text = "/continue proj-1"
     orchestrator.activate = AsyncMock(
         return_value=_status_response(
@@ -242,12 +258,14 @@ def test_handle_continue_shows_task_progress_when_no_gate_pending(message, orche
         )
     )
 
-    asyncio.run(handle_continue(message, orchestrator))
+    asyncio.run(handle_continue(message, orchestrator, poller))
 
     message.answer.assert_awaited_once_with("1/2 tasks done\nIn progress: Second task")
 
 
-def test_handle_continue_shows_a_hint_when_the_orchestrator_call_times_out(message, orchestrator):
+def test_handle_continue_shows_a_hint_when_the_orchestrator_call_times_out(
+    message, orchestrator, poller
+):
     """activate() can now resume a stuck project's execution synchronously
     (OrchestratorService.activate), so it can be just as slow as /webhook or
     /resume against a local model -- /continue needs the same timeout
@@ -255,7 +273,7 @@ def test_handle_continue_shows_a_hint_when_the_orchestrator_call_times_out(messa
     message.text = "/continue proj-1"
     orchestrator.activate = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
 
-    asyncio.run(handle_continue(message, orchestrator))
+    asyncio.run(handle_continue(message, orchestrator, poller))
 
     message.answer.assert_awaited_once()
 
@@ -599,6 +617,27 @@ def test_handle_reply_callback_reports_unknown_project_on_404(orchestrator):
 
     orchestrator.activate.assert_awaited_once_with("nope")
     callback.message.answer.assert_awaited_once_with("Unknown project 'nope'. Try /projects.")
+
+
+def test_handle_reply_callback_shows_a_hint_on_server_error(orchestrator):
+    """activate() can 5xx if the Orchestrator crashes resuming the project --
+    this must not fall through to the ForceReply prompt, which would tell
+    the operator the project is healthy and waiting on their input when it
+    may not be in the state they think it's in."""
+    from aiogram.types import ForceReply
+
+    response = MagicMock()
+    response.status_code = 500
+    response.json.side_effect = ValueError("not JSON")
+    orchestrator.activate = AsyncMock(return_value=response)
+    callback = _callback("reply:proj-1")
+
+    asyncio.run(handle_reply_callback(callback, orchestrator))
+
+    orchestrator.activate.assert_awaited_once_with("proj-1")
+    callback.message.answer.assert_awaited_once()
+    args, kwargs = callback.message.answer.call_args
+    assert not isinstance(kwargs.get("reply_markup"), ForceReply)
 
 
 def test_handle_reply_callback_shows_a_hint_when_the_activate_call_times_out(orchestrator):

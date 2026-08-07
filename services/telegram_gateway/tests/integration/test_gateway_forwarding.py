@@ -23,6 +23,7 @@ from aiogram.types import Update
 from services.telegram_gateway.auth import AllowedUserMiddleware
 from services.telegram_gateway.bot import router
 from services.telegram_gateway.orchestrator_client import OrchestratorClient
+from services.telegram_gateway.progress_poller import ProgressPoller
 
 pytestmark = pytest.mark.integration
 
@@ -108,7 +109,8 @@ def test_authorized_message_reaches_stub_orchestrator(stub_orchestrator, dispatc
     async def scenario() -> None:
         async with httpx.AsyncClient() as client:
             orchestrator = OrchestratorClient(base_url, client)
-            await dispatcher.feed_update(bot, update, orchestrator=orchestrator)
+            poller = ProgressPoller(orchestrator, bot)
+            await dispatcher.feed_update(bot, update, orchestrator=orchestrator, poller=poller)
 
     asyncio.run(scenario())
 
@@ -124,7 +126,8 @@ def test_unauthorized_message_never_reaches_stub_orchestrator(stub_orchestrator,
     async def scenario() -> None:
         async with httpx.AsyncClient() as client:
             orchestrator = OrchestratorClient(base_url, client)
-            await dispatcher.feed_update(bot, update, orchestrator=orchestrator)
+            poller = ProgressPoller(orchestrator, bot)
+            await dispatcher.feed_update(bot, update, orchestrator=orchestrator, poller=poller)
 
     asyncio.run(scenario())
 

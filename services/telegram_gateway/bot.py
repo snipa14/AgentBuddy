@@ -196,7 +196,9 @@ async def handle_status(message: Message, orchestrator: OrchestratorClient) -> N
 
 
 @router.message(Command("continue"))
-async def handle_continue(message: Message, orchestrator: OrchestratorClient) -> None:
+async def handle_continue(
+    message: Message, orchestrator: OrchestratorClient, poller: ProgressPoller
+) -> None:
     """Reactivates a project by id and shows whatever it's currently waiting on.
 
     Fallback for when the original approval/Reply message is gone -- e.g.
@@ -208,7 +210,8 @@ async def handle_continue(message: Message, orchestrator: OrchestratorClient) ->
     project's execution from checkpoint if it was stuck mid-flight
     (OrchestratorService.activate), which can run the LangGraph synchronously
     just like /webhook and /resume do -- so this can be slow against a local
-    model the same way those are.
+    model the same way those are, and needs the same live progress relay
+    those already start.
     """
     parts = (message.text or "").split(maxsplit=1)
     project_id = parts[1].strip() if len(parts) > 1 else ""
@@ -223,6 +226,7 @@ async def handle_continue(message: Message, orchestrator: OrchestratorClient) ->
     if response.status_code == 404:
         await message.answer(f"Unknown project '{project_id}'. Try /projects.")
         return
+    _start_poller_from_response(poller, response, message.chat.id)
     await _relay_webhook_result(message, response)
 
 
@@ -315,7 +319,11 @@ async def handle_reply_callback(callback: CallbackQuery, orchestrator: Orchestra
     A stale Reply button can also be tapped on a project that's since been
     deleted or renamed; activate() 404s for that the same way it does in
     handle_continue, and this must not fall through to the ForceReply prompt
-    with nothing valid left to receive the reply.
+    with nothing valid left to receive the reply. Nor may a >=500 -- the
+    Orchestrator crashing partway through the resume -- fall through to the
+    same prompt: that would tell the operator the project is healthy and
+    waiting on their input when it may not be in the state they think it's
+    in.
     """
     _, project_id = callback.data.split(":", 1)
     await callback.answer()
@@ -331,6 +339,9 @@ async def handle_reply_callback(callback: CallbackQuery, orchestrator: Orchestra
         return
     if response.status_code == 404:
         await callback.message.answer(f"Unknown project '{project_id}'. Try /projects.")
+        return
+    if response.status_code >= 500:
+        await _answer_server_error(callback.message)
         return
     await callback.message.answer(
         "Type your answer:", reply_markup=ForceReply(selective=True)
