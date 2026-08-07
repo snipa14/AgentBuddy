@@ -81,6 +81,25 @@ def test_load_cases_raises_on_empty_must_match_any(tmp_path):
         load_cases(cases_path)
 
 
+def test_load_cases_raises_on_non_mapping_case_entry(tmp_path):
+    cases_path = tmp_path / "cases.yaml"
+    _write_yaml(cases_path, {"cases": ["not-a-mapping"]})
+
+    with pytest.raises(InvalidCaseFileError, match="must be a mapping"):
+        load_cases(cases_path)
+
+
+def test_load_cases_raises_on_non_mapping_expect(tmp_path):
+    cases_path = tmp_path / "cases.yaml"
+    _write_yaml(
+        cases_path,
+        {"cases": [{"name": "bad_expect", "input": "a", "expect": "must match x"}]},
+    )
+
+    with pytest.raises(InvalidCaseFileError, match="is malformed"):
+        load_cases(cases_path)
+
+
 def test_load_cases_raises_on_missing_image_file(tmp_path):
     cases_path = tmp_path / "cases.yaml"
     _write_yaml(

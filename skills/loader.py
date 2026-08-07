@@ -7,14 +7,14 @@ this job without pulling in a full YAML parser for this simple use case.
 """
 
 import functools
-from dataclasses import dataclass
 from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
 
 SKILLS_ROOT = Path(__file__).parent
 
 
-@dataclass(frozen=True)
-class SkillContent:
+class SkillContent(BaseModel):
     """A parsed SKILL.md file.
 
     Attributes:
@@ -22,6 +22,8 @@ class SkillContent:
         description: The skill's declared description from its frontmatter.
         body: Everything after the frontmatter's closing '---' line.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     description: str

@@ -1,11 +1,11 @@
 """Loads and validates skill eval fixture cases from a cases.yaml file."""
 
-from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-@dataclass(frozen=True)
-class EvalCase:
+
+class EvalCase(BaseModel):
     """One fixture case for a skill's eval: an input plus what must show up in the response.
 
     Attributes:
@@ -17,6 +17,8 @@ class EvalCase:
             `input`, or None for a text-only case.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     name: str
     input: str
     must_match_any: list[str]
@@ -25,6 +27,26 @@ class EvalCase:
 
 class InvalidCaseFileError(ValueError):
     """Raised when a cases.yaml file is missing required fields or malformed."""
+
+
+class _RawExpect(BaseModel):
+    """The `expect:` block of one raw, not-yet-resolved cases.yaml entry."""
+
+    must_match_any: list[str] = Field(default_factory=list)
+
+
+class _RawCaseEntry(BaseModel):
+    """One raw, not-yet-resolved cases.yaml entry.
+
+    `image` stays a plain relative string here -- `load_cases()` resolves it
+    against `cases_path`'s parent and checks it exists, which needs context
+    this model doesn't have.
+    """
+
+    name: str
+    input: str
+    expect: _RawExpect
+    image: str | None = None
 
 
 def load_cases(cases_path: Path) -> list[EvalCase]:
@@ -39,9 +61,12 @@ def load_cases(cases_path: Path) -> list[EvalCase]:
         cases_path's parent directory.
 
     Raises:
-        InvalidCaseFileError: If the file has no `cases:` key, a case is
-            missing `name`/`input`/`expect`, `expect.must_match_any` is
-            empty, or a referenced `image` file doesn't exist.
+        InvalidCaseFileError: If the file has no `cases:` key, a case entry
+            isn't a mapping, a case is missing `name`/`input`/`expect`,
+            `expect` isn't a mapping matching its schema (e.g. a plain
+            string, or a `must_match_any` that isn't a list of strings),
+            `expect.must_match_any` is empty, or a referenced `image` file
+            doesn't exist.
 
     Note:
         `yaml` is imported locally here, not at module level, so that
@@ -56,30 +81,41 @@ def load_cases(cases_path: Path) -> list[EvalCase]:
 
     cases: list[EvalCase] = []
     for i, entry in enumerate(raw["cases"]):
+        if not isinstance(entry, dict):
+            raise InvalidCaseFileError(
+                f"{cases_path}: case {i} must be a mapping, got {type(entry).__name__}"
+            )
+
         missing = [key for key in ("name", "input", "expect") if key not in entry]
         if missing:
             raise InvalidCaseFileError(f"{cases_path}: case {i} missing keys {missing}")
 
-        must_match_any = entry["expect"].get("must_match_any")
-        if not must_match_any:
+        try:
+            parsed = _RawCaseEntry.model_validate(entry)
+        except ValidationError as exc:
             raise InvalidCaseFileError(
-                f"{cases_path}: case {i} ('{entry['name']}') has an empty must_match_any"
+                f"{cases_path}: case {i} ('{entry['name']}') is malformed: {exc}"
+            ) from exc
+
+        if not parsed.expect.must_match_any:
+            raise InvalidCaseFileError(
+                f"{cases_path}: case {i} ('{parsed.name}') has an empty must_match_any"
             )
 
         image_path = None
-        if "image" in entry:
-            image_path = (cases_path.parent / entry["image"]).resolve()
+        if parsed.image is not None:
+            image_path = (cases_path.parent / parsed.image).resolve()
             if not image_path.is_file():
                 raise InvalidCaseFileError(
-                    f"{cases_path}: case {i} ('{entry['name']}') references "
+                    f"{cases_path}: case {i} ('{parsed.name}') references "
                     f"missing image file {image_path}"
                 )
 
         cases.append(
             EvalCase(
-                name=entry["name"],
-                input=entry["input"],
-                must_match_any=must_match_any,
+                name=parsed.name,
+                input=parsed.input,
+                must_match_any=parsed.expect.must_match_any,
                 image_path=image_path,
             )
         )
