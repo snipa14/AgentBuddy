@@ -74,8 +74,10 @@ CHANGES_REQUESTED_RESULT = FrontendReviewResult(
 )
 
 
-def test_review_frontend_approves_when_no_screenshots():
-    """When all screenshots fail, the agent returns approve with no findings and no LLM call."""
+def test_review_frontend_requests_changes_when_no_screenshots():
+    """When all screenshots fail, the agent fails closed with changes-requested
+    and a critical finding instead of silently approving a UI it never saw --
+    no LLM call is made either way."""
     executor = RecordingExecutorClient(
         files=["index.html"],
         screenshots=[ScreenshotResult(image_b64="", error="no_playwright")],
@@ -84,8 +86,9 @@ def test_review_frontend_approves_when_no_screenshots():
 
     verdict, findings, message = asyncio.run(review_frontend(router, executor, "proj-1"))
 
-    assert verdict == "approve"
-    assert findings == []
+    assert verdict == "changes-requested"
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "critical"
     assert message is None
 
 

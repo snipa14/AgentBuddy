@@ -113,6 +113,24 @@ def test_review_changes_skips_unreadable_files_gracefully():
     assert result.verdict == "approve"
 
 
+def test_review_changes_requests_changes_when_every_file_read_fails():
+    """A router with no queued responses proves no LLM call is made: an
+    Executor outage that fails every read must fail closed with
+    changes-requested, not send an empty diff the model could read as
+    "nothing to review, approve"."""
+    router = FakeRouter([])
+    executor = RecordingExecutorClient(files={})
+
+    result, message = asyncio.run(
+        review_changes(router, executor, "proj-1", changed_files=["models.py"])
+    )
+
+    assert result.verdict == "changes-requested"
+    assert len(result.findings) == 1
+    assert result.findings[0].severity == "critical"
+    assert message is None
+
+
 def test_review_changes_sends_system_and_user_messages():
     router = FakeRouter([structured(APPROVE_RESULT)])
     executor = RecordingExecutorClient(files={"models.py": "class User: pass\n"})

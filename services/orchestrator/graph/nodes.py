@@ -645,7 +645,7 @@ def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: Exe
             router, executor_client, state["project_id"], changed_files=state["changed_files"]
         )
     )
-    cost = router.cost_usd(REVIEWER_ROLE, ai_message.usage_metadata)
+    cost = router.cost_usd(REVIEWER_ROLE, ai_message.usage_metadata) if ai_message else 0.0
 
     if result.replan_needed and state["replan_count"] < MAX_REPLANS:
         logger.warning(

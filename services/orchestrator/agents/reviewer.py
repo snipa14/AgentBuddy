@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from services.orchestrator.agents.llm import invoke_structured
+from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.model_router.router import ModelRouter
 from skills.loader import load_skill
 
@@ -83,10 +84,10 @@ def _build_user_prompt(project_id: str, files: dict[str, str]) -> str:
 
 async def review_changes(
     router: ModelRouter,
-    executor_client,
+    executor_client: ExecutorClient,
     project_id: str,
     changed_files: list[str] | None = None,
-) -> tuple[ReviewResult, AIMessage]:
+) -> tuple[ReviewResult, AIMessage | None]:
     """Reviews code changes and returns a structured verdict.
 
     Reads all files in the project (or only the listed changed files if provided),
@@ -103,6 +104,10 @@ async def review_changes(
     Returns:
         A tuple of (ReviewResult, raw AIMessage) -- the raw message carries
         usage_metadata for the calling node to price via ModelRouter.cost_usd().
+        The raw message is None, and the result is forced to
+        'changes-requested', when every file read failed and no LLM call was
+        ever made -- fails closed instead of sending the model an empty diff
+        it could plausibly read as "nothing to review, approve".
 
     Raises:
         ValueError: If the model's response doesn't match ReviewResult.
@@ -133,6 +138,31 @@ async def review_changes(
                         )
         except Exception as exc:
             logger.warning("project %s: failed to list files for review: %s", project_id, exc)
+
+    if not files:
+        logger.warning(
+            "project %s: every file read failed, requesting changes instead of "
+            "sending the reviewer an empty diff",
+            project_id,
+        )
+        return (
+            ReviewResult(
+                verdict="changes-requested",
+                findings=[
+                    ReviewFinding(
+                        file="",
+                        line=0,
+                        severity="critical",
+                        message=(
+                            "Review could not run: every file read from the "
+                            "workspace container failed, so no code was ever "
+                            "seen by the reviewer."
+                        ),
+                    )
+                ],
+            ),
+            None,
+        )
 
     messages = [
         SystemMessage(content=_build_review_system_prompt()),

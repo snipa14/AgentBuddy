@@ -146,9 +146,26 @@ async def review_frontend(
 
     if not screenshots:
         logger.warning(
-            "project %s: no screenshots captured, skipping frontend review", project_id
+            "project %s: no screenshots captured, requesting changes instead of "
+            "silently approving unreviewed UI",
+            project_id,
         )
-        return "approve", [], None
+        return (
+            "changes-requested",
+            [
+                {
+                    "line": 0,
+                    "severity": "critical",
+                    "message": (
+                        "Frontend review could not run: every screenshot capture "
+                        "failed (dev server likely didn't start). Fix whatever is "
+                        "preventing the dev server from serving the app so a real "
+                        "visual review can run."
+                    ),
+                }
+            ],
+            None,
+        )
 
     content_blocks: list[dict] = [
         {
