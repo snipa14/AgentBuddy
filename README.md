@@ -1,26 +1,26 @@
 # Foundry
 
-A self-hosted multi-agent software development platform. Agents plan, build,
-review, and test code autonomously inside isolated Docker containers,
-supervised through Telegram, with LangGraph orchestration and configurable
-inference: an in-host Ollama container, a remote OpenAI-compatible server
-(LM Studio, vLLM, ...) on another machine, or the Claude API.
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
+![Docker Compose native](https://img.shields.io/badge/docker-compose--native-2496ED.svg)
 
-Give it a project idea — or point it at an existing repo — and it runs an
-intake interview, drafts and self-critiques a plan, then works through
-implement → test → review loops on its own. It only stops to ask a human
-for two things: crossing a configured Claude API spend threshold, and
-merging into `main`. Everything else, it does autonomously inside
-short-lived, least-privilege containers that never get a host shell.
+**Give it an idea. Get back reviewed, tested, merge-ready code.**
+
+Foundry is a self-hosted multi-agent development platform. Point it at a
+project idea — or an existing repo — and a team of agents interviews you
+about it, plans it, builds it, reviews it, tests it, and opens a PR,
+looping on its own until the work is actually done. You supervise from
+Telegram, from wherever you are. It runs entirely in Docker containers on
+hardware you own, with inference routed to a local GPU, a remote
+OpenAI-compatible server, or the Claude API — your call, per agent role.
 
 **Status:** Phases 0–20 of the build plan (see [`TODO.md`](TODO.md)) are
-complete — secrets/compose bootstrap, model routing, the Docker security
-boundary, the full agent lineup (Planner, Coder, Reviewer, Tester, Frontend
-Reviewer, Memory Curator, plus deterministic git/GitHub integration),
-memory, multi-project concurrency, and packaged skills. Security hardening
+complete and running — secrets/compose bootstrap, model routing, the
+Docker security boundary, the full agent lineup below, memory,
+multi-project concurrency, and packaged skills. Security hardening
 (Phase 21) is next.
 
-## Why it's built this way
+## Why Foundry
 
 - **The LLM never touches infrastructure directly.** Agents call narrow,
   typed tools (`run_command`, `read_file`, `open_pr`); only the Executor
@@ -37,9 +37,39 @@ memory, multi-project concurrency, and packaged skills. Security hardening
   global SQLite/FTS5 store — a human can open a text file and understand
   what the system has learned. No opaque embeddings-only memory for v1.
 
+Most agent CLIs give you one model, in one session, that you drive turn by
+turn — you're the reviewer, the security boundary, and the "did the tests
+actually pass" check. Foundry is built to need you for exactly two
+decisions instead:
+
+| | A single agent session you drive | Foundry |
+|---|---|---|
+| **Security boundary** | Whatever shell access you granted it | Scoped Docker proxy, non-root, `cap_drop: ALL`, per-task isolated containers |
+| **Review** | Same model reviews its own work, if at all | Separate Reviewer, Tester, and Frontend Reviewer agents each take a real pass |
+| **Autonomy** | Needs you present for every turn | Runs implement → test → review loops unattended |
+| **Human gates** | Ad hoc, whenever you happen to look | Exactly two: a spend threshold, and merge-to-`main` |
+| **Cost** | Every token through one paid API | Route cheap/repetitive roles to a local GPU, reserve Claude for roles that need it |
+| **Supervision** | Tied to a terminal or IDE window | Telegram — approve a plan or a merge from your phone |
+| **Memory** | Resets when the session ends | Persistent per-project notes + cross-project recall |
+
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full design, decision log,
 and threat model, and [`TODO.md`](TODO.md) for the phased build plan this
 repo was built against.
+
+## The agent lineup
+
+Each role is a distinct pass over the work, not one model wearing
+different hats in the same context:
+
+| Agent | What it does |
+|---|---|
+| **Planner** | Runs a structured intake interview, drafts a plan, then adversarially self-critiques it ("roast the plan") before a human ever sees it |
+| **Coder** | Implements one task at a time inside a workspace container, using scoped `read_file`/`write_file`/`run_command` tools |
+| **Reviewer** | Reviews the diff for bugs, security issues, and missing checks; approve or changes-requested routes straight back to Coder |
+| **Tester** | Runs the real test suite and enforces the project's coverage gate (hard / soft / configurable) inside the workspace container |
+| **Frontend Reviewer** | Screenshots UI changes at desktop and mobile breakpoints and sends them to a vision-capable model for a real visual review |
+| **Memory Curator** | Extracts lessons from what just happened into per-project markdown and a global store other projects can recall from |
+| **Git/GitHub Integrator** | Commits to feature branches autonomously, opens PRs per `pr_mode`, and always gates merge-to-`main` behind explicit human approval |
 
 ## Architecture
 
@@ -81,7 +111,7 @@ Compose service. Workspace containers are short-lived and spawned per task
 by the Executor — they are not part of the static compose file. Full
 component breakdown in [`ARCHITECTURE.md` §4](ARCHITECTURE.md#4-components).
 
-## Quickstart
+## Try it in 5 minutes
 
 Requires Docker and Docker Compose. No Python/Node install needed on the
 host — everything runs in containers.
@@ -107,10 +137,33 @@ Once the stack is up, open a chat with your bot on Telegram and send:
 ```
 
 That's enough to kick off an intake interview and start a new project
-thread — no separate registration step required. If you want explicit
-control over a project's stack, coverage threshold, or PR mode instead of
-the defaults, register it first with the CLI and then just talk to the bot
-about it:
+thread — no separate registration step required. Here's roughly what that
+conversation looks like end to end (illustrative — not a captured
+transcript):
+
+> **You:** `/new Build me a small CLI that converts CSV to JSON`
+>
+> **Foundry:** Got it — a couple of questions first. Should it read from
+> a file path, stdin, or both?
+>
+> **You:** Both — file path argument, or stdin if none is given.
+>
+> **Foundry:** *(two more questions, then)* Here's the plan: [...]. While
+> critiquing my own draft I found a gap — no handling for malformed CSV
+> rows — and added a task for it. Approve, edit, or reject?
+>
+> **You:** Approve
+>
+> **Foundry:** 🔨 Implementing... ✅ tests passing, 94% coverage. 👀
+> Reviewed — no issues found. Opened PR #1.
+> Ready to merge into `main` — approve?
+
+Everything between "Approve" and the merge question happens without you —
+that's the loop the rest of this README is about.
+
+If you want explicit control over a project's stack, coverage threshold,
+or PR mode instead of the defaults, register it first with the CLI and
+then just talk to the bot about it:
 
 ```bash
 ./foundry new-project my-project --name "My Project" --stack python \
@@ -124,6 +177,8 @@ Useful commands while it's running:
 ./foundry logs    # tail all service logs (accepts service names)
 ./foundry down    # stop the stack
 ```
+
+### Running local instead of Claude API
 
 To use a local model for roles that don't need Claude-tier reasoning:
 
