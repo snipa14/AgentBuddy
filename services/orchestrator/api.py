@@ -52,6 +52,12 @@ class StreamResponse(BaseModel):
     chunks: list[StreamChunk]
 
 
+class HealthResponse(BaseModel):
+    """Liveness signal for docker-compose.yml's healthcheck and depends_on gates."""
+
+    status: str = "ok"
+
+
 def build_app(service: OrchestratorService) -> FastAPI:
     """Builds the Orchestrator's FastAPI app.
 
@@ -62,6 +68,11 @@ def build_app(service: OrchestratorService) -> FastAPI:
         A configured FastAPI application.
     """
     app = FastAPI(title="Foundry Orchestrator")
+
+    @app.get("/health", response_model=HealthResponse)
+    def health() -> HealthResponse:
+        """Reports liveness -- confirms the FastAPI server is up, nothing more."""
+        return HealthResponse()
 
     @app.post("/webhook", response_model=ProjectStatusResponse)
     def webhook(request: WebhookRequest) -> ProjectStatusResponse:

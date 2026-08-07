@@ -24,6 +24,18 @@ def client(tmp_path):
     return TestClient(app)
 
 
+def test_health_returns_ok_without_touching_docker(client):
+    """docker-compose.yml's healthcheck (and the Orchestrator's depends_on:
+    condition: service_healthy gate) needs this to succeed the moment the
+    FastAPI server is accepting connections, before any Docker call is ever
+    made -- the fixture's MagicMock() client proves no Docker SDK method is
+    invoked to answer it."""
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_run_command_returns_result(client, monkeypatch):
     monkeypatch.setattr(
         api_module,

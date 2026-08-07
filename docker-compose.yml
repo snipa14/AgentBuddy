@@ -42,6 +42,13 @@ services:
       # derived from the container's own filesystem.
       PROJECTS_HOST_PATH: ${PROJECTS_HOST_PATH:?set PROJECTS_HOST_PATH to the absolute host path of ./projects, see .env.example}
       STACKS_CONFIG_PATH: /app/config/stacks.yaml
+      # Set explicitly, in the same file as the `foundry_workspace` network
+      # declaration below, rather than left to match
+      # services/executor/config.py's DEFAULT_NETWORK_NAME/DEFAULT_WORKSPACE_IMAGE
+      # by coincidence -- this network's own comment already describes one
+      # prior incident from a name mismatch.
+      WORKSPACE_NETWORK: foundry_workspace
+      WORKSPACE_IMAGE: foundry/workspace-python:3.12
     volumes:
       - ./config:/app/config:ro
     depends_on:
@@ -50,6 +57,11 @@ services:
     networks:
       - foundry_internal
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   orchestrator:
     build:
@@ -74,10 +86,16 @@ services:
       - ./plugins:/app/plugins:ro
       - foundry_memory:/data/memory
     depends_on:
-      - executor
+      executor:
+        condition: service_healthy
     networks:
       - foundry_internal
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   telegram-gateway:
     build:
@@ -96,7 +114,8 @@ services:
       - telegram_bot_token
       - telegram_allowed_user_id
     depends_on:
-      - orchestrator
+      orchestrator:
+        condition: service_healthy
     networks:
       - foundry_internal
     restart: unless-stopped

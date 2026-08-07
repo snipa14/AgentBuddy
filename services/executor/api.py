@@ -102,6 +102,12 @@ class ClearProjectCacheResponse(BaseModel):
     ok: bool
 
 
+class HealthResponse(BaseModel):
+    """Liveness signal for docker-compose.yml's healthcheck and depends_on gates."""
+
+    status: str = "ok"
+
+
 def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
     """Builds the Executor's FastAPI app.
 
@@ -113,6 +119,11 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
         A configured FastAPI application.
     """
     app = FastAPI(title="Foundry Executor")
+
+    @app.get("/health", response_model=HealthResponse)
+    def health() -> HealthResponse:
+        """Reports liveness -- no Docker call, just confirms the FastAPI server is up."""
+        return HealthResponse()
 
     @app.post("/run_command", response_model=CommandResult)
     def run_command(request: RunCommandRequest) -> CommandResult:

@@ -46,6 +46,17 @@ def client(tmp_path):
     return TestClient(build_app(service))
 
 
+def test_health_returns_ok_without_touching_the_service(client):
+    """docker-compose.yml's healthcheck (and the Telegram Gateway's
+    depends_on: condition: service_healthy gate) needs this to succeed the
+    moment the FastAPI server is accepting connections, before any graph or
+    memory call is ever made."""
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_webhook_creates_a_new_project_and_pauses_at_plan_approval(client):
     response = client.post("/webhook", json={"user_id": 1, "text": "build me a thing"})
 
