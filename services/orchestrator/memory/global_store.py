@@ -14,6 +14,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from services.orchestrator.memory.schemas import Memory, MemoryType
 
 logger = logging.getLogger(__name__)
@@ -176,7 +178,7 @@ def recall_for_task(
     query = " OR ".join(tokens)
     try:
         memories = recall(memory_conn, query)
-    except sqlite3.OperationalError:
+    except (sqlite3.OperationalError, ValidationError):
         logger.warning("recall_for_task query failed for %r", query, exc_info=True)
         return []
     return [memory.content for memory in memories[:limit]]
