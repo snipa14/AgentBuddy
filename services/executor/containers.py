@@ -64,6 +64,7 @@ def workspace_container(
     stack: str = "python",
     project_id: str | None = None,
     install_dependencies: bool = False,
+    install_timeout: int | None = None,
 ) -> Iterator[Container]:
     """Starts a locked-down, idle workspace container and guarantees its removal.
 
@@ -88,6 +89,15 @@ def workspace_container(
             False for tool calls that don't execute project code
             (read_file/write_file/list_files), so a plain file operation
             never pays an install check's cost.
+        install_timeout: Seconds to allow the manifest check/install command
+            (see install_dependencies). Defaults to
+            config.command_timeout_seconds. Callers with their own
+            caller-supplied timeout (tool_run_command's `timeout` argument)
+            must pass it here too -- otherwise the install phase silently
+            runs under the *config default* regardless of what the caller
+            asked for, so a caller-requested short timeout gets no
+            protection during install, and a caller-requested longer
+            timeout still gets capped at the default during install.
 
     Yields:
         The running Container, ready for exec_run/get_archive/put_archive calls.
@@ -98,6 +108,8 @@ def workspace_container(
     """
     if project_id is None:
         project_id = project_host_path.name
+    if install_timeout is None:
+        install_timeout = config.command_timeout_seconds
 
     stack_entry = config.stacks.stacks.get(stack)
     volumes = {str(project_host_path): {"bind": WORKSPACE_MOUNT_TARGET, "mode": "rw"}}
@@ -133,9 +145,7 @@ def workspace_container(
         except (APIError, ImageNotFound) as exc:
             raise ContainerExecutionError(f"failed to start workspace container: {exc}") from exc
         if install_dependencies and stack_entry is not None:
-            _install_dependencies_if_present(
-                container, stack_entry, config.command_timeout_seconds
-            )
+            _install_dependencies_if_present(container, stack_entry, install_timeout)
         yield container
     finally:
         if container is not None:

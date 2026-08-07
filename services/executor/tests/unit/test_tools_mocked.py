@@ -6,8 +6,10 @@ security boundary actually holds. Per .claude/rules/security.md, only a real
 Docker daemon (tests/integration/test_executor_sandbox.py) proves that.
 """
 
+import io
 import json
 import logging
+import tarfile
 from unittest.mock import MagicMock
 
 import pytest
@@ -77,6 +79,27 @@ def test_tool_run_command_removes_container_even_on_exec_error(
         tool_run_command(mock_client, config, "proj-1", ["false"])
 
     mock_container.remove.assert_called_once_with(force=True)
+
+
+def test_tool_run_command_passes_its_custom_timeout_to_the_install_step(
+    mock_client, mock_container, two_stack_registry, tmp_path, monkeypatch
+):
+    """tool_run_command's caller-supplied `timeout` must bound the
+    dependency-install phase too, not just the final command -- otherwise a
+    caller-requested short timeout gets no protection during install, and a
+    caller-requested longer timeout for an install-heavy command still gets
+    capped at config.command_timeout_seconds."""
+    config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
+    mock_container.exec_run.return_value = (0, (b"hello\n", b""))
+    captured = {}
+    monkeypatch.setattr(
+        "services.executor.containers._install_dependencies_if_present",
+        lambda container, stack_entry, timeout: captured.setdefault("timeout", timeout),
+    )
+
+    tool_run_command(mock_client, config, "proj-1", ["echo", "hello"], timeout=45, stack="python")
+
+    assert captured["timeout"] == 45
 
 
 def test_tool_run_command_rejects_project_id_path_traversal(mock_client, config):
@@ -168,6 +191,25 @@ def test_tool_read_file_returns_content_from_get_archive_tar_stream(
     content = tool_read_file(mock_client, config, "proj-1", "existing.txt")
 
     assert content == "already here"
+
+
+def test_tool_read_file_raises_container_execution_error_for_a_directory_path(
+    mock_client, mock_container, config
+):
+    """get_archive() on a directory returns a tar whose top-level entry name
+    doesn't exactly match a bare basename lookup (e.g. a trailing "/"),
+    which used to raise an uncaught KeyError out of tarfile.getmember --
+    bypassing every except clause in api.py's /read_file handler. It must
+    surface as a clean ContainerExecutionError instead."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        info = tarfile.TarInfo(name="somedir/")
+        info.type = tarfile.DIRTYPE
+        tar.addfile(info)
+    mock_container.get_archive.return_value = ([buf.getvalue()], {"name": "somedir"})
+
+    with pytest.raises(ContainerExecutionError):
+        tool_read_file(mock_client, config, "proj-1", "somedir")
 
 
 def test_tool_list_files_raises_container_execution_error_on_nonzero_exit(

@@ -1,4 +1,11 @@
-"""Executor runtime configuration, sourced from environment variables."""
+"""Executor runtime configuration, sourced from environment variables.
+
+DEFAULT_WORKSPACE_IMAGE and DEFAULT_NETWORK_NAME below are only the
+from_env() fallback and the default used by tests that construct an
+ExecutorConfig directly without going through env vars -- the values
+actually deployed come from docker-compose.yml's executor.environment
+block (WORKSPACE_IMAGE/WORKSPACE_NETWORK), which is the source of truth.
+"""
 
 import os
 from pathlib import Path
@@ -9,10 +16,6 @@ from services.executor.stacks import StacksConfig, load_stacks_config
 
 DEFAULT_WORKSPACE_IMAGE = "foundry/workspace-python:3.12"
 DEFAULT_NETWORK_NAME = "foundry_workspace"
-# Deployed values come from docker-compose.yml's executor.environment block
-# (WORKSPACE_IMAGE/WORKSPACE_NETWORK), which is the source of truth -- these
-# two constants are only the from_env() fallback and the default for tests
-# that construct an ExecutorConfig directly without going through env vars.
 DEFAULT_MEM_LIMIT = "2g"
 DEFAULT_NANO_CPUS = 2_000_000_000
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300

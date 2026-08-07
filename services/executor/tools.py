@@ -72,7 +72,13 @@ def tool_run_command(
     logger.info("project %s: run_command(%s)", project_id, command)
     project_host_path = _project_host_path(config, project_id)
     with workspace_container(
-        client, config, project_host_path, stack=stack, project_id=project_id, install_dependencies=True
+        client,
+        config,
+        project_host_path,
+        stack=stack,
+        project_id=project_id,
+        install_dependencies=True,
+        install_timeout=effective_timeout,
     ) as container:
         result = exec_in_container(container, command, effective_timeout)
     logger.info("project %s: run_command exit_code=%d", project_id, result.exit_code)
@@ -303,10 +309,23 @@ def _container_path(path: str) -> str:
 
 
 def _extract_single_file(chunks: bytes, member_name: str) -> str:
-    """Extracts a single file's text content from a get_archive() tar stream."""
+    """Extracts a single file's text content from a get_archive() tar stream.
+
+    Raises:
+        ContainerExecutionError: If member_name isn't a regular file --
+            either because the tar has no exact-name match (get_archive on a
+            directory path names its top-level entry with a trailing "/",
+            which never matches a bare basename lookup) or because it
+            resolves to a non-regular entry (a symlink, device, etc.).
+    """
     buf = io.BytesIO(b"".join(chunks))
     with tarfile.open(fileobj=buf) as tar:
-        member = tar.getmember(member_name)
+        try:
+            member = tar.getmember(member_name)
+        except KeyError as exc:
+            raise ContainerExecutionError(
+                f"'{member_name}' is not a regular file (is it a directory?)"
+            ) from exc
         extracted = tar.extractfile(member)
         if extracted is None:
             raise ContainerExecutionError(f"'{member_name}' is not a regular file")
@@ -366,7 +385,7 @@ def wait_for_url(max_wait=30):
     return False
 
 server_proc = None
-if auto_start and project_dir:
+if auto_start and project_dir and not wait_for_url(max_wait=2):
     scripts = [
         ("npm", ["run", "dev"]),
         ("npx", ["vite", "--port", "5173"]),

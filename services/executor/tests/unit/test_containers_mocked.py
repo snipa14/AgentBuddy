@@ -323,6 +323,61 @@ def test_install_dependencies_if_present_is_a_noop_for_a_stack_without_a_manifes
     mock_container.exec_run.assert_not_called()
 
 
+def test_workspace_container_install_step_uses_caller_supplied_install_timeout(
+    two_stack_registry, tmp_path, monkeypatch
+):
+    """A caller-supplied timeout (e.g. tool_run_command's `timeout` argument)
+    must bound the dependency-install phase too -- previously the install
+    step always used config.command_timeout_seconds regardless of what the
+    caller asked for, silently ignoring a shorter or longer caller-requested
+    budget."""
+    config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
+    mock_container = MagicMock(spec=Container)
+    client = MagicMock()
+    client.containers.create.return_value = mock_container
+
+    captured_timeouts = []
+    monkeypatch.setattr(
+        "services.executor.containers._install_dependencies_if_present",
+        lambda container, stack_entry, timeout: captured_timeouts.append(timeout),
+    )
+
+    with workspace_container(
+        client,
+        config,
+        tmp_path,
+        stack="python",
+        project_id="proj-1",
+        install_dependencies=True,
+        install_timeout=7,
+    ):
+        pass
+
+    assert captured_timeouts == [7]
+
+
+def test_workspace_container_install_step_defaults_to_config_command_timeout(
+    two_stack_registry, tmp_path, monkeypatch
+):
+    config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
+    mock_container = MagicMock(spec=Container)
+    client = MagicMock()
+    client.containers.create.return_value = mock_container
+
+    captured_timeouts = []
+    monkeypatch.setattr(
+        "services.executor.containers._install_dependencies_if_present",
+        lambda container, stack_entry, timeout: captured_timeouts.append(timeout),
+    )
+
+    with workspace_container(
+        client, config, tmp_path, stack="python", project_id="proj-1", install_dependencies=True
+    ):
+        pass
+
+    assert captured_timeouts == [config.command_timeout_seconds]
+
+
 def test_workspace_container_logs_create_start_and_remove(config, tmp_path, caplog):
     mock_container = MagicMock(spec=Container)
     mock_container.id = "abc123def456ff00extra"
