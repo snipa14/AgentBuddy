@@ -11,7 +11,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from docker.errors import APIError
+from docker.errors import APIError, NotFound
 from docker.models.containers import Container
 
 from services.executor.config import ExecutorConfig
@@ -87,6 +87,61 @@ def test_exec_in_container_kills_container_and_raises_on_timeout():
     mock_container.kill.assert_called_once()
 
 
+def test_exec_in_container_raises_command_timeout_error_when_kill_also_fails(caplog):
+    """If the daemon has already reaped the container by the time the timeout
+    handler calls kill() (a race under load, or the daemon's own cleanup),
+    kill() itself raises APIError. The caller still only ever needs to know
+    the command didn't finish in time -- CommandTimeoutError must still be
+    raised, never the raw APIError, and the swallowed APIError should be
+    logged rather than silently dropped."""
+    mock_container = MagicMock(spec=Container)
+    mock_container.exec_run.side_effect = lambda *a, **kw: time.sleep(0.2)
+    mock_container.kill.side_effect = APIError("no such container")
+
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(CommandTimeoutError):
+            exec_in_container(mock_container, ["sleep", "30"], timeout=0.01)
+
+    mock_container.kill.assert_called_once()
+    assert any("no such container" in record.message for record in caplog.records)
+
+
+def test_exec_in_container_logs_kill_not_found_at_debug_not_warning(caplog):
+    """A kill() failure meaning "the container is already gone" (NotFound) is
+    an expected race under load or the daemon's own cleanup -- it should log
+    at debug, not warning, unlike a genuine kill() failure."""
+    mock_container = MagicMock(spec=Container)
+    mock_container.exec_run.side_effect = lambda *a, **kw: time.sleep(0.2)
+    mock_container.kill.side_effect = NotFound("no such container")
+
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(CommandTimeoutError):
+            exec_in_container(mock_container, ["sleep", "30"], timeout=0.01)
+
+    debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("already reaped" in r.message for r in debug_records)
+    assert warning_records == []
+
+
+def test_exec_in_container_does_not_block_on_slow_background_thread_after_timeout():
+    """Regression test for the ThreadPoolExecutor context-manager hang: its
+    __exit__ blocks (wait=True) until the submitted future finishes, which
+    would defeat the timeout entirely if the background exec_run call
+    doesn't unblock promptly after kill() (e.g. a stalled daemon/proxy HTTP
+    call). exec_in_container must return once it gives up at `timeout`, not
+    once the background thread eventually finishes."""
+    mock_container = MagicMock(spec=Container)
+    mock_container.exec_run.side_effect = lambda *a, **kw: time.sleep(2)
+
+    start = time.monotonic()
+    with pytest.raises(CommandTimeoutError):
+        exec_in_container(mock_container, ["sleep", "30"], timeout=0.05)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.0
+
+
 def test_workspace_container_mounts_python_cache_volume_at_pip_cache_path(
     two_stack_registry, tmp_path
 ):
@@ -99,7 +154,7 @@ def test_workspace_container_mounts_python_cache_volume_at_pip_cache_path(
         pass
 
     _, create_kwargs = client.containers.create.call_args
-    assert create_kwargs["volumes"]["foundry-cache-proj-1"] == {
+    assert create_kwargs["volumes"]["foundry-cache-proj-1-python"] == {
         "bind": "/home/sandbox/.cache/pip",
         "mode": "rw",
     }
@@ -117,10 +172,35 @@ def test_workspace_container_mounts_node_cache_volume_at_npm_cache_path(
         pass
 
     _, create_kwargs = client.containers.create.call_args
-    assert create_kwargs["volumes"]["foundry-cache-proj-1"] == {
+    assert create_kwargs["volumes"]["foundry-cache-proj-1-node"] == {
         "bind": "/home/sandbox/.npm",
         "mode": "rw",
     }
+
+
+def test_workspace_container_uses_distinct_cache_volumes_for_different_stacks_same_project(
+    two_stack_registry, tmp_path
+):
+    """A project keyed by project_id alone (not project_id+stack) would reuse
+    one stack's package-manager cache volume for another stack's cache_dir
+    mount, mixing pip and npm cache contents at the wrong path (ADR-028's
+    "per-project, per-stack" cache volume design)."""
+    config = ExecutorConfig(projects_host_path=tmp_path, stacks=two_stack_registry)
+    client = MagicMock()
+
+    client.containers.create.return_value = MagicMock(spec=Container)
+    with workspace_container(client, config, tmp_path, stack="python", project_id="proj-1"):
+        pass
+    _, python_kwargs = client.containers.create.call_args
+
+    client.containers.create.return_value = MagicMock(spec=Container)
+    with workspace_container(client, config, tmp_path, stack="node", project_id="proj-1"):
+        pass
+    _, node_kwargs = client.containers.create.call_args
+
+    python_volume_names = set(python_kwargs["volumes"]) - {str(tmp_path)}
+    node_volume_names = set(node_kwargs["volumes"]) - {str(tmp_path)}
+    assert python_volume_names.isdisjoint(node_volume_names)
 
 
 def test_workspace_container_omits_cache_volume_for_a_stack_with_none_registered(
@@ -136,7 +216,7 @@ def test_workspace_container_omits_cache_volume_for_a_stack_with_none_registered
 
     _, create_kwargs = client.containers.create.call_args
     assert len(create_kwargs["volumes"]) == 1
-    assert "foundry-cache-proj-1" not in create_kwargs["volumes"]
+    assert "foundry-cache-proj-1-ruby" not in create_kwargs["volumes"]
 
 
 def test_workspace_container_unknown_stack_gets_only_the_project_bind_mount(config, tmp_path):
@@ -216,6 +296,22 @@ def test_install_dependencies_if_present_skips_install_when_no_manifest_is_prese
     assert len(calls) == 2
     assert calls[0].args[0] == ["test", "-f", "requirements.txt"]
     assert calls[1].args[0] == ["test", "-f", "pyproject.toml"]
+
+
+def test_install_dependencies_if_present_raises_when_install_command_fails(two_stack_registry):
+    """A failed pip/npm install must not be swallowed -- letting the caller's
+    subsequent command run against a container with missing dependencies
+    surfaces as a confusing downstream error instead of the real cause."""
+    mock_container = MagicMock(spec=Container)
+    mock_container.exec_run.side_effect = [
+        (0, (b"", b"")),
+        (1, (b"", b"ERROR: could not find a version that satisfies foo\n")),
+    ]
+
+    with pytest.raises(ContainerExecutionError, match="dependency install failed"):
+        _install_dependencies_if_present(
+            mock_container, two_stack_registry.stacks["python"], timeout=5
+        )
 
 
 def test_install_dependencies_if_present_is_a_noop_for_a_stack_without_a_manifest():

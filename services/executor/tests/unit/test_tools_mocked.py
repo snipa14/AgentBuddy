@@ -11,7 +11,7 @@ import logging
 from unittest.mock import MagicMock
 
 import pytest
-from docker.errors import NotFound
+from docker.errors import APIError, NotFound
 from docker.models.containers import Container
 
 from services.executor.config import ExecutorConfig
@@ -138,6 +138,16 @@ def test_tool_write_file_creates_parent_directory_and_puts_archive(
     assert mkdir_command == ["mkdir", "-p", "/workspace/src"]
     put_args, _ = mock_container.put_archive.call_args
     assert put_args[0] == "/workspace/src"
+
+
+def test_tool_write_file_raises_container_execution_error_when_put_archive_fails(
+    mock_client, mock_container, config
+):
+    mock_container.exec_run.return_value = (0, (b"", b""))
+    mock_container.put_archive.side_effect = APIError("no space left on device")
+
+    with pytest.raises(ContainerExecutionError, match="write failed"):
+        tool_write_file(mock_client, config, "proj-1", "src/app.py", "print('hi')")
 
 
 def test_tool_write_file_raises_when_mkdir_fails(mock_client, mock_container, config):

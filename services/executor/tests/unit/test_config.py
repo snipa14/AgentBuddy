@@ -47,6 +47,24 @@ def test_from_env_reads_overrides(monkeypatch, tmp_path):
     assert config.command_timeout_seconds == 60
 
 
+def test_from_env_treats_empty_string_env_vars_as_unset(monkeypatch, tmp_path):
+    """os.environ.get(key, default) only falls back when key is entirely
+    absent -- a variable explicitly set to "" (common with docker-compose
+    interpolation of an unset host variable) must still fall back to the
+    documented default rather than reaching int("") and raising ValueError."""
+    pytest.importorskip("yaml")
+    monkeypatch.setenv("PROJECTS_HOST_PATH", str(tmp_path))
+    monkeypatch.setenv("WORKSPACE_IMAGE", "")
+    monkeypatch.setenv("WORKSPACE_NANO_CPUS", "")
+    monkeypatch.setenv("WORKSPACE_COMMAND_TIMEOUT_SECONDS", "")
+
+    config = ExecutorConfig.from_env()
+
+    assert config.workspace_image == "foundry/workspace-python:3.12"
+    assert config.nano_cpus == 2_000_000_000
+    assert config.command_timeout_seconds == 300
+
+
 def test_image_for_stack_reads_registry(two_stack_registry):
     config = ExecutorConfig(
         projects_host_path=Path("/srv/projects"), stacks=two_stack_registry

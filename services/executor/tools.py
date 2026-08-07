@@ -15,7 +15,7 @@ import tarfile
 from pathlib import Path
 
 import docker
-from docker.errors import NotFound
+from docker.errors import APIError, NotFound
 
 from services.executor.config import ExecutorConfig
 from services.executor.containers import (
@@ -139,6 +139,8 @@ def tool_write_file(
 
     Raises:
         PathTraversalError: If path resolves outside the project root.
+        ContainerExecutionError: If mkdir or the file write itself fails
+            inside the container.
     """
     logger.info("project %s: write_file(%s), %d bytes", project_id, path, len(content))
     container_path = _container_path(path)
@@ -158,9 +160,15 @@ def tool_write_file(
             raise ContainerExecutionError(
                 f"mkdir failed for '{path}': {mkdir_result.stderr}"
             )
-        container.put_archive(
-            directory, _build_single_file_tar(os.path.basename(container_path), content)
-        )
+        try:
+            container.put_archive(
+                directory, _build_single_file_tar(os.path.basename(container_path), content)
+            )
+        except APIError as exc:
+            logger.warning(
+                "project %s: write_file(%s) put_archive failed: %s", project_id, path, exc
+            )
+            raise ContainerExecutionError(f"write failed for '{path}': {exc}") from exc
     return True
 
 
@@ -406,7 +414,11 @@ except Exception as exc:
 finally:
     if server_proc and server_proc.poll() is None:
         server_proc.terminate()
-        server_proc.wait(timeout=5)
+        try:
+            server_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server_proc.kill()
+            server_proc.wait()
 """
 
 

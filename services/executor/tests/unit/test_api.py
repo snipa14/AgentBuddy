@@ -186,6 +186,17 @@ def test_list_files_returns_400_on_path_traversal(client, monkeypatch):
     assert response.status_code == 400
 
 
+def test_list_files_returns_504_on_timeout(client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise CommandTimeoutError("timed out")
+
+    monkeypatch.setattr(api_module, "tool_list_files", _raise)
+
+    response = client.post("/list_files", json={"project_id": "proj-1"})
+
+    assert response.status_code == 504
+
+
 def test_list_files_returns_500_on_container_error(client, monkeypatch):
     def _raise(*args, **kwargs):
         raise ContainerExecutionError("boom")
@@ -296,6 +307,19 @@ def test_clear_project_cache_returns_ok(client, monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert captured == {"project_id": "proj-1", "stack": "node"}
+
+
+def test_clear_project_cache_returns_504_on_timeout(client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise CommandTimeoutError("timed out")
+
+    monkeypatch.setattr(api_module, "tool_clear_project_cache", _raise)
+
+    response = client.post(
+        "/clear_project_cache", json={"project_id": "proj-1", "stack": "python"}
+    )
+
+    assert response.status_code == 504
 
 
 def test_clear_project_cache_returns_500_on_container_error(client, monkeypatch):

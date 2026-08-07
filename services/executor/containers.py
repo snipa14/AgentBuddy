@@ -30,7 +30,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import docker
-from docker.errors import APIError, ImageNotFound
+from docker.errors import APIError, ImageNotFound, NotFound
 from docker.models.containers import Container
 
 from services.executor.config import ExecutorConfig, image_for_stack
@@ -45,9 +45,15 @@ WORKSPACE_UID = 1000
 WORKSPACE_IDLE_COMMAND = ["sleep", "infinity"]
 
 
-def cache_volume_name(project_id: str) -> str:
-    """Builds the per-project package-manager cache volume's name (ADR-028)."""
-    return f"foundry-cache-{project_id}"
+def cache_volume_name(project_id: str, stack: str) -> str:
+    """Builds the per-project, per-stack package-manager cache volume's name (ADR-028).
+
+    Keyed by both project_id and stack -- not project_id alone -- so a
+    project that is ever built with more than one stack (or whose declared
+    stack changes over its lifetime) never mounts one stack's package-manager
+    cache contents at another stack's cache_dir path inside the container.
+    """
+    return f"foundry-cache-{project_id}-{stack}"
 
 
 @contextmanager
@@ -96,7 +102,7 @@ def workspace_container(
     stack_entry = config.stacks.stacks.get(stack)
     volumes = {str(project_host_path): {"bind": WORKSPACE_MOUNT_TARGET, "mode": "rw"}}
     if stack_entry is not None and stack_entry.cache_dir is not None:
-        volumes[cache_volume_name(project_id)] = {
+        volumes[cache_volume_name(project_id, stack)] = {
             "bind": stack_entry.cache_dir, "mode": "rw",
         }
 
@@ -168,11 +174,24 @@ def _install_dependencies_if_present(
         container: An already-running workspace container.
         stack_entry: The project's declared stack's registry entry.
         timeout: Seconds to allow each check/install command.
+
+    Raises:
+        ContainerExecutionError: If the manifest's install command exits
+            non-zero. Letting a failed install pass silently would leave the
+            container's subsequent command (the one the caller actually
+            wanted to run) executing against missing dependencies, surfacing
+            as a confusing downstream error instead of the real install
+            failure.
     """
     for manifest in stack_entry.manifests:
         check = exec_in_container(container, ["test", "-f", manifest.file], timeout)
         if check.exit_code == 0:
-            exec_in_container(container, manifest.install_command, timeout)
+            install_result = exec_in_container(container, manifest.install_command, timeout)
+            if install_result.exit_code != 0:
+                raise ContainerExecutionError(
+                    f"dependency install failed for manifest '{manifest.file}': "
+                    f"{install_result.stderr or install_result.stdout}"
+                )
             return
 
 
@@ -238,20 +257,55 @@ def exec_in_container(container: Container, command: list[str], timeout: int) ->
     Raises:
         CommandTimeoutError: If the command exceeds timeout. The container is
             killed so the blocked exec call unblocks; workspace_container()
-            still removes it afterward.
+            still removes it afterward. Still raised even if the kill() call
+            itself fails, since from the caller's perspective the command
+            still didn't complete within timeout either way -- but a kill()
+            failure that means "the container was already gone" (NotFound)
+            is logged at debug (an expected race under load, or the
+            daemon's own cleanup), while any other kill() failure is logged
+            at warning with a traceback, since it may indicate a genuine
+            daemon/proxy problem rather than a benign reap race.
         ContainerExecutionError: If the Docker API call itself fails.
+
+    The worker pool backing the timeout is shut down with wait=False:
+    blocking here for the pool's default wait=True would defeat the point
+    of running exec_run in a worker thread in the first place -- a
+    background exec_run call that doesn't unblock promptly after kill() (a
+    stalled proxy/daemon HTTP call) would otherwise hang this function, and
+    every caller up to the FastAPI request, well past the timeout this
+    function exists to enforce.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
         future = pool.submit(
             container.exec_run, command, demux=True, workdir=WORKSPACE_MOUNT_TARGET
         )
         try:
             exit_code, (stdout, stderr) = future.result(timeout=timeout)
         except concurrent.futures.TimeoutError as exc:
-            container.kill()
-            raise CommandTimeoutError(f"command timed out after {timeout}s: {command!r}") from exc
+            try:
+                container.kill()
+            except NotFound as kill_exc:
+                logger.debug(
+                    "container %s: kill() after timeout found no such container, "
+                    "already reaped: %s",
+                    container.id[:12],
+                    kill_exc,
+                )
+            except APIError as kill_exc:
+                logger.warning(
+                    "container %s: kill() after timeout failed: %s",
+                    container.id[:12],
+                    kill_exc,
+                    exc_info=True,
+                )
+            raise CommandTimeoutError(
+                f"command timed out after {timeout}s: {command!r}"
+            ) from exc
         except APIError as exc:
             raise ContainerExecutionError(f"exec failed: {exc}") from exc
+    finally:
+        pool.shutdown(wait=False)
 
     return CommandResult(
         stdout=(stdout or b"").decode("utf-8", errors="replace"),

@@ -116,6 +116,7 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
 
     @app.post("/run_command", response_model=CommandResult)
     def run_command(request: RunCommandRequest) -> CommandResult:
+        """Runs a command inside a fresh workspace container for the request's project."""
         try:
             return tool_run_command(
                 client,
@@ -136,6 +137,7 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
 
     @app.post("/read_file", response_model=ReadFileResponse)
     def read_file(request: ReadFileRequest) -> ReadFileResponse:
+        """Reads a UTF-8 text file from the request's project directory."""
         try:
             content = tool_read_file(
                 client, config, request.project_id, request.path, stack=request.stack
@@ -154,6 +156,7 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
 
     @app.post("/write_file", response_model=WriteFileResponse)
     def write_file(request: WriteFileRequest) -> WriteFileResponse:
+        """Writes a UTF-8 text file into the request's project directory."""
         try:
             ok = tool_write_file(
                 client,
@@ -175,12 +178,16 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
 
     @app.post("/list_files", response_model=ListFilesResponse)
     def list_files(request: ListFilesRequest) -> ListFilesResponse:
+        """Lists the immediate entries of a directory in the request's project."""
         try:
             entries = tool_list_files(
                 client, config, request.project_id, request.path, stack=request.stack
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except CommandTimeoutError as exc:
+            logger.exception("project %s: list_files timed out", request.project_id)
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
         except ContainerExecutionError as exc:
             logger.exception("project %s: list_files failed", request.project_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -188,6 +195,7 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
 
     @app.post("/run_tests", response_model=TestResult)
     def run_tests(request: RunTestsRequest) -> TestResult:
+        """Runs the request's project test suite inside a fresh workspace container."""
         try:
             return tool_run_tests(
                 client, config, request.project_id, request.framework, stack=request.stack
@@ -212,6 +220,7 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
 
     @app.post("/take_screenshot", response_model=ScreenshotResult)
     def take_screenshot(request: TakeScreenshotRequest) -> ScreenshotResult:
+        """Captures a screenshot of a page served from the request's project."""
         try:
             return tool_take_screenshot(
                 client,
@@ -233,10 +242,14 @@ def build_app(client: docker.DockerClient, config: ExecutorConfig) -> FastAPI:
 
     @app.post("/clear_project_cache", response_model=ClearProjectCacheResponse)
     def clear_project_cache(request: ClearProjectCacheRequest) -> ClearProjectCacheResponse:
+        """Empties the request's project's package-manager cache volume."""
         try:
             ok = tool_clear_project_cache(client, config, request.project_id, request.stack)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except CommandTimeoutError as exc:
+            logger.exception("project %s: clear_project_cache timed out", request.project_id)
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
         except ContainerExecutionError as exc:
             logger.exception("project %s: clear_project_cache failed", request.project_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc

@@ -62,21 +62,42 @@ class ExecutorConfig(BaseModel):
                 "the projects/ directory (see ARCHITECTURE.md §4.3)."
             )
         stacks = load_stacks_config(
-            Path(os.environ.get("STACKS_CONFIG_PATH", DEFAULT_STACKS_CONFIG_PATH))
+            Path(_env_or_default("STACKS_CONFIG_PATH", DEFAULT_STACKS_CONFIG_PATH))
         )
         return cls(
             projects_host_path=Path(raw_path),
-            workspace_image=os.environ.get("WORKSPACE_IMAGE", DEFAULT_WORKSPACE_IMAGE),
-            network_name=os.environ.get("WORKSPACE_NETWORK", DEFAULT_NETWORK_NAME),
-            mem_limit=os.environ.get("WORKSPACE_MEM_LIMIT", DEFAULT_MEM_LIMIT),
-            nano_cpus=int(os.environ.get("WORKSPACE_NANO_CPUS", str(DEFAULT_NANO_CPUS))),
+            workspace_image=_env_or_default("WORKSPACE_IMAGE", DEFAULT_WORKSPACE_IMAGE),
+            network_name=_env_or_default("WORKSPACE_NETWORK", DEFAULT_NETWORK_NAME),
+            mem_limit=_env_or_default("WORKSPACE_MEM_LIMIT", DEFAULT_MEM_LIMIT),
+            nano_cpus=int(_env_or_default("WORKSPACE_NANO_CPUS", str(DEFAULT_NANO_CPUS))),
             command_timeout_seconds=int(
-                os.environ.get(
+                _env_or_default(
                     "WORKSPACE_COMMAND_TIMEOUT_SECONDS", str(DEFAULT_COMMAND_TIMEOUT_SECONDS)
                 )
             ),
             stacks=stacks,
         )
+
+
+def _env_or_default(key: str, default: str) -> str:
+    """Reads an environment variable, treating both "unset" and "" as absent.
+
+    os.environ.get(key, default) only falls back to default when key is
+    entirely absent from the environment -- a variable explicitly set to the
+    empty string (common with docker-compose env-var interpolation of an
+    unset host variable) passes straight through as "", which then breaks
+    int()-parsed settings like WORKSPACE_NANO_CPUS with a raw ValueError
+    instead of the documented "falls back to the default" behavior.
+
+    Args:
+        key: The environment variable's name.
+        default: The value to use when key is unset or set to "".
+
+    Returns:
+        The environment variable's value, or default.
+    """
+    value = os.environ.get(key)
+    return value if value else default
 
 
 def image_for_stack(stack: str, config: "ExecutorConfig") -> str:
