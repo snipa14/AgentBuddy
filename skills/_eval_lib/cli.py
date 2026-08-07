@@ -1,16 +1,20 @@
 """Runs every eval case for one skill directory and reports pass/fail."""
 
-import re
 from pathlib import Path
 
 from skills._eval_lib.cases_schema import load_cases
 from skills._eval_lib.harness import CompleteFn, run_case
-
-FRONTMATTER_PATTERN = re.compile(r"^---\n.*?\n---\n", re.DOTALL)
+from skills.loader import load_skill_from_path
 
 
 def load_skill_body(skill_md_path: Path) -> str:
     """Strips the YAML frontmatter from a SKILL.md file, returning its body.
+
+    Delegates to `skills.loader.load_skill_from_path` so eval runs and the
+    production agent prompts built by `skills.loader.load_skill` share one
+    frontmatter parser -- a malformed or missing frontmatter block fails
+    the eval loudly instead of silently shipping the raw frontmatter as
+    part of the system prompt sent to the model under test.
 
     Args:
         skill_md_path: Path to a SKILL.md file.
@@ -18,9 +22,11 @@ def load_skill_body(skill_md_path: Path) -> str:
     Returns:
         The file's content with the leading `---`-delimited frontmatter
         block removed.
+
+    Raises:
+        ValueError: If the file has no valid frontmatter block.
     """
-    text = skill_md_path.read_text()
-    return FRONTMATTER_PATTERN.sub("", text, count=1)
+    return load_skill_from_path(skill_md_path).body
 
 
 def run_skill_eval(skill_dir: Path, complete_fn: CompleteFn) -> int:
