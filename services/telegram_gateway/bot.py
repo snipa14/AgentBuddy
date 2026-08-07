@@ -64,6 +64,27 @@ def _start_poller_from_response(poller: ProgressPoller, response, chat_id: int) 
         poller.start(project_id, chat_id)
 
 
+async def _answer_server_error(message: Message) -> None:
+    """Tells the user the Orchestrator returned a >=500 response.
+
+    A 5xx means the Orchestrator hit an uncaught exception (e.g. a graph
+    node crash, a provider error mid-tool-call) rather than returning the
+    normal JSON body its caller expects; FastAPI's default error body for
+    that isn't JSON at all, so every call site that reads a JSON field off
+    an Orchestrator response must check for this before calling
+    response.json(), or that call raises an unhandled JSONDecodeError
+    instead of telling the user anything.
+
+    Args:
+        message: The incoming message to reply to.
+    """
+    await message.answer(
+        "The Orchestrator hit an internal error handling that -- check its "
+        "logs. The project may be stuck at the same point; /continue can "
+        "retry it."
+    )
+
+
 async def _relay_webhook_result(message: Message, response) -> None:
     """Renders a webhook response: an explicit hint if the text wasn't
     applied to any project, an Approve/Reject/Edit or Reply keyboard if the
@@ -81,11 +102,7 @@ async def _relay_webhook_result(message: Message, response) -> None:
         response: The httpx.Response returned by OrchestratorClient.send_webhook.
     """
     if response.status_code >= 500:
-        await message.answer(
-            "The Orchestrator hit an internal error handling that -- check its "
-            "logs. The project may be stuck at the same point; /continue can "
-            "retry it."
-        )
+        await _answer_server_error(message)
         return
     body = response.json()
     if body.get("text_applied") is False:
@@ -151,12 +168,17 @@ async def handle_status(message: Message, orchestrator: OrchestratorClient) -> N
     """Reports one project's phase via GET /status/{project_id}.
 
     `/status <project_id>` looks that project up; a bare `/status` lists the
-    known project ids to pick from instead of guessing.
+    known project ids to pick from instead of guessing. Either lookup can
+    return a >=500 from the Orchestrator (see _answer_server_error), in
+    which case there's no JSON body to read a field out of.
     """
     parts = (message.text or "").split(maxsplit=1)
     project_id = parts[1].strip() if len(parts) > 1 else ""
     if not project_id:
         projects_response = await orchestrator.get_projects()
+        if projects_response.status_code >= 500:
+            await _answer_server_error(message)
+            return
         project_ids = projects_response.json().get("project_ids", [])
         await message.answer(
             "Usage: /status <project_id>\n" + render_project_list(project_ids)
@@ -166,6 +188,9 @@ async def handle_status(message: Message, orchestrator: OrchestratorClient) -> N
     response = await orchestrator.get_status(project_id)
     if response.status_code == 404:
         await message.answer(f"Unknown project '{project_id}'. Try /projects.")
+        return
+    if response.status_code >= 500:
+        await _answer_server_error(message)
         return
     await message.answer(render_project_status(response.json()))
 
@@ -203,8 +228,15 @@ async def handle_continue(message: Message, orchestrator: OrchestratorClient) ->
 
 @router.message(Command("projects"))
 async def handle_projects(message: Message, orchestrator: OrchestratorClient) -> None:
-    """Lists every known project id via GET /projects."""
+    """Lists every known project id via GET /projects.
+
+    A >=500 from the Orchestrator has no JSON body in the expected shape
+    (see _answer_server_error).
+    """
     response = await orchestrator.get_projects()
+    if response.status_code >= 500:
+        await _answer_server_error(message)
+        return
     await message.answer(render_project_list(response.json().get("project_ids", [])))
 
 
@@ -279,18 +311,26 @@ async def handle_reply_callback(callback: CallbackQuery, orchestrator: Orchestra
     is too old" crash fixed in handle_approval_callback applies here too if
     an old Reply button gets tapped on a project that's since moved past its
     interview into a long-running implementation.
+
+    A stale Reply button can also be tapped on a project that's since been
+    deleted or renamed; activate() 404s for that the same way it does in
+    handle_continue, and this must not fall through to the ForceReply prompt
+    with nothing valid left to receive the reply.
     """
     _, project_id = callback.data.split(":", 1)
     await callback.answer()
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=None)
     try:
-        await orchestrator.activate(project_id)
+        response = await orchestrator.activate(project_id)
     except httpx.TimeoutException:
         if callback.message is not None:
             await _answer_timeout_hint(callback.message)
         return
     if callback.message is None:
+        return
+    if response.status_code == 404:
+        await callback.message.answer(f"Unknown project '{project_id}'. Try /projects.")
         return
     await callback.message.answer(
         "Type your answer:", reply_markup=ForceReply(selective=True)

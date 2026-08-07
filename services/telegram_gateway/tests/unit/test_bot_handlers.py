@@ -148,6 +148,38 @@ def test_handle_status_without_argument_lists_projects(message, orchestrator):
     assert "proj-1" in text and "proj-2" in text
 
 
+def test_handle_status_without_argument_shows_a_hint_on_server_error(message, orchestrator):
+    """get_projects() can 5xx just like the webhook can -- FastAPI's default
+    error body for that isn't the {"project_ids": [...]} shape this branch
+    expects, so calling response.json() on it must not be allowed to raise
+    (see _relay_webhook_result's matching >=500 guard)."""
+    message.text = "/status"
+    response = MagicMock()
+    response.status_code = 500
+    response.json.side_effect = ValueError("not JSON")
+    orchestrator.get_projects = AsyncMock(return_value=response)
+
+    asyncio.run(handle_status(message, orchestrator))
+
+    message.answer.assert_awaited_once()
+    response.json.assert_not_called()
+
+
+def test_handle_status_shows_a_hint_on_server_error(message, orchestrator):
+    """get_status() can 5xx too -- the final response.json() call must be
+    guarded the same way the 404 branch already is."""
+    message.text = "/status proj-1"
+    response = MagicMock()
+    response.status_code = 500
+    response.json.side_effect = ValueError("not JSON")
+    orchestrator.get_status = AsyncMock(return_value=response)
+
+    asyncio.run(handle_status(message, orchestrator))
+
+    message.answer.assert_awaited_once()
+    response.json.assert_not_called()
+
+
 def test_handle_continue_without_argument_shows_usage(message, orchestrator):
     message.text = "/continue"
     orchestrator.activate = AsyncMock()
@@ -246,6 +278,20 @@ def test_handle_projects_hints_new_when_empty(message, orchestrator):
     message.answer.assert_awaited_once_with(
         "No projects yet. Send /new <description> to start one."
     )
+
+
+def test_handle_projects_shows_a_hint_on_server_error(message, orchestrator):
+    """get_projects() can 5xx -- must not raise on response.json()."""
+    message.text = "/projects"
+    response = MagicMock()
+    response.status_code = 500
+    response.json.side_effect = ValueError("not JSON")
+    orchestrator.get_projects = AsyncMock(return_value=response)
+
+    asyncio.run(handle_projects(message, orchestrator))
+
+    message.answer.assert_awaited_once()
+    response.json.assert_not_called()
 
 
 def test_handle_free_text_forwards_to_orchestrator(message, orchestrator, poller):
@@ -540,6 +586,19 @@ def test_handle_reply_callback_acknowledges_and_clears_keyboard_before_the_slow_
     asyncio.run(handle_reply_callback(callback, orchestrator))
 
     orchestrator.activate.assert_awaited_once_with("proj-1")
+
+
+def test_handle_reply_callback_reports_unknown_project_on_404(orchestrator):
+    """activate() can 404 the same way it does in handle_continue -- a stale
+    Reply button tapped on a project that's been deleted/renamed must not
+    silently show the ForceReply prompt with nothing valid to receive it."""
+    orchestrator.activate = AsyncMock(return_value=_status_response(status_code=404))
+    callback = _callback("reply:nope")
+
+    asyncio.run(handle_reply_callback(callback, orchestrator))
+
+    orchestrator.activate.assert_awaited_once_with("nope")
+    callback.message.answer.assert_awaited_once_with("Unknown project 'nope'. Try /projects.")
 
 
 def test_handle_reply_callback_shows_a_hint_when_the_activate_call_times_out(orchestrator):
