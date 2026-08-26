@@ -277,3 +277,24 @@ def test_command_exceeding_timeout_raises_and_leaves_no_orphaned_container(
         all=True, filters={"ancestor": executor_config.workspace_image}
     )
     assert leftover == []
+
+
+def test_run_command_fork_bomb_is_capped_and_leaves_no_orphaned_container(
+    docker_client, executor_config, project_id
+):
+    result = tool_run_command(
+        docker_client,
+        executor_config,
+        project_id,
+        ["bash", "-c", ":(){ :|:& };:"],
+        timeout=15,
+    )
+
+    # pids_limit prevents unlimited forking: bash reports EAGAIN/Resource unavailable errors
+    # or the command exits non-zero. Both cases prove the fork bomb was capped.
+    assert result.exit_code != 0 or "Resource temporarily unavailable" in result.stderr
+
+    leftover = docker_client.containers.list(
+        all=True, filters={"ancestor": executor_config.workspace_image}
+    )
+    assert leftover == []
