@@ -76,6 +76,27 @@ def test_render_has_no_unsubstituted_placeholders():
     assert "$" not in rendered
 
 
+def test_render_includes_cache_dir_setup_when_stack_declares_one():
+    stack = StackConfig(
+        image="foundry/workspace-python:3.12",
+        base_image="python:3.12-slim",
+        apt_packages=["build-essential", "git", "curl"],
+        pip_packages=["pytest", "pytest-cov", "playwright", "ruff"],
+        cache_dir="/home/sandbox/.cache/pip",
+    )
+    rendered = render_dockerfile("python", stack, TEMPLATE_PATH.read_text())
+    lines = instruction_lines(rendered)
+    assert (
+        "RUN mkdir -p /home/sandbox/.cache/pip "
+        "&& chown 1000:1000 /home/sandbox/.cache/pip"
+    ) in lines
+
+
+def test_render_omits_cache_dir_setup_when_stack_has_no_cache_dir():
+    rendered = render_dockerfile("python", _python_stack(), TEMPLATE_PATH.read_text())
+    assert "chown 1000:1000" not in rendered
+
+
 def test_instruction_lines_drops_comments_and_blanks():
     text = "# comment\n\nFROM x\n  \nRUN a \\\n    && b\n"
     assert instruction_lines(text) == ["FROM x", "RUN a && b"]

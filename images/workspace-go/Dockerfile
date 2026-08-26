@@ -36,5 +36,7 @@ RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 RUN groupadd --gid 1000 sandbox \
     && useradd --uid 1000 --gid sandbox --create-home --shell /usr/sbin/nologin sandbox
 
+RUN mkdir -p /home/sandbox/go/pkg/mod && chown 1000:1000 /home/sandbox/go/pkg/mod
+
 WORKDIR /workspace
 USER 1000:1000

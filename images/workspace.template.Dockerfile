@@ -28,5 +28,6 @@ $env_lines
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 $sandbox_user_block
+$cache_dir_setup
 WORKDIR /workspace
 USER 1000:1000

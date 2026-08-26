@@ -35,5 +35,7 @@ RUN groupmod --new-name sandbox node \
     && usermod --login sandbox --home /home/sandbox --move-home \
        --shell /usr/sbin/nologin node
 
+RUN mkdir -p /home/sandbox/.npm && chown 1000:1000 /home/sandbox/.npm
+
 WORKDIR /workspace
 USER 1000:1000

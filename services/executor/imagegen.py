@@ -26,6 +26,30 @@ _RENAME_SANDBOX_BLOCK = (
 )
 
 
+def _cache_dir_setup(cache_dir: str | None) -> str:
+    """Renders the build-time cache-directory ownership fix, or nothing.
+
+    A freshly created Docker named volume mounted over a path with no
+    existing content in the image is created root:root by the daemon,
+    regardless of the container's runtime --user. Pre-creating the
+    directory in the image with the sandbox UID/GID lets Docker seed the
+    volume's initial content (and ownership) from the image layer on first
+    mount instead, so the non-root sandbox user can write into its
+    package-manager cache from the very first container run.
+
+    Args:
+        cache_dir: The stack's cache directory, or None if it has no
+            per-project cache volume.
+
+    Returns:
+        A RUN instruction pre-creating and chowning cache_dir, or "" if
+        cache_dir is None.
+    """
+    if cache_dir is None:
+        return ""
+    return f"RUN mkdir -p {cache_dir} && chown 1000:1000 {cache_dir}\n"
+
+
 def render_dockerfile(stack_name: str, stack: StackConfig, template_text: str) -> str:
     """Renders one stack's Dockerfile from the shared template.
 
@@ -76,6 +100,7 @@ def render_dockerfile(stack_name: str, stack: StackConfig, template_text: str) -
         pip_packages=" ".join(stack.pip_packages),
         env_lines=env_lines,
         sandbox_user_block=sandbox_user_block,
+        cache_dir_setup=_cache_dir_setup(stack.cache_dir),
     )
     return _collapse_blank_runs(rendered)
 
