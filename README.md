@@ -1,10 +1,21 @@
-# Foundry
+<div align="center">
 
-![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
-![Docker Compose native](https://img.shields.io/badge/docker-compose--native-2496ED.svg)
+# 🔥 Foundry
 
-**Give it an idea. Get back reviewed, tested, merge-ready code.**
+### Give it an idea. Get back reviewed, tested, merge-ready code.
+
+![License: MIT](https://img.shields.io/badge/license-MIT-8A2BE2.svg?style=flat-square)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB.svg?style=flat-square&logo=python&logoColor=white)
+![Docker Compose native](https://img.shields.io/badge/docker-compose--native-2496ED.svg?style=flat-square&logo=docker&logoColor=white)
+![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-1C3C3C.svg?style=flat-square)
+![Status](https://img.shields.io/badge/phases-0--20%20of%2024%20done-orange.svg?style=flat-square)
+
+*A self-hosted multi-agent dev team that plans, builds, reviews, tests,*
+*and PRs your code — supervised from your phone.*
+
+</div>
+
+---
 
 Foundry is a self-hosted multi-agent development platform. Point it at a
 project idea — or an existing repo — and a team of agents interviews you
@@ -14,13 +25,13 @@ Telegram, from wherever you are. It runs entirely in Docker containers on
 hardware you own, with inference routed to a local GPU, a remote
 OpenAI-compatible server, or the Claude API — your call, per agent role.
 
-**Status:** Phases 0–20 of the build plan (see [`TODO.md`](TODO.md)) are
-complete and running — secrets/compose bootstrap, model routing, the
-Docker security boundary, the full agent lineup below, memory,
-multi-project concurrency, and packaged skills. Security hardening
-(Phase 21) is next.
+> **Status:** Phases 0–20 of the build plan (see [`TODO.md`](TODO.md)) are
+> complete and running — secrets/compose bootstrap, model routing, the
+> Docker security boundary, the full agent lineup below, memory,
+> multi-project concurrency, and packaged skills. Security hardening
+> (Phase 21) is next.
 
-## Why Foundry
+## 🧠 Why Foundry
 
 - **The LLM never touches infrastructure directly.** Agents call narrow,
   typed tools (`run_command`, `read_file`, `open_pr`); only the Executor
@@ -56,7 +67,7 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full design, decision log,
 and threat model, and [`TODO.md`](TODO.md) for the phased build plan this
 repo was built against.
 
-## The agent lineup
+## 🤖 The agent lineup
 
 Each role is a distinct pass over the work, not one model wearing
 different hats in the same context:
@@ -71,7 +82,7 @@ different hats in the same context:
 | **Memory Curator** | Extracts lessons from what just happened into per-project markdown and a global store other projects can recall from |
 | **Git/GitHub Integrator** | Commits to feature branches autonomously, opens PRs per `pr_mode`, and always gates merge-to-`main` behind explicit human approval |
 
-## Architecture
+## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
@@ -111,7 +122,7 @@ Compose service. Workspace containers are short-lived and spawned per task
 by the Executor — they are not part of the static compose file. Full
 component breakdown in [`ARCHITECTURE.md` §4](ARCHITECTURE.md#4-components).
 
-## Try it in 5 minutes
+## 🚀 Try it in 5 minutes
 
 Requires Docker and Docker Compose. No Python/Node install needed on the
 host — everything runs in containers.
@@ -178,7 +189,7 @@ Useful commands while it's running:
 ./foundry down    # stop the stack
 ```
 
-### Running local instead of Claude API
+### 🖥️ Running local instead of Claude API
 
 To use a local model for roles that don't need Claude-tier reasoning:
 
@@ -200,20 +211,47 @@ To use a local model for roles that don't need Claude-tier reasoning:
   reference and ADR-048 in [`ARCHITECTURE.md`](ARCHITECTURE.md#10-decision-log)
   for the design rationale.
 
-> **Screenshot / demo clip:** coming soon — will show a real Telegram run
-> once one's been captured against a live deployment.
+```
+$ ./foundry --help
+Usage: foundry <command> [args]
 
-## Development
+Commands:
+  up            Start the Foundry stack (accepts --local-llm)
+  down          Stop the Foundry stack
+  status        Show status of Foundry services
+  new-project   Register a new project (greenfield or brownfield)
+  logs          Tail logs from Foundry services (accepts service names)
+
+  -h, --help    Show this help message
+```
+
+*(Real output from this repo's `./foundry` CLI — not staged.)*
+
+> **Demo GIF:** not yet recorded. [`scripts/demo.tape`](scripts/demo.tape)
+> is a [VHS](https://github.com/charmbracelet/vhs) script that captures a
+> real `up` → `status` run — no scripted fake conversation. Run
+> `vhs scripts/demo.tape` on a configured Foundry host to generate
+> `assets/demo.gif`.
+
+## 🧪 Development
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, test/lint commands,
 and branch/commit conventions, and [`SECURITY.md`](SECURITY.md) for the
 security model and how to report a vulnerability.
 
-## License
+## 📄 License
 
 [MIT](LICENSE)
 
-## Author
+## ✍️ Author
 
 Mate Balogh — [GitHub](https://github.com/snipa14) ·
 [LinkedIn](https://www.linkedin.com/in/mate-balogh-967b3214b/)
+
+---
+
+<div align="center">
+
+If Foundry's useful to you, a ⭐ on the repo helps others find it.
+
+</div>
