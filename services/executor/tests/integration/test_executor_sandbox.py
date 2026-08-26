@@ -13,13 +13,15 @@ Run with: pytest -m integration services/executor/tests/integration
 """
 
 import uuid
+from pathlib import Path
 
 import docker
 import pytest
 
-from services.executor.config import ExecutorConfig
+from services.executor.config import DEFAULT_STACKS_CONFIG_PATH, ExecutorConfig
 from services.executor.docker_client import build_docker_client
 from services.executor.errors import CommandTimeoutError
+from services.executor.stacks import load_stacks_config
 from services.executor.tools import tool_read_file, tool_run_command, tool_write_file
 
 WORKSPACE_IMAGE = "foundry/workspace-python:3.12"
@@ -67,6 +69,7 @@ def executor_config(tmp_path_factory, workspace_image, workspace_network):
         workspace_image=workspace_image,
         network_name=workspace_network,
         command_timeout_seconds=30,
+        stacks=load_stacks_config(Path(DEFAULT_STACKS_CONFIG_PATH)),
     )
 
 
