@@ -12,8 +12,11 @@ a local test run needs to route through).
 Run with: pytest -m integration services/executor/tests/integration
 """
 
+import os
+import shutil
 import uuid
 from pathlib import Path
+from typing import NamedTuple
 
 import docker
 import pytest
@@ -29,6 +32,70 @@ DOCKERFILE_DIR = "images/workspace-python"
 NODE_WORKSPACE_IMAGE = "foundry/workspace-node:20"
 NODE_DOCKERFILE_DIR = "images/workspace-node"
 TEST_NETWORK_NAME = "foundry_workspace_test"
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+HOST_WORKSPACE_ROOT = os.environ.get("FOUNDRY_TEST_HOST_WORKSPACE_ROOT")
+_DOOD_LOCAL_BASE = REPO_ROOT / ".pytest-dood-projects"
+
+
+class ProjectRoots(NamedTuple):
+    """Where this test process should read/write vs. where Docker should bind-mount from.
+
+    Attributes:
+        local: The path this pytest process can open()/mkdir() directly.
+        host: The path to hand to ExecutorConfig.projects_host_path -- what
+            the Docker daemon actually resolves bind-mount sources against.
+    """
+
+    local: Path
+    host: Path
+
+
+def _make_project_roots(tmp_path_factory) -> ProjectRoots:
+    """Builds a fresh projects-root pair for one test.
+
+    When FOUNDRY_TEST_HOST_WORKSPACE_ROOT is unset, this test process and
+    the Docker daemon share one filesystem (the common case: pytest running
+    directly on the same host as the daemon), so an ordinary pytest tmp dir
+    works as both paths.
+
+    When it is set, this test process runs inside a container that reaches
+    a *host* Docker daemon over a bind-mounted socket (Docker-outside-of-
+    Docker -- see SECURITY.md's "DooD detail", which documents the same
+    shape of problem for the Executor's own production deployment and
+    solves it with PROJECTS_HOST_PATH). FOUNDRY_TEST_HOST_WORKSPACE_ROOT is
+    that same idea applied to this test process: the host-side absolute
+    path this container's repo checkout is bind-mounted from. A tmp dir is
+    created under the repo root (so it's covered by that same bind mount)
+    and its host-side equivalent is derived by substituting the repo root
+    prefix.
+
+    Args:
+        tmp_path_factory: pytest's tmp_path_factory fixture.
+
+    Returns:
+        A ProjectRoots pair.
+    """
+    if not HOST_WORKSPACE_ROOT:
+        local = tmp_path_factory.mktemp("projects")
+        return ProjectRoots(local=local, host=local)
+    local = _DOOD_LOCAL_BASE / uuid.uuid4().hex[:8]
+    local.mkdir(parents=True)
+    host = Path(HOST_WORKSPACE_ROOT) / local.relative_to(REPO_ROOT)
+    return ProjectRoots(local=local, host=host)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_dood_local_projects_dir():
+    yield
+    if HOST_WORKSPACE_ROOT:
+        shutil.rmtree(_DOOD_LOCAL_BASE, ignore_errors=True)
+
+
+@pytest.fixture
+def project_roots(tmp_path_factory):
+    return _make_project_roots(tmp_path_factory)
+
 
 pytestmark = pytest.mark.integration
 
@@ -62,10 +129,9 @@ def workspace_network(docker_client):
 
 
 @pytest.fixture
-def executor_config(tmp_path_factory, workspace_image, workspace_network):
-    projects_root = tmp_path_factory.mktemp("projects")
+def executor_config(project_roots, workspace_image, workspace_network):
     return ExecutorConfig(
-        projects_host_path=projects_root,
+        projects_host_path=project_roots.host,
         workspace_image=workspace_image,
         network_name=workspace_network,
         command_timeout_seconds=30,
@@ -74,9 +140,9 @@ def executor_config(tmp_path_factory, workspace_image, workspace_network):
 
 
 @pytest.fixture
-def project_id(executor_config):
+def project_id(project_roots):
     new_project_id = f"proj-{uuid.uuid4().hex[:8]}"
-    (executor_config.projects_host_path / new_project_id).mkdir()
+    (project_roots.local / new_project_id).mkdir()
     return new_project_id
 
 
@@ -90,9 +156,9 @@ def node_workspace_image(docker_client):
 
 
 @pytest.fixture
-def node_project_id(executor_config, node_workspace_image):
+def node_project_id(project_roots, node_workspace_image):
     new_project_id = f"proj-{uuid.uuid4().hex[:8]}"
-    project_dir = executor_config.projects_host_path / new_project_id
+    project_dir = project_roots.local / new_project_id
     project_dir.mkdir()
     (project_dir / "package.json").write_text(
         '{"name": "sandbox-check", "version": "1.0.0",'
@@ -101,17 +167,19 @@ def node_project_id(executor_config, node_workspace_image):
     return new_project_id
 
 
-def test_write_file_round_trip_is_visible_on_the_host(docker_client, executor_config, project_id):
+def test_write_file_round_trip_is_visible_on_the_host(
+    docker_client, executor_config, project_roots, project_id
+):
     tool_write_file(docker_client, executor_config, project_id, "hello.txt", "hi from the sandbox")
 
-    host_file = executor_config.projects_host_path / project_id / "hello.txt"
+    host_file = project_roots.local / project_id / "hello.txt"
     assert host_file.read_text() == "hi from the sandbox"
 
 
 def test_read_file_returns_content_written_on_the_host(
-    docker_client, executor_config, project_id
+    docker_client, executor_config, project_roots, project_id
 ):
-    host_file = executor_config.projects_host_path / project_id / "existing.txt"
+    host_file = project_roots.local / project_id / "existing.txt"
     host_file.write_text("already here")
 
     content = tool_read_file(docker_client, executor_config, project_id, "existing.txt")
@@ -120,10 +188,10 @@ def test_read_file_returns_content_written_on_the_host(
 
 
 def test_run_command_cannot_read_a_sibling_projects_files(
-    docker_client, executor_config, project_id
+    docker_client, executor_config, project_roots, project_id
 ):
     other_project_id = f"proj-{uuid.uuid4().hex[:8]}"
-    other_dir = executor_config.projects_host_path / other_project_id
+    other_dir = project_roots.local / other_project_id
     other_dir.mkdir()
     (other_dir / "secret.txt").write_text("sibling project secret")
 
