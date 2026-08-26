@@ -15,10 +15,10 @@ outright when the CLI is missing, the fixtures below fall back to driving
 the same operations through the Docker SDK:
 
   - `running_proxy` parses docker-socket-proxy's actual service definition
-    (image, environment, volumes, restart policy) straight out of
-    docker-compose.yml with `yaml.safe_load` -- not a hand-retyped copy of
-    the whitelist -- and replays it via `containers.run`, so this still
-    proves the real production config holds, not a substitute one.
+    (image, environment, volumes) straight out of docker-compose.yml with
+    `yaml.safe_load` -- not a hand-retyped copy of the whitelist -- and
+    replays it via `containers.create`/`start`, so this still proves the
+    real production config holds, not a substitute one.
   - `proxy_reachable_from_this_process` replaces `docker network connect`
     with `Network.connect()`, registering this test process's own
     container under the `docker-socket-proxy` network alias that compose
