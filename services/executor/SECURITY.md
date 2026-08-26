@@ -84,3 +84,57 @@ mocked `docker.from_env()` for this). It covers:
   no orphaned container
 
 Run it with `pytest -m integration services/executor/tests/integration`.
+
+## Phase 21 hardening pass findings
+
+Deliberate attempts to break every boundary claim above, against a real
+Docker daemon:
+
+- **Path traversal out of the bind mount** -- already covered before this
+  pass, at both layers: `services/executor/tests/unit/test_paths.py`
+  (`resolve_project_path` rejects `..` segments and absolute-path escapes
+  before any Docker call happens) and
+  `test_run_command_cannot_read_a_sibling_projects_files` (a live
+  container genuinely cannot see a sibling project's directory, because
+  it was never mounted). Re-run and confirmed still green on this pass.
+- **Reaching docker.sock or a denied proxy endpoint directly** --
+  `test_run_command_cannot_reach_the_docker_socket` (already existing)
+  confirms a workspace container has no access to the raw socket.
+  `test_proxy_boundary.py` (new this pass) goes further and hits the real
+  docker-socket-proxy service directly: confirmed live against the real
+  docker-socket-proxy service from docker-compose.yml (not a mock):
+  `test_proxy_boundary.py` denies both a `NETWORKS` list call and a `BUILD`
+  image-build call with HTTP 403 through the proxy, while the whitelisted
+  `CONTAINERS` list call still succeeds -- proving the whitelist holds in
+  both directions, not just that everything happens to fail. This sandbox
+  has no `docker` CLI binary, so the test's fixtures use the Docker Python
+  SDK directly, parsing the real `docker-compose.yml`'s `docker-socket-proxy`
+  service block (image, environment, volumes) at test-run time rather than
+  hardcoding a second copy of the whitelist, so it stays accurate if that
+  file ever changes. One separate, real finding surfaced while building this
+  test: `docker-compose.yml`'s `foundry_internal` network has no explicit
+  `name:` override (unlike `foundry_workspace`, which already pins one for
+  exactly this reason), so under a real `docker compose up` with this repo's
+  `COMPOSE_PROJECT_NAME=foundry` (`.env`), Compose would create it as
+  `foundry_foundry_internal`, not literally `foundry_internal`. This doesn't
+  affect this test itself (its SDK-fallback path defines and uses its own
+  literal name, self-consistently), but is a real, pre-existing
+  `docker-compose.yml` gap worth its own follow-up fix: pin `name:
+  foundry_internal` on that network the same way `foundry_workspace` already
+  does.
+- **Fork bomb / resource exhaustion** -- found a real gap: every other
+  per-container resource (memory via `mem_limit`, CPU via `nano_cpus`,
+  capabilities via `cap_drop`) was capped, but process count was not. A
+  fork bomb was bounded by memory/CPU limits but could still exhaust the
+  **host's** shared PID table before either engaged. Fixed by adding
+  `pids_limit` (default 256, `WORKSPACE_PIDS_LIMIT`-configurable) to every
+  workspace container alongside the existing caps.
+  `test_run_command_fork_bomb_is_capped_and_leaves_no_orphaned_container`
+  proves the fix and that container cleanup still holds under this
+  specific abuse pattern.
+- **Secrets in logs** -- audited every logging call in
+  `services/executor/tools.py`: all of them log `project_id`,
+  `path`/`command`, or an exception's type -- never file contents or a
+  command's captured output.
+  `test_run_command_never_logs_literal_file_contents` makes this a
+  permanent regression test rather than a one-time grep.

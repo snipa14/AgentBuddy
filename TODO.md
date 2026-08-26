@@ -437,13 +437,15 @@ A validation pass found and fixed real defects beyond the shared `route_after_*`
 **Goal:** deliberately try to break the boundaries described in `ARCHITECTURE.md` §8 before calling v1 done.
 **Decisions:** ADR-005
 
-- [ ] Attempt to read a path outside the bind mount from inside a workspace container — confirm it fails
-- [ ] Attempt to reach `docker.sock` or a denied proxy endpoint (`BUILD`/`NETWORKS`/`VOLUMES`/`SWARM`/`SYSTEM`) directly — confirm denial
-- [ ] Attempt a fork bomb / resource exhaustion inside a workspace container — confirm CPU/memory limits cap it without affecting the Executor itself
-- [ ] Grep all logs from a full run for literal secret values — confirm none appear
-- [ ] Write findings into `services/executor/SECURITY.md`, including anything that didn't hold up the first time and how it was fixed
+- [x] Attempt to read a path outside the bind mount from inside a workspace container — confirm it fails
+- [x] Attempt to reach `docker.sock` or a denied proxy endpoint (`BUILD`/`NETWORKS`/`VOLUMES`/`SWARM`/`SYSTEM`) directly — confirm denial
+- [x] Attempt a fork bomb / resource exhaustion inside a workspace container — confirm CPU/memory limits cap it without affecting the Executor itself
+- [x] Grep all logs from a full run for literal secret values — confirm none appear
+- [x] Write findings into `services/executor/SECURITY.md`, including anything that didn't hold up the first time and how it was fixed
 
 **Definition of Done:** every attempted breakout fails as designed; the write-up exists regardless of outcome, including any accepted residual risk.
+
+**Verification status:** All five items attempted against a real Docker daemon (Docker-outside-of-Docker: this session's own container reached the host daemon over a bind-mounted socket). One real gap found and fixed: workspace containers had no process-count cap (`pids_limit`), now added. Full findings and the proxy-boundary test's actual pass/skip outcome are in `services/executor/SECURITY.md`'s "Phase 21 hardening pass findings" section.
 
 ---
 
