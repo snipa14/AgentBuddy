@@ -24,13 +24,9 @@ class and is never retried. Tool-calling is the structured-output mechanism
 every provider in this router supports reliably.
 """
 
-from typing import TypeVar
-
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel
-
-ResultT = TypeVar("ResultT", bound=BaseModel)
 
 STRUCTURED_OUTPUT_MAX_ATTEMPTS = 3
 """How many times invoke_structured tries before giving up when a provider
@@ -57,7 +53,7 @@ def _sum_usage(usages: list[dict | None]) -> dict | None:
     }
 
 
-async def invoke_structured(
+async def invoke_structured[ResultT: BaseModel](
     llm: BaseChatModel, schema: type[ResultT], messages: list[BaseMessage]
 ) -> tuple[ResultT, AIMessage]:
     """Invokes `llm` with a schema-forced structured response.

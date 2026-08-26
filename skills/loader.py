@@ -88,7 +88,7 @@ def load_skill_from_path(path: Path) -> SkillContent:
     )
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def load_skill(name: str) -> SkillContent:
     """Loads and caches `skills/<name>/SKILL.md`.
 

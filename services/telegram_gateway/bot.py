@@ -183,9 +183,7 @@ async def handle_status(message: Message, orchestrator: OrchestratorClient) -> N
             await _answer_server_error(message)
             return
         project_ids = projects_response.json().get("project_ids", [])
-        await message.answer(
-            "Usage: /status <project_id>\n" + render_project_list(project_ids)
-        )
+        await message.answer("Usage: /status <project_id>\n" + render_project_list(project_ids))
         return
 
     response = await orchestrator.get_status(project_id)
@@ -346,6 +344,4 @@ async def handle_reply_callback(callback: CallbackQuery, orchestrator: Orchestra
     if response.status_code >= 500:
         await _answer_server_error(callback.message)
         return
-    await callback.message.answer(
-        "Type your answer:", reply_markup=ForceReply(selective=True)
-    )
+    await callback.message.answer("Type your answer:", reply_markup=ForceReply(selective=True))

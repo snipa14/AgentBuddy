@@ -112,7 +112,8 @@ def _build_tools(executor_client: ExecutorClient, project_id: str, stack: str) -
 
     @tool
     async def write_file(path: str, content: str) -> str:
-        """Writes content to a file in the project workspace, creating parent directories as needed."""
+        """Writes content to a file in the project workspace, creating parent
+        directories as needed."""
         add_progress(project_id, f"→ write_file({path})")
         logger.info("project %s: write_file(%s)", project_id, path)
         try:
@@ -126,7 +127,8 @@ def _build_tools(executor_client: ExecutorClient, project_id: str, stack: str) -
 
     @tool
     async def run_command(command: list[str]) -> str:
-        """Runs a command inside the project workspace container, given as an argv list, e.g. ["pytest", "-q"]."""
+        """Runs a command inside the project workspace container, given as an
+        argv list, e.g. ["pytest", "-q"]."""
         command_text = " ".join(command)
         add_progress(project_id, f"→ run_command({command_text})")
         logger.info("project %s: run_command(%s)", project_id, command_text)
@@ -134,9 +136,7 @@ def _build_tools(executor_client: ExecutorClient, project_id: str, stack: str) -
             result = await executor_client.run_command(project_id, command, stack=stack)
         except ExecutorClientError as exc:
             add_progress(project_id, f"✗ run_command({command_text}) failed: {exc}")
-            logger.warning(
-                "project %s: run_command(%s) failed: %s", project_id, command_text, exc
-            )
+            logger.warning("project %s: run_command(%s) failed: %s", project_id, command_text, exc)
             return f"error: {exc}"
         add_progress(project_id, f"✓ {command_text} (exit {result.exit_code})")
         return f"exit_code={result.exit_code}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -288,7 +288,10 @@ async def run_coder_task(
                 except Exception as exc:
                     logger.warning(
                         "project %s: tool call %s(%s) raised before dispatch: %s",
-                        project_id, call["name"], call["args"], exc,
+                        project_id,
+                        call["name"],
+                        call["args"],
+                        exc,
                     )
                     observation = f"error: invalid arguments for {call['name']!r}: {exc}"
             transcript.append(f"{call['name']}({call['args']}) -> {observation}")

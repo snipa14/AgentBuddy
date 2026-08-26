@@ -78,9 +78,7 @@ def test_poll_once_edits_the_same_message_on_subsequent_chunks():
     asyncio.run(poller._poll_once("proj-1", chat_id=7))
 
     bot.send_message.assert_awaited_once_with(7, "hello ")
-    bot.edit_message_text.assert_awaited_once_with(
-        "hello \nworld", chat_id=7, message_id=99
-    )
+    bot.edit_message_text.assert_awaited_once_with("hello \nworld", chat_id=7, message_id=99)
 
 
 def test_poll_once_puts_each_event_from_one_fetch_on_its_own_line():
@@ -105,9 +103,7 @@ def test_poll_once_puts_each_event_from_one_fetch_on_its_own_line():
 
     asyncio.run(poller._poll_once("proj-1", chat_id=7))
 
-    bot.send_message.assert_awaited_once_with(
-        7, "🔧 write_file src/a.py\n✅ write_file src/a.py"
-    )
+    bot.send_message.assert_awaited_once_with(7, "🔧 write_file src/a.py\n✅ write_file src/a.py")
 
 
 def test_poll_once_never_requests_an_already_seen_chunk_again():

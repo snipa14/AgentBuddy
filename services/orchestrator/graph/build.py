@@ -31,8 +31,8 @@ from services.orchestrator.graph.nodes import (
     route_after_cost_check,
     route_after_cost_wait,
     route_after_frontend_review,
-    route_after_merge_wait,
     route_after_memory_curator,
+    route_after_merge_wait,
     route_after_plan_wait,
     route_after_planner_ask,
     route_after_replan_wait,
@@ -210,9 +210,7 @@ def build_project_graph(
         ),
     )
     builder.add_node("cost_wait", node_cost_wait)
-    builder.add_node(
-        "testing", functools.partial(node_testing, executor_client=executor_client)
-    )
+    builder.add_node("testing", functools.partial(node_testing, executor_client=executor_client))
     builder.add_node("merge_wait", node_merge_wait)
     builder.add_node("replan_wait", node_replan_wait)
     builder.add_node(
@@ -224,12 +222,12 @@ def build_project_graph(
             router=router,
         ),
     )
-    builder.add_node(
-        "done", functools.partial(node_done, executor_client=executor_client)
-    )
+    builder.add_node("done", functools.partial(node_done, executor_client=executor_client))
 
     plugins_by_slot: dict[str, list[LoadedPlugin]] = {
-        "after_coder": [], "after_reviewer": [], "after_tester": [],
+        "after_coder": [],
+        "after_reviewer": [],
+        "after_tester": [],
     }
     for plugin in plugins:
         plugins_by_slot[plugin.manifest.slot].append(plugin)

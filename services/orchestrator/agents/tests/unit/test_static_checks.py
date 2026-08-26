@@ -75,11 +75,7 @@ def test_all_checks_pass_returns_passed_outcome():
 def test_failing_check_captures_output():
     registry = _registry([StackCheck(command=["ruff", "check", "."])])
     client = _StubExecutorClient(
-        {
-            ("ruff", "check", "."): _StubCommandResult(
-                1, stdout="app.py:3:1: F821 undefined name"
-            )
-        }
+        {("ruff", "check", "."): _StubCommandResult(1, stdout="app.py:3:1: F821 undefined name")}
     )
     outcome = _run(client, registry=registry)
     assert not outcome.passed
@@ -109,9 +105,7 @@ def test_requires_file_absent_skips_without_running_check():
             )
         ]
     )
-    client = _StubExecutorClient(
-        {("test", "-f", "tsconfig.json"): _StubCommandResult(1)}
-    )
+    client = _StubExecutorClient({("test", "-f", "tsconfig.json"): _StubCommandResult(1)})
     outcome = _run(client, registry=registry)
     assert outcome.passed
     assert len(outcome.skipped) == 1
@@ -187,9 +181,7 @@ def test_infra_failure_probing_requires_file_records_failure_without_running_che
             )
         ]
     )
-    client = _StubExecutorClient(
-        {}, raises=frozenset({("test", "-f", "tsconfig.json")})
-    )
+    client = _StubExecutorClient({}, raises=frozenset({("test", "-f", "tsconfig.json")}))
     outcome = _run(client, registry=registry)
     assert not outcome.passed
     assert len(outcome.failures) == 1

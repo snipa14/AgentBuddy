@@ -48,9 +48,7 @@ def write_png(path: Path, width: int, height: int, rows: list[bytearray]) -> Non
     """Writes a minimal, uncompressed-filter RGB PNG using only stdlib zlib/struct."""
 
     def chunk(tag: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(
-            ">I", zlib.crc32(tag + data)
-        )
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
 
     raw = b"".join(b"\x00" + bytes(row) for row in rows)
     compressed = zlib.compress(raw, 9)

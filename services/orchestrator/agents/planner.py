@@ -21,7 +21,8 @@ LangGraph's own interrupt() semantics -- a node that calls an LLM before
 `interrupt()` would re-run that LLM call on every resume.
 """
 
-from typing import Callable, Literal
+from collections.abc import Callable
+from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel

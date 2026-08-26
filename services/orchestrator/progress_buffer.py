@@ -69,9 +69,7 @@ def get_chunks_since(project_id: str, since_seq: int = -1) -> list[ProgressChunk
     with _lock:
         chunks = _buffers.get(project_id, [])
         return [
-            ProgressChunk(seq=seq, text=text)
-            for seq, text in enumerate(chunks)
-            if seq > since_seq
+            ProgressChunk(seq=seq, text=text) for seq, text in enumerate(chunks) if seq > since_seq
         ]
 
 

@@ -32,9 +32,5 @@ def test_loader_matches_executor_copy_schema(tmp_path: Path):
 def test_both_copies_expose_identical_field_sets():
     from services.executor import stacks as executor_stacks
 
-    assert set(StackConfig.model_fields) == set(
-        executor_stacks.StackConfig.model_fields
-    )
-    assert set(StacksConfig.model_fields) == set(
-        executor_stacks.StacksConfig.model_fields
-    )
+    assert set(StackConfig.model_fields) == set(executor_stacks.StackConfig.model_fields)
+    assert set(StacksConfig.model_fields) == set(executor_stacks.StacksConfig.model_fields)

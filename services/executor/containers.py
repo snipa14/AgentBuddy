@@ -115,7 +115,8 @@ def workspace_container(
     volumes = {str(project_host_path): {"bind": WORKSPACE_MOUNT_TARGET, "mode": "rw"}}
     if stack_entry is not None and stack_entry.cache_dir is not None:
         volumes[cache_volume_name(project_id, stack)] = {
-            "bind": stack_entry.cache_dir, "mode": "rw",
+            "bind": stack_entry.cache_dir,
+            "mode": "rw",
         }
 
     container: Container | None = None
@@ -124,7 +125,9 @@ def workspace_container(
             image = image_for_stack(stack, config)
             logger.info(
                 "project %s: creating workspace container (stack=%s, image=%s)",
-                project_id, stack, image,
+                project_id,
+                stack,
+                image,
             )
             container = client.containers.create(
                 image,
@@ -140,9 +143,7 @@ def workspace_container(
                 pids_limit=config.pids_limit,
             )
             container.start()
-            logger.info(
-                "project %s: workspace container %s started", project_id, container.id[:12]
-            )
+            logger.info("project %s: workspace container %s started", project_id, container.id[:12])
         except (APIError, ImageNotFound) as exc:
             raise ContainerExecutionError(f"failed to start workspace container: {exc}") from exc
         if install_dependencies and stack_entry is not None:
@@ -248,9 +249,13 @@ def clear_project_cache_volume(
     if stack_entry is None or stack_entry.cache_dir is None:
         return
     cache_target = stack_entry.cache_dir
-    with workspace_container(client, config, project_host_path, stack=stack, project_id=project_id) as container:
+    with workspace_container(
+        client, config, project_host_path, stack=stack, project_id=project_id
+    ) as container:
         exec_in_container(
-            container, ["find", cache_target, "-mindepth", "1", "-delete"], config.command_timeout_seconds
+            container,
+            ["find", cache_target, "-mindepth", "1", "-delete"],
+            config.command_timeout_seconds,
         )
 
 
@@ -310,9 +315,7 @@ def exec_in_container(container: Container, command: list[str], timeout: int) ->
                     kill_exc,
                     exc_info=True,
                 )
-            raise CommandTimeoutError(
-                f"command timed out after {timeout}s: {command!r}"
-            ) from exc
+            raise CommandTimeoutError(f"command timed out after {timeout}s: {command!r}") from exc
         except APIError as exc:
             raise ContainerExecutionError(f"exec failed: {exc}") from exc
     finally:

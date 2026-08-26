@@ -31,9 +31,21 @@ dev = [
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+# ruff's formatter reformats fenced ```python blocks inside Markdown files
+# too -- fine for a README snippet, but docs/**/*.md's historical plan docs
+# use indented code fences deliberately (e.g. "paste this method into class
+# X"), and losing that indentation changes what the snippet means. Markdown
+# is documentation prose, not lint-checked source; exclude it outright.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# sys.path.insert must precede the services.* imports it enables -- this
+# operator CLI runs standalone (`python3 scripts/gen_workspace_images.py`),
+# not via `python -m`, so it has no package context otherwise.
+"scripts/gen_workspace_images.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["services", "skills"]

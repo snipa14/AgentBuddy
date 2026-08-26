@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from skills.loader import SkillContent, load_skill, load_skill_from_path
+from skills.loader import load_skill, load_skill_from_path
 
 
 def test_load_skill_reads_existing_skill():

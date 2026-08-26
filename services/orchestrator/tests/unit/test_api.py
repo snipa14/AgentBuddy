@@ -81,9 +81,7 @@ def test_webhook_creates_a_new_project_and_pauses_at_plan_approval(client):
 
 
 def test_webhook_rejects_a_path_traversal_project_id_with_400(client):
-    response = client.post(
-        "/webhook", json={"user_id": 1, "text": "hi", "project_id": "../../etc"}
-    )
+    response = client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "../../etc"})
 
     assert response.status_code == 400
 

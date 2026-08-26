@@ -18,7 +18,6 @@ from services.orchestrator.graph.tests.unit.planner_fakes import fast_track_rout
 from services.orchestrator.integrator_client import IntegratorClient
 from services.orchestrator.stacks import StacksConfig
 
-
 # -- Recording executor client (real ExecutorClient.run_command contract: an
 #    argv list in, a CommandResult out -- see integrator_client.py's module
 #    docstring for why this matters) ----------------------------------------

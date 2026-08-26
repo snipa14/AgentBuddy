@@ -10,8 +10,8 @@ The real wiring lives in `services.orchestrator.registry.cli`.
 
 import os
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from services.orchestrator.memory.project_memory import (
     MEMORY_FILENAMES,
@@ -271,9 +271,7 @@ def _validate_git_remote(git_remote: str) -> None:
     """
     lowered = git_remote.strip().lower()
     if lowered.startswith(_DISALLOWED_GIT_REMOTE_PREFIXES):
-        raise BrownfieldSourceError(
-            f"git_remote {git_remote!r} uses a disallowed transport"
-        )
+        raise BrownfieldSourceError(f"git_remote {git_remote!r} uses a disallowed transport")
 
 
 def _ensure_registrable(registry_path: Path, project_id: str) -> list[ProjectRecord]:

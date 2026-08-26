@@ -19,7 +19,7 @@ from services.orchestrator.plugins.manifest import PluginManifest
 from skills.loader import load_skill_from_path
 
 if TYPE_CHECKING:
-    from services.orchestrator.model_router.config import ModelsConfig, RoleConfig
+    from services.orchestrator.model_router.config import ModelsConfig
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,8 @@ def _reject_role_collisions(
             logger.warning(
                 "plugin '%s': role '%s' collides with a built-in role or an "
                 "already-accepted plugin, skipping",
-                plugin.manifest.name, plugin.manifest.role,
+                plugin.manifest.name,
+                plugin.manifest.role,
             )
             continue
         if plugin.manifest.name in claimed_names:

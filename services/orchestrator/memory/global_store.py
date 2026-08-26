@@ -169,9 +169,7 @@ def recall_for_task(
         enrichment, not a dependency).
     """
     tokens = list(
-        dict.fromkeys(
-            token.lower() for token in _RECALL_TOKEN_RE.findall(task_description)
-        )
+        dict.fromkeys(token.lower() for token in _RECALL_TOKEN_RE.findall(task_description))
     )[:_MAX_RECALL_TOKENS]
     if not tokens:
         return []

@@ -79,9 +79,7 @@ def test_write_file_returns_ok():
 
 def test_list_files_parses_entries():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, json={"entries": [{"name": "a.txt", "is_dir": False}]}
-        )
+        return httpx.Response(200, json={"entries": [{"name": "a.txt", "is_dir": False}]})
 
     client = _client_with(handler)
 

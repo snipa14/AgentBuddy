@@ -25,21 +25,30 @@ from services.orchestrator.executor_client import FileEntry, ScreenshotResult
 class RecordingExecutorClient:
     """Fakes ExecutorClient, recording every call made to it."""
 
-    def __init__(self, files: list[str] | None = None, screenshots: list[ScreenshotResult] | None = None):
+    def __init__(
+        self, files: list[str] | None = None, screenshots: list[ScreenshotResult] | None = None
+    ):
         self.files = [FileEntry(name=f, is_dir=False) for f in (files or [])]
         self.screenshots = screenshots or [ScreenshotResult(image_b64="iVBORw0KGgo=", error=None)]
         self.calls: list[tuple] = []
 
-    async def list_files(self, project_id: str, path: str = ".", stack: str = "python") -> list[FileEntry]:
+    async def list_files(
+        self, project_id: str, path: str = ".", stack: str = "python"
+    ) -> list[FileEntry]:
         self.calls.append(("list_files", project_id, path))
         return self.files
 
     async def take_screenshot(self, project_id, url="http://localhost:5173", **kwargs):
         self.calls.append(("take_screenshot", project_id, url, kwargs))
-        return self.screenshots.pop(0) if self.screenshots else ScreenshotResult(image_b64="", error="no screenshots")
+        return (
+            self.screenshots.pop(0)
+            if self.screenshots
+            else ScreenshotResult(image_b64="", error="no screenshots")
+        )
 
 
 # -- _has_frontend_files tests ---------------------------------------------------
+
 
 def test_has_frontend_files_detects_html():
     executor = RecordingExecutorClient(files=["index.html", "main.py"])
@@ -193,6 +202,7 @@ def test_review_frontend_system_prompt_clarifies_no_clean_category_findings():
 
 
 # -- _build_findings_text tests ----------------------------------------------------
+
 
 def test_build_findings_text_formats_single_finding():
     findings = [{"line": 42, "severity": "critical", "message": "broken layout"}]

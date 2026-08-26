@@ -118,9 +118,7 @@ async def _run_or_record_infra_failure(
     try:
         return await executor_client.run_command(project_id, argv, stack=stack)
     except (ExecutorClientError, httpx.RequestError) as exc:
-        logger.warning(
-            "project %s: executor infra failure %s: %s", project_id, context, exc
-        )
+        logger.warning("project %s: executor infra failure %s: %s", project_id, context, exc)
         outcome.failures.append(
             StaticCheckFailure(
                 command=list(record_command),
@@ -184,10 +182,7 @@ async def run_static_checks(
             if probe is None:
                 continue
             if probe.exit_code != 0:
-                outcome.skipped.append(
-                    f"{rendered} -- requires {check.requires_file}, "
-                    "not present"
-                )
+                outcome.skipped.append(f"{rendered} -- requires {check.requires_file}, not present")
                 logger.info(
                     "project %s: skipping %s (%s absent)",
                     project_id,
@@ -209,12 +204,8 @@ async def run_static_checks(
             continue
 
         if result.exit_code in TOOL_MISSING_EXIT_CODES:
-            outcome.skipped.append(
-                f"{rendered} -- tool missing (exit {result.exit_code})"
-            )
-            logger.info(
-                "project %s: skipping %s (tool missing)", project_id, rendered
-            )
+            outcome.skipped.append(f"{rendered} -- tool missing (exit {result.exit_code})")
+            logger.info("project %s: skipping %s (tool missing)", project_id, rendered)
             continue
 
         outcome.ran.append(list(check.command))

@@ -204,8 +204,7 @@ def node_project_id(project_roots, node_workspace_image, docker_client):
     project_dir.mkdir()
     _chown_to_workspace_uid_if_root(project_dir)
     (project_dir / "package.json").write_text(
-        '{"name": "sandbox-check", "version": "1.0.0",'
-        ' "dependencies": {"left-pad": "1.3.0"}}'
+        '{"name": "sandbox-check", "version": "1.0.0", "dependencies": {"left-pad": "1.3.0"}}'
     )
     yield new_project_id
     try:

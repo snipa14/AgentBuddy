@@ -44,9 +44,7 @@ def render_approval(pending_approval: dict[str, Any]) -> tuple[str, InlineKeyboa
                 InlineKeyboardButton(
                     text="Approve", callback_data=f"{CALLBACK_APPROVE}:{thread_id}"
                 ),
-                InlineKeyboardButton(
-                    text="Reject", callback_data=f"{CALLBACK_REJECT}:{thread_id}"
-                ),
+                InlineKeyboardButton(text="Reject", callback_data=f"{CALLBACK_REJECT}:{thread_id}"),
                 InlineKeyboardButton(text="Edit", callback_data=f"{CALLBACK_EDIT}:{thread_id}"),
             ]
         ]
@@ -100,9 +98,7 @@ def render_task_progress(task_progress: dict[str, Any]) -> str:
         second line, since a blocked task means the phase has actually halted.
     """
     lines = [f"{task_progress['done']}/{task_progress['total']} tasks done"]
-    blocked = next(
-        (task for task in task_progress["tasks"] if task["status"] == "blocked"), None
-    )
+    blocked = next((task for task in task_progress["tasks"] if task["status"] == "blocked"), None)
     active = next(
         (task for task in task_progress["tasks"] if task["status"] == "in_progress"), None
     )

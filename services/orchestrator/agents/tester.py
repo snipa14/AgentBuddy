@@ -36,8 +36,7 @@ class TestOutcome(BaseModel):
     report: str
     gate_mode: str = Field(description="'hard', 'soft', or 'configurable'")
     verdict: str = Field(
-        description="'pass' if tests pass and coverage meets threshold; "
-        "'fail' otherwise"
+        description="'pass' if tests pass and coverage meets threshold; 'fail' otherwise"
     )
 
 
@@ -181,7 +180,8 @@ def _evaluate_gate(
         if gate_mode == "soft":
             logger.warning(
                 "coverage %.1f%% below threshold %d%% (soft mode)",
-                coverage_pct, threshold,
+                coverage_pct,
+                threshold,
             )
             return TestOutcome(
                 passed=passed,
@@ -195,7 +195,9 @@ def _evaluate_gate(
         # hard or configurable — fail below threshold
         logger.info(
             "coverage %.1f%% below threshold %d%% (%s mode)",
-            coverage_pct, threshold, gate_mode,
+            coverage_pct,
+            threshold,
+            gate_mode,
         )
         return TestOutcome(
             passed=passed,
@@ -266,9 +268,7 @@ async def run_tests(
         gate_mode=gate_mode,
     )
     if result.report:
-        outcome.report = (
-            f"{outcome.report}\n\n{result.report}" if outcome.report else result.report
-        )
+        outcome.report = f"{outcome.report}\n\n{result.report}" if outcome.report else result.report
 
     logger.info(
         "project %s: tests %d passed, %d failed, coverage %.1f%% (verdict=%s)",

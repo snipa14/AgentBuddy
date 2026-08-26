@@ -82,7 +82,8 @@ def _has_frontend_files(
     except Exception as exc:
         logger.warning(
             "project %s: failed to list files while checking for frontend files: %s",
-            project_id, exc,
+            project_id,
+            exc,
         )
         return False
     return any(Path(e.name).suffix.lower() in _FRONTEND_EXTENSIONS for e in entries)
@@ -170,7 +171,8 @@ async def review_frontend(
     content_blocks: list[dict] = [
         {
             "type": "text",
-            "text": "Screenshots attached, in order: " + ", ".join(label for label, _ in screenshots),
+            "text": "Screenshots attached, in order: "
+            + ", ".join(label for label, _ in screenshots),
         }
     ]
     for _, image_b64 in screenshots:
@@ -192,7 +194,9 @@ async def review_frontend(
     findings = [finding.model_dump() for finding in result.findings]
     logger.info(
         "project %s: frontend review verdict=%s, findings=%d",
-        project_id, result.verdict, len(findings),
+        project_id,
+        result.verdict,
+        len(findings),
     )
     return result.verdict, findings, ai_message
 

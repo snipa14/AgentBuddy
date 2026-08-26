@@ -35,8 +35,7 @@ TERMINAL_PHASES = frozenset({"done", "blocked"})
 TELEGRAM_MESSAGE_LIMIT = 4096
 _TRUNCATION_MARKER = "... [truncated -- showing latest progress] ...\n"
 _GIVE_UP_MESSAGE = (
-    "⚠️ Lost track of this project -- no updates in a while. "
-    "Check /status or /continue."
+    "⚠️ Lost track of this project -- no updates in a while. Check /status or /continue."
 )
 
 
@@ -76,9 +75,7 @@ def _terminal_message(phase: str, task_progress: dict | None = None) -> str:
     if phase == "done":
         return "✅ project done"
     tasks = (task_progress or {}).get("tasks") or []
-    reasons = [
-        task["description"] for task in tasks if task.get("status") == "blocked"
-    ]
+    reasons = [task["description"] for task in tasks if task.get("status") == "blocked"]
     if not reasons:
         return "🚫 project blocked"
     return f"🚫 project blocked: {'; '.join(reasons)}"

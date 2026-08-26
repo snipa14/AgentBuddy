@@ -98,8 +98,8 @@ from services.orchestrator.agents.tester import run_tests
 from services.orchestrator.executor_client import ExecutorClient
 from services.orchestrator.graph.cost_aggregator import other_projects_cost_usd_weekly
 from services.orchestrator.graph.state import ProjectState
-from services.orchestrator.memory.global_store import GlobalMemoryConnection, recall_for_task
 from services.orchestrator.integrator_client import IntegratorClient
+from services.orchestrator.memory.global_store import GlobalMemoryConnection, recall_for_task
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.progress_buffer import add_progress
 from services.orchestrator.stacks import StacksConfig
@@ -133,12 +133,9 @@ def _task_progress_lines(task_queue: list[dict], recent_done_limit: int = 10) ->
     forever."""
     done_indices = [i for i, task in enumerate(task_queue) if task["status"] == "done"]
     keep_done = set(done_indices[-recent_done_limit:])
-    kept = [
-        task for i, task in enumerate(task_queue) if task["status"] != "done" or i in keep_done
-    ]
+    kept = [task for i, task in enumerate(task_queue) if task["status"] != "done" or i in keep_done]
     return [
-        f"[{task['status']}] {task['description']} (attempts: {task['attempts']})"
-        for task in kept
+        f"[{task['status']}] {task['description']} (attempts: {task['attempts']})" for task in kept
     ]
 
 
@@ -372,9 +369,7 @@ def node_coder(
 
     active_task = {**task_queue[active_index], "status": "in_progress"}
     recalled_lessons = (
-        recall_for_task(memory_conn, active_task["description"])
-        if memory_conn is not None
-        else []
+        recall_for_task(memory_conn, active_task["description"]) if memory_conn is not None else []
     )
     result = asyncio.run(
         run_coder_task(
@@ -392,9 +387,7 @@ def node_coder(
         active_task["status"] = "done"
         new_queue = _replace_task(task_queue, active_index, active_task)
         remaining = sum(1 for task in new_queue if task["status"] in ("pending", "in_progress"))
-        logger.info(
-            "project %s: task succeeded, %d remaining", state["project_id"], remaining
-        )
+        logger.info("project %s: task succeeded, %d remaining", state["project_id"], remaining)
         add_progress(state["project_id"], f"✓ task succeeded ({remaining} remaining)")
         return _with_cost(
             state,
@@ -413,15 +406,15 @@ def node_coder(
         if state["replan_count"] < MAX_REPLANS:
             logger.warning(
                 "project %s: task exhausted %d attempts, proposing replan",
-                state["project_id"], active_task["attempts"],
+                state["project_id"],
+                active_task["attempts"],
             )
             add_progress(
                 state["project_id"],
                 f"↻ task exhausted {active_task['attempts']} attempts, proposing replan",
             )
             reason = (
-                f"task {active_task['description']!r} failed "
-                f"{active_task['attempts']} attempts"
+                f"task {active_task['description']!r} failed {active_task['attempts']} attempts"
             )
             return _with_cost(
                 state,
@@ -436,7 +429,8 @@ def node_coder(
             )
         logger.warning(
             "project %s: task exhausted %d attempts at replan cap, blocking",
-            state["project_id"], active_task["attempts"],
+            state["project_id"],
+            active_task["attempts"],
         )
         add_progress(
             state["project_id"], f"✗ task blocked after {active_task['attempts']} attempts"
@@ -457,9 +451,7 @@ def node_coder(
         state["project_id"],
         active_task["attempts"],
     )
-    add_progress(
-        state["project_id"], f"↻ task attempt {active_task['attempts']} failed, retrying"
-    )
+    add_progress(state["project_id"], f"↻ task attempt {active_task['attempts']} failed, retrying")
     new_queue = _replace_task(task_queue, active_index, active_task)
     return _with_cost(
         state,
@@ -563,7 +555,9 @@ def node_static_checks(
     if outcome.passed:
         logger.info(
             "project %s: static checks passed (%d ran, %d skipped)",
-            state["project_id"], len(outcome.ran), len(outcome.skipped),
+            state["project_id"],
+            len(outcome.ran),
+            len(outcome.skipped),
         )
         return {}
 
@@ -578,7 +572,8 @@ def node_static_checks(
     if update["phase"] != "blocked":
         logger.info(
             "project %s: static checks failed (%d finding set(s)), reopening task",
-            state["project_id"], len(outcome.failures),
+            state["project_id"],
+            len(outcome.failures),
         )
     elif "task_queue" not in update:
         logger.warning(
@@ -589,7 +584,8 @@ def node_static_checks(
         blocked_task = next(t for t in update["task_queue"] if t["status"] == "blocked")
         logger.warning(
             "project %s: static checks exhausted %d attempts, blocking",
-            state["project_id"], blocked_task["attempts"],
+            state["project_id"],
+            blocked_task["attempts"],
         )
     return update
 
@@ -617,7 +613,9 @@ def route_after_testing(state: ProjectState) -> str:
     return "after_tester"
 
 
-def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: ExecutorClient) -> dict[str, Any]:
+def node_reviewer(
+    state: ProjectState, router: ModelRouter, executor_client: ExecutorClient
+) -> dict[str, Any]:
     """Reviews project files after the Coder finishes implementing.
 
     Reads only changed files (from state["changed_files"]) when populated,
@@ -650,16 +648,15 @@ def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: Exe
     if result.replan_needed and state["replan_count"] < MAX_REPLANS:
         logger.warning(
             "project %s: reviewer proposes replan: %s",
-            state["project_id"], result.replan_reason,
+            state["project_id"],
+            result.replan_reason,
         )
         return _with_cost(
             state,
             {
                 "phase": "awaiting_replan_approval",
                 "curator_source": "reviewer",
-                "pending_approval": _replan_payload(
-                    state, result.replan_reason, "reviewer"
-                ),
+                "pending_approval": _replan_payload(state, result.replan_reason, "reviewer"),
             },
             cost,
         )
@@ -674,7 +671,9 @@ def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: Exe
                 "findings": list(result.findings)
                 + [
                     ReviewFinding(
-                        file="(plan)", line=0, severity="critical",
+                        file="(plan)",
+                        line=0,
+                        severity="critical",
                         message=f"replan cap reached: {result.replan_reason}",
                     )
                 ],
@@ -684,7 +683,8 @@ def node_reviewer(state: ProjectState, router: ModelRouter, executor_client: Exe
     if result.verdict == "changes-requested":
         logger.info(
             "project %s: reviewer requested changes (%d finding(s))",
-            state["project_id"], len(result.findings),
+            state["project_id"],
+            len(result.findings),
         )
         findings_text = "\n".join(
             f"- {f.file}:{f.line} [{f.severity}] {f.message}" for f in result.findings
@@ -736,7 +736,8 @@ def node_frontend_review(
     if result_verdict == "changes-requested" and findings:
         logger.info(
             "project %s: frontend reviewer requested changes (%d finding(s))",
-            state["project_id"], len(findings),
+            state["project_id"],
+            len(findings),
         )
         findings_text = _build_findings_text(findings)
         return _with_cost(
@@ -759,9 +760,7 @@ def route_after_frontend_review(state: ProjectState) -> str:
     return "cost_check"
 
 
-def node_cost_check(
-    state: ProjectState, checkpointer: Any, threshold_usd: float
-) -> dict[str, Any]:
+def node_cost_check(state: ProjectState, checkpointer: Any, threshold_usd: float) -> dict[str, Any]:
     """Trips the cost-threshold gate if the *global* weekly total is at or above threshold_usd.
 
     The gate is global, not per-project (TODO.md Phase 18, ADR-009): sums
@@ -1029,7 +1028,10 @@ def node_done(
         success, detail = asyncio.run(
             integrator.create_pull_request(
                 title=f"Merge {project_id}",
-                body=f"Auto-generated PR for project **{project_id}**.\n\nAll tests passed. Ready for review.",
+                body=(
+                    f"Auto-generated PR for project **{project_id}**.\n\n"
+                    "All tests passed. Ready for review."
+                ),
                 head_branch=pushed_branch,
                 base_branch="main",
                 remote_url=remote_url,
@@ -1040,7 +1042,13 @@ def node_done(
         else:
             logger.warning("project %s: PR creation failed — %s", project_id, detail)
     else:
-        logger.info("project %s: pushed to %s/%s (pr_mode=%s)", project_id, remote_url, pushed_branch, pr_mode)
+        logger.info(
+            "project %s: pushed to %s/%s (pr_mode=%s)",
+            project_id,
+            remote_url,
+            pushed_branch,
+            pr_mode,
+        )
 
     return {"phase": "done"}
 
@@ -1092,7 +1100,7 @@ def node_memory_curator(
         logger.info("project %s: nothing to curate (no events)", project_id)
         return {}
 
-    created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    created_at = datetime.datetime.now(datetime.UTC).isoformat()
 
     try:
         result, ai_message = asyncio.run(
@@ -1172,6 +1180,8 @@ def route_after_memory_curator(state: ProjectState) -> str:
 
     logger.warning(
         "project %s: curator has no route for phase=%s source=%s",
-        state.get("project_id"), state.get("phase"), source,
+        state.get("project_id"),
+        state.get("phase"),
+        source,
     )
     return END

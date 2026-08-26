@@ -111,7 +111,9 @@ def tool_read_file(
     logger.info("project %s: read_file(%s)", project_id, path)
     container_path = _container_path(path)
     project_host_path = _project_host_path(config, project_id)
-    with workspace_container(client, config, project_host_path, stack=stack, project_id=project_id) as container:
+    with workspace_container(
+        client, config, project_host_path, stack=stack, project_id=project_id
+    ) as container:
         try:
             chunks, _ = container.get_archive(container_path)
         except NotFound as exc:
@@ -161,11 +163,11 @@ def tool_write_file(
         if mkdir_result.exit_code != 0:
             logger.warning(
                 "project %s: write_file(%s) mkdir failed: %s",
-                project_id, path, mkdir_result.stderr,
+                project_id,
+                path,
+                mkdir_result.stderr,
             )
-            raise ContainerExecutionError(
-                f"mkdir failed for '{path}': {mkdir_result.stderr}"
-            )
+            raise ContainerExecutionError(f"mkdir failed for '{path}': {mkdir_result.stderr}")
         try:
             container.put_archive(
                 directory, _build_single_file_tar(os.path.basename(container_path), content)
@@ -203,7 +205,9 @@ def tool_list_files(
     """
     container_path = _container_path(path)
     project_host_path = _project_host_path(config, project_id)
-    with workspace_container(client, config, project_host_path, stack=stack, project_id=project_id) as container:
+    with workspace_container(
+        client, config, project_host_path, stack=stack, project_id=project_id
+    ) as container:
         result = exec_in_container(
             container,
             ["python3", "-c", _LIST_DIR_SNIPPET, container_path],
@@ -256,7 +260,12 @@ def tool_run_tests(
 
     project_host_path = _project_host_path(config, project_id)
     with workspace_container(
-        client, config, project_host_path, stack=stack, project_id=project_id, install_dependencies=True
+        client,
+        config,
+        project_host_path,
+        stack=stack,
+        project_id=project_id,
+        install_dependencies=True,
     ) as container:
         result = exec_in_container(container, command, config.command_timeout_seconds)
 
@@ -481,12 +490,22 @@ def tool_take_screenshot(
     auto_start_flag = str(auto_start_server).lower()
 
     command = [
-        "python3", "-c", _TOOL_TAKE_SCREENSHOT_PY,
-        url, WORKSPACE_MOUNT_TARGET, auto_start_flag, str(breakpoint_width),
+        "python3",
+        "-c",
+        _TOOL_TAKE_SCREENSHOT_PY,
+        url,
+        WORKSPACE_MOUNT_TARGET,
+        auto_start_flag,
+        str(breakpoint_width),
     ]
 
     with workspace_container(
-        client, config, project_host_path, stack=stack, project_id=project_id, install_dependencies=True
+        client,
+        config,
+        project_host_path,
+        stack=stack,
+        project_id=project_id,
+        install_dependencies=True,
     ) as container:
         result = exec_in_container(container, command, config.command_timeout_seconds)
 

@@ -84,9 +84,7 @@ def test_render_includes_cache_dir_setup_when_stack_declares_one():
     )
     rendered = render_dockerfile("python", stack, TEMPLATE_PATH.read_text())
     lines = instruction_lines(rendered)
-    assert (
-        "RUN mkdir -p /home/sandbox/.cache/pip && chown -R 1000:1000 /home/sandbox"
-    ) in lines
+    assert ("RUN mkdir -p /home/sandbox/.cache/pip && chown -R 1000:1000 /home/sandbox") in lines
 
 
 def test_render_omits_cache_dir_setup_when_stack_has_no_cache_dir():

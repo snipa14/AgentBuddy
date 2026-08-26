@@ -66,16 +66,12 @@ def test_from_env_treats_empty_string_env_vars_as_unset(monkeypatch, tmp_path):
 
 
 def test_image_for_stack_reads_registry(two_stack_registry):
-    config = ExecutorConfig(
-        projects_host_path=Path("/srv/projects"), stacks=two_stack_registry
-    )
+    config = ExecutorConfig(projects_host_path=Path("/srv/projects"), stacks=two_stack_registry)
     assert image_for_stack("node", config) == "foundry/workspace-node:20"
 
 
 def test_image_for_stack_unknown_stack_falls_back_to_default(two_stack_registry):
-    config = ExecutorConfig(
-        projects_host_path=Path("/srv/projects"), stacks=two_stack_registry
-    )
+    config = ExecutorConfig(projects_host_path=Path("/srv/projects"), stacks=two_stack_registry)
     assert image_for_stack("cobol", config) == config.workspace_image
 
 

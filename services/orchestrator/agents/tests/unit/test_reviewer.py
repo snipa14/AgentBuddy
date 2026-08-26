@@ -16,11 +16,15 @@ CHANGES_REQUESTED_RESULT = ReviewResult(
     verdict="changes-requested",
     findings=[
         ReviewFinding(
-            file="models.py", line=15, severity="critical",
+            file="models.py",
+            line=15,
+            severity="critical",
             message="hardcoded password in source code",
         ),
         ReviewFinding(
-            file="views.py", line=42, severity="warning",
+            file="views.py",
+            line=42,
+            severity="warning",
             message="missing null check on user lookup",
         ),
     ],
@@ -85,9 +89,7 @@ def test_review_changes_reads_only_changed_files_when_listed():
         }
     )
 
-    result, _ = asyncio.run(
-        review_changes(router, executor, "proj-1", changed_files=["models.py"])
-    )
+    result, _ = asyncio.run(review_changes(router, executor, "proj-1", changed_files=["models.py"]))
 
     assert result.verdict == "approve"
     # When changed_files is provided, skip list_files and read only those files
@@ -101,7 +103,10 @@ def test_review_changes_skips_unreadable_files_gracefully():
         async def list_files(self, project_id, path="."):
             from services.orchestrator.executor_client import FileEntry
 
-            return [FileEntry(name="models.py", is_dir=False), FileEntry(name="bad.py", is_dir=False)]
+            return [
+                FileEntry(name="models.py", is_dir=False),
+                FileEntry(name="bad.py", is_dir=False),
+            ]
 
         async def read_file(self, project_id, path):
             if path == "bad.py":

@@ -58,7 +58,9 @@ def _build_router_and_plugins() -> tuple[ModelRouter, list[LoadedPlugin]]:
         except NoCapableProviderError as exc:
             logging.getLogger(__name__).warning(
                 "plugin '%s': no configured provider satisfies its required "
-                "capabilities, skipping: %s", plugin.manifest.name, exc,
+                "capabilities, skipping: %s",
+                plugin.manifest.name,
+                exc,
             )
             continue
         resolvable_plugins.append(plugin)

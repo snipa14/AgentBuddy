@@ -114,7 +114,10 @@ async def run_plugin_review(
             except Exception as exc:
                 logger.warning(
                     "project %s: plugin role '%s' failed to read '%s': %s",
-                    project_id, role, path, exc,
+                    project_id,
+                    role,
+                    path,
+                    exc,
                 )
         if not files:
             raise PluginFileReadError(
@@ -139,7 +142,10 @@ async def run_plugin_review(
             except Exception as exc:
                 logger.warning(
                     "project %s: plugin role '%s' failed to read '%s': %s",
-                    project_id, role, entry.name, exc,
+                    project_id,
+                    role,
+                    entry.name,
+                    exc,
                 )
         if file_entries and not files:
             raise PluginFileReadError(
@@ -204,14 +210,20 @@ def node_plugin(
     try:
         result, ai_message = asyncio.run(
             run_plugin_review(
-                router, executor_client, state["project_id"], manifest.role, skill_body,
+                router,
+                executor_client,
+                state["project_id"],
+                manifest.role,
+                skill_body,
                 state["changed_files"],
             )
         )
     except PluginFileReadError as exc:
         logger.warning(
             "project %s: plugin '%s' could not be reviewed: %s",
-            state["project_id"], manifest.name, exc,
+            state["project_id"],
+            manifest.name,
+            exc,
         )
         if manifest.mode != "gating":
             return {}
@@ -234,7 +246,9 @@ def node_plugin(
     if result.verdict == "changes-requested":
         logger.info(
             "project %s: advisory plugin '%s' flagged %d finding(s), continuing",
-            state["project_id"], manifest.name, len(result.findings),
+            state["project_id"],
+            manifest.name,
+            len(result.findings),
         )
 
     return _with_cost(state, {}, cost)

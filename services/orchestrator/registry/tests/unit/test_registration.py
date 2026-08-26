@@ -72,7 +72,11 @@ def test_register_greenfield_invokes_on_registered_hook(registry_path, projects_
     started = []
 
     register_greenfield(
-        registry_path, projects_root, "my-project", "My Project", "python",
+        registry_path,
+        projects_root,
+        "my-project",
+        "My Project",
+        "python",
         on_registered=started.append,
     )
 
@@ -85,7 +89,11 @@ def test_register_greenfield_does_not_invoke_hook_on_duplicate(registry_path, pr
 
     with pytest.raises(DuplicateProjectIdError):
         register_greenfield(
-            registry_path, projects_root, "my-project", "Again", "python",
+            registry_path,
+            projects_root,
+            "my-project",
+            "Again",
+            "python",
             on_registered=started.append,
         )
 
@@ -115,14 +123,16 @@ def test_register_brownfield_from_local_path_rejects_missing_source(
 ):
     with pytest.raises(BrownfieldSourceError):
         register_brownfield_from_local_path(
-            registry_path, projects_root, "my-project", "My Project",
-            tmp_path / "does-not-exist", "python",
+            registry_path,
+            projects_root,
+            "my-project",
+            "My Project",
+            tmp_path / "does-not-exist",
+            "python",
         )
 
 
-def test_register_brownfield_from_git_clones_remote(
-    registry_path, projects_root, git_source_repo
-):
+def test_register_brownfield_from_git_clones_remote(registry_path, projects_root, git_source_repo):
     record = register_brownfield_from_git(
         registry_path, projects_root, "my-project", "My Project", str(git_source_repo), "python"
     )
@@ -138,8 +148,12 @@ def test_register_brownfield_from_git_raises_on_clone_failure(
 ):
     with pytest.raises(BrownfieldSourceError):
         register_brownfield_from_git(
-            registry_path, projects_root, "my-project", "My Project",
-            str(tmp_path / "not-a-repo"), "python",
+            registry_path,
+            projects_root,
+            "my-project",
+            "My Project",
+            str(tmp_path / "not-a-repo"),
+            "python",
         )
 
 
@@ -156,7 +170,12 @@ def test_register_brownfield_from_git_rejects_remote_helper_transports(
 
     with pytest.raises(BrownfieldSourceError, match="disallowed transport"):
         register_brownfield_from_git(
-            registry_path, projects_root, "evil-project", "Evil Project", remote, "python",
+            registry_path,
+            projects_root,
+            "evil-project",
+            "Evil Project",
+            remote,
+            "python",
         )
 
     assert not marker.exists()

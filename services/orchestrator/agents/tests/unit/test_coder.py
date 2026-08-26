@@ -159,12 +159,7 @@ def test_run_coder_task_written_files_empty_when_no_writes_happen():
 
 def test_run_coder_task_records_written_files_even_when_max_steps_exhausted():
     router = FakeRouter(
-        [
-            _tool_call_message(
-                "write_file", {"path": "partial.py", "content": "# wip"}, "call_1"
-            )
-        ]
-        * 3
+        [_tool_call_message("write_file", {"path": "partial.py", "content": "# wip"}, "call_1")] * 3
     )
     executor = RecordingExecutorClient()
 

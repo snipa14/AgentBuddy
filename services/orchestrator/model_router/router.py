@@ -279,7 +279,9 @@ class ModelRouter:
             provider_config: ProviderConfig | None = self._config.providers.get(provider_name)
             if provider_name not in self._models or provider_config is None:
                 continue
-            if all(capability in provider_config.capabilities for capability in role_config.requires):
+            if all(
+                capability in provider_config.capabilities for capability in role_config.requires
+            ):
                 return provider_name
 
         raise NoCapableProviderError(

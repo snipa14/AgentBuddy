@@ -345,7 +345,9 @@ def test_throttled_chat_model_serializes_concurrent_ainvoke_calls():
 def test_cost_usd_uses_the_provider_that_would_actually_be_resolved():
     config = _config(
         {
-            "roles": {"coder": {"requires": ["tool_calling"], "prefer": ["local", "claude_sonnet"]}},
+            "roles": {
+                "coder": {"requires": ["tool_calling"], "prefer": ["local", "claude_sonnet"]}
+            },
             "providers": {
                 "local": {
                     "type": "ollama",
@@ -583,8 +585,7 @@ def test_anthropic_provider_with_base_url_override_uses_placeholder_api_key():
     model = router.resolve("coder")
 
     assert (
-        model._model.anthropic_api_key.get_secret_value()
-        == ANTHROPIC_BASE_URL_PLACEHOLDER_API_KEY
+        model._model.anthropic_api_key.get_secret_value() == ANTHROPIC_BASE_URL_PLACEHOLDER_API_KEY
     )
 
 

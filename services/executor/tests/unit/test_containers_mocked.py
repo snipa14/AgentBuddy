@@ -251,9 +251,7 @@ def test_install_dependencies_if_present_runs_pip_install_when_requirements_txt_
     mock_container = MagicMock(spec=Container)
     mock_container.exec_run.side_effect = [(0, (b"", b"")), (0, (b"installed\n", b""))]
 
-    _install_dependencies_if_present(
-        mock_container, two_stack_registry.stacks["python"], timeout=5
-    )
+    _install_dependencies_if_present(mock_container, two_stack_registry.stacks["python"], timeout=5)
 
     calls = mock_container.exec_run.call_args_list
     assert len(calls) == 2
@@ -269,9 +267,7 @@ def test_install_dependencies_if_present_falls_back_to_pyproject_toml(two_stack_
         (0, (b"installed\n", b"")),
     ]
 
-    _install_dependencies_if_present(
-        mock_container, two_stack_registry.stacks["python"], timeout=5
-    )
+    _install_dependencies_if_present(mock_container, two_stack_registry.stacks["python"], timeout=5)
 
     calls = mock_container.exec_run.call_args_list
     assert len(calls) == 3
@@ -300,9 +296,7 @@ def test_install_dependencies_if_present_skips_install_when_no_manifest_is_prese
     mock_container = MagicMock(spec=Container)
     mock_container.exec_run.return_value = (1, (b"", b""))
 
-    _install_dependencies_if_present(
-        mock_container, two_stack_registry.stacks["python"], timeout=5
-    )
+    _install_dependencies_if_present(mock_container, two_stack_registry.stacks["python"], timeout=5)
 
     calls = mock_container.exec_run.call_args_list
     assert len(calls) == 2

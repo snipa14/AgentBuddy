@@ -122,7 +122,9 @@ async def review_changes(
                 content = await executor_client.read_file(project_id, path)
                 files[path] = content
             except Exception as exc:
-                logger.warning("project %s: failed to read '%s' for review: %s", project_id, path, exc)
+                logger.warning(
+                    "project %s: failed to read '%s' for review: %s", project_id, path, exc
+                )
     else:  # no changed_files list — list all and read each one
         try:
             entries = await executor_client.list_files(project_id, ".")
@@ -134,7 +136,9 @@ async def review_changes(
                     except Exception as exc:
                         logger.warning(
                             "project %s: failed to read '%s' for review: %s",
-                            project_id, entry.name, exc,
+                            project_id,
+                            entry.name,
+                            exc,
                         )
         except Exception as exc:
             logger.warning("project %s: failed to list files for review: %s", project_id, exc)
@@ -172,6 +176,8 @@ async def review_changes(
 
     logger.info(
         "project %s: reviewer verdict=%s, findings=%d",
-        project_id, result.verdict, len(result.findings),
+        project_id,
+        result.verdict,
+        len(result.findings),
     )
     return result, ai_message

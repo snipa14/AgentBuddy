@@ -3,7 +3,6 @@
 from aiogram.types import InlineKeyboardMarkup
 
 from services.telegram_gateway.rendering import (
-    CALLBACK_REPLY,
     render_approval,
     render_task_progress,
 )

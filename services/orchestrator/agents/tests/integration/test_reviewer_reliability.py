@@ -98,7 +98,10 @@ def anthropic_api_key() -> str:
         value = os.environ.get(env_var)
         if value:
             return value
-    pytest.skip("no Claude API key available (/run/secrets/claude_api_key or CLAUDE_API_KEY/ANTHROPIC_API_KEY)")
+    pytest.skip(
+        "no Claude API key available (/run/secrets/claude_api_key or "
+        "CLAUDE_API_KEY/ANTHROPIC_API_KEY)"
+    )
 
 
 @pytest.fixture(scope="module")

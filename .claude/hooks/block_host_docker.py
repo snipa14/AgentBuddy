@@ -14,8 +14,8 @@ Claude Code hook contract:
 """
 
 import json
-import sys
 import re
+import sys
 
 BLOCKED_PATTERNS = [
     r"/var/run/docker\.sock",

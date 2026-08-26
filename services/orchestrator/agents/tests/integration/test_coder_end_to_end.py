@@ -174,9 +174,7 @@ def test_coder_reads_an_existing_file_before_overwriting_it(
         ]
     )
 
-    result = asyncio.run(
-        run_coder_task(router, executor_client, project_id, "update notes.txt")
-    )
+    result = asyncio.run(run_coder_task(router, executor_client, project_id, "update notes.txt"))
 
     assert result.success is True
     assert "original content" in result.transcript[0]

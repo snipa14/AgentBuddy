@@ -216,7 +216,5 @@ class ExecutorClient:
             async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
                 response = await client.post(f"{self._base_url}{path}", json=payload)
         if response.is_error:
-            raise ExecutorClientError(
-                f"POST {path} -> {response.status_code}: {response.text}"
-            )
+            raise ExecutorClientError(f"POST {path} -> {response.status_code}: {response.text}")
         return response.json()

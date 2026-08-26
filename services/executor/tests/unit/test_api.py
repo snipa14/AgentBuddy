@@ -43,9 +43,7 @@ def test_run_command_returns_result(client, monkeypatch):
         lambda *args, **kwargs: CommandResult(stdout="hi", stderr="", exit_code=0),
     )
 
-    response = client.post(
-        "/run_command", json={"project_id": "proj-1", "command": ["echo", "hi"]}
-    )
+    response = client.post("/run_command", json={"project_id": "proj-1", "command": ["echo", "hi"]})
 
     assert response.status_code == 200
     assert response.json() == {"stdout": "hi", "stderr": "", "exit_code": 0}
@@ -312,9 +310,7 @@ def test_clear_project_cache_returns_ok(client, monkeypatch):
 
     monkeypatch.setattr(api_module, "tool_clear_project_cache", _capture)
 
-    response = client.post(
-        "/clear_project_cache", json={"project_id": "proj-1", "stack": "node"}
-    )
+    response = client.post("/clear_project_cache", json={"project_id": "proj-1", "stack": "node"})
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
@@ -327,9 +323,7 @@ def test_clear_project_cache_returns_504_on_timeout(client, monkeypatch):
 
     monkeypatch.setattr(api_module, "tool_clear_project_cache", _raise)
 
-    response = client.post(
-        "/clear_project_cache", json={"project_id": "proj-1", "stack": "python"}
-    )
+    response = client.post("/clear_project_cache", json={"project_id": "proj-1", "stack": "python"})
 
     assert response.status_code == 504
 
@@ -340,9 +334,7 @@ def test_clear_project_cache_returns_500_on_container_error(client, monkeypatch)
 
     monkeypatch.setattr(api_module, "tool_clear_project_cache", _raise)
 
-    response = client.post(
-        "/clear_project_cache", json={"project_id": "proj-1", "stack": "python"}
-    )
+    response = client.post("/clear_project_cache", json={"project_id": "proj-1", "stack": "python"})
 
     assert response.status_code == 500
 

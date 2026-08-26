@@ -17,7 +17,11 @@ def two_stack_registry() -> StacksConfig:
                     StackManifest(
                         file="requirements.txt",
                         install_command=[
-                            "pip", "install", "--user", "-r", "requirements.txt",
+                            "pip",
+                            "install",
+                            "--user",
+                            "-r",
+                            "requirements.txt",
                         ],
                     ),
                     StackManifest(
@@ -27,8 +31,12 @@ def two_stack_registry() -> StacksConfig:
                 ],
                 cache_dir="/home/sandbox/.cache/pip",
                 test_command=[
-                    "python3", "-m", "pytest",
-                    "--cov=.", "--cov-report=term-missing", "-q",
+                    "python3",
+                    "-m",
+                    "pytest",
+                    "--cov=.",
+                    "--cov-report=term-missing",
+                    "-q",
                 ],
             ),
             "node": StackConfig(
@@ -36,11 +44,7 @@ def two_stack_registry() -> StacksConfig:
                 base_image="node:20-slim",
                 sandbox_user_mode="rename",
                 rename_from="node",
-                manifests=[
-                    StackManifest(
-                        file="package.json", install_command=["npm", "install"]
-                    )
-                ],
+                manifests=[StackManifest(file="package.json", install_command=["npm", "install"])],
                 cache_dir="/home/sandbox/.npm",
                 test_command=["npm", "test"],
             ),

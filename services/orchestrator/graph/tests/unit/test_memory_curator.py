@@ -173,9 +173,7 @@ def test_node_memory_curator_still_curates_task_progress_when_no_new_messages_si
     state = new_project_state("proj-curate", initial_message="build a thing")
     state["curator_source"] = "testing"
     state["messages_curated_through"] = len(state["messages"])
-    state["task_queue"] = [
-        {"description": "Do the trivial thing", "status": "done", "attempts": 0}
-    ]
+    state["task_queue"] = [{"description": "Do the trivial thing", "status": "done", "attempts": 0}]
 
     update = node_memory_curator(state, projects_root, conn, router)
 
@@ -200,9 +198,7 @@ def test_node_memory_curator_skips_when_messages_never_seeded_even_with_task_pro
     state = new_project_state("proj-1")
     state["curator_source"] = "testing"
     state["messages"] = []
-    state["task_queue"] = [
-        {"description": "Do the trivial thing", "status": "done", "attempts": 0}
-    ]
+    state["task_queue"] = [{"description": "Do the trivial thing", "status": "done", "attempts": 0}]
 
     update = node_memory_curator(state, projects_root, conn, router)
 

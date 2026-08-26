@@ -156,9 +156,11 @@ def _base_models_config():
         roles={"reviewer": RoleConfig(requires=["tool_calling"], prefer=["claude_sonnet"])},
         providers={
             "claude_sonnet": AnthropicProviderConfig(
-                type="anthropic", model="claude-sonnet-5",
+                type="anthropic",
+                model="claude-sonnet-5",
                 capabilities=["tool_calling"],
-                cost_per_1m_input_tokens=3.0, cost_per_1m_output_tokens=15.0,
+                cost_per_1m_input_tokens=3.0,
+                cost_per_1m_output_tokens=15.0,
             )
         },
     )

@@ -9,10 +9,7 @@ RecordingExecutorClient to assert on exact tool call sequences. Tests cover:
 
 import asyncio
 
-import pytest
-
 from services.orchestrator.agents.tester import (
-    TestOutcome,
     _evaluate_gate,
     _parse_failing_tests,
     _parse_uncovered_lines,
@@ -38,32 +35,25 @@ class RecordingExecutorClient:
 
 # -- _evaluate_gate tests ------------------------------------------------------
 
+
 def test_evaluate_gate_passes_when_all_tests_pass_and_coverage_meets_threshold():
-    outcome = _evaluate_gate(
-        passed=5, failed=0, coverage_pct=85.0, threshold=80, gate_mode="hard"
-    )
+    outcome = _evaluate_gate(passed=5, failed=0, coverage_pct=85.0, threshold=80, gate_mode="hard")
     assert outcome.verdict == "pass"
     assert outcome.coverage_pct == 85.0
 
 
 def test_evaluate_gate_fails_when_tests_fail():
-    outcome = _evaluate_gate(
-        passed=4, failed=1, coverage_pct=90.0, threshold=80, gate_mode="hard"
-    )
+    outcome = _evaluate_gate(passed=4, failed=1, coverage_pct=90.0, threshold=80, gate_mode="hard")
     assert outcome.verdict == "fail"
 
 
 def test_evaluate_gate_hard_mode_blocks_on_low_coverage():
-    outcome = _evaluate_gate(
-        passed=5, failed=0, coverage_pct=60.0, threshold=80, gate_mode="hard"
-    )
+    outcome = _evaluate_gate(passed=5, failed=0, coverage_pct=60.0, threshold=80, gate_mode="hard")
     assert outcome.verdict == "fail"
 
 
 def test_evaluate_gate_soft_mode_passes_on_low_coverage():
-    outcome = _evaluate_gate(
-        passed=5, failed=0, coverage_pct=60.0, threshold=80, gate_mode="soft"
-    )
+    outcome = _evaluate_gate(passed=5, failed=0, coverage_pct=60.0, threshold=80, gate_mode="soft")
     assert outcome.verdict == "pass"
 
 
@@ -75,29 +65,24 @@ def test_evaluate_gate_configurable_mode_blocks_on_low_coverage():
 
 
 def test_evaluate_gate_passes_when_no_coverage_data():
-    outcome = _evaluate_gate(
-        passed=5, failed=0, coverage_pct=None, threshold=80, gate_mode="hard"
-    )
+    outcome = _evaluate_gate(passed=5, failed=0, coverage_pct=None, threshold=80, gate_mode="hard")
     assert outcome.verdict == "pass"
 
 
 def test_evaluate_gate_fails_when_no_tests_ran_hard_mode():
-    outcome = _evaluate_gate(
-        passed=0, failed=0, coverage_pct=None, threshold=80, gate_mode="hard"
-    )
+    outcome = _evaluate_gate(passed=0, failed=0, coverage_pct=None, threshold=80, gate_mode="hard")
     assert outcome.verdict == "fail"
     assert "no tests" in outcome.report.lower()
 
 
 def test_evaluate_gate_fails_when_no_tests_ran_soft_mode_does_not_rescue():
-    outcome = _evaluate_gate(
-        passed=0, failed=0, coverage_pct=None, threshold=80, gate_mode="soft"
-    )
+    outcome = _evaluate_gate(passed=0, failed=0, coverage_pct=None, threshold=80, gate_mode="soft")
     assert outcome.verdict == "fail"
     assert "no tests" in outcome.report.lower()
 
 
 # -- _parse_failing_tests tests ------------------------------------------------
+
 
 def test_parse_failing_tests_extracts_single_failure():
     report = (
@@ -135,6 +120,7 @@ def test_parse_failing_tests_returns_empty_on_clean_report():
 
 # -- _parse_uncovered_lines tests -----------------------------------------------
 
+
 def test_parse_uncovered_lines_extracts_missing_ranges_per_file():
     report = (
         "Name                      Stmts   Miss  Cover   Missing\n"
@@ -164,6 +150,7 @@ def test_parse_uncovered_lines_returns_empty_without_a_coverage_table():
 
 
 # -- run_tests end-to-end tests ------------------------------------------------
+
 
 def test_run_tests_calls_executor_and_returns_outcome():
     from services.orchestrator.executor_client import TestResult as ExecutorTestResult

@@ -8,6 +8,7 @@ FakeChatModel, shared with test_coder.py/test_reviewer.py.
 import asyncio
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from services.orchestrator.agents.planner import (
     CritiqueFinding,
@@ -20,8 +21,6 @@ from services.orchestrator.agents.planner import (
     draft_plan,
     run_intake_to_final_plan,
 )
-from langchain_core.messages import AIMessage
-
 from services.orchestrator.agents.tests.unit.router_fakes import (
     FakeRouter,
     ScriptedStructured,
@@ -47,8 +46,7 @@ CRITIQUE_WITH_FINDINGS = CritiqueResult(
             category="security_gap",
             severity="high",
             description=(
-                "No mention of who can edit rotations; anyone with the link "
-                "could reassign on-call."
+                "No mention of who can edit rotations; anyone with the link could reassign on-call."
             ),
         ),
         CritiqueFinding(
@@ -82,9 +80,7 @@ def test_ask_clarifying_questions_returns_a_batch_of_questions():
 def test_ask_clarifying_questions_returns_ready_signal():
     router = FakeRouter([structured(INTERVIEW_READY_TURN)])
 
-    turn, _ = asyncio.run(
-        ask_clarifying_questions(router, "build an on-call tool", ["prior Q&A"])
-    )
+    turn, _ = asyncio.run(ask_clarifying_questions(router, "build an on-call tool", ["prior Q&A"]))
 
     assert turn.status == "ready"
     assert turn.questions == []
@@ -228,9 +224,7 @@ def test_run_intake_to_final_plan_stops_at_max_rounds():
     answers = iter(["answer 1", "answer 2"])
 
     result = asyncio.run(
-        run_intake_to_final_plan(
-            router, "build a tool", lambda qs: next(answers), max_rounds=2
-        )
+        run_intake_to_final_plan(router, "build a tool", lambda qs: next(answers), max_rounds=2)
     )
 
     assert result.plan.summary

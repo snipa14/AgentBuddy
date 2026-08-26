@@ -51,9 +51,7 @@ def orchestrator():
             project_id="proj-1", phase="implementing", pending_approval=None, task_progress=None
         )
     )
-    client.get_projects = AsyncMock(
-        return_value=_status_response(project_ids=["proj-1", "proj-2"])
-    )
+    client.get_projects = AsyncMock(return_value=_status_response(project_ids=["proj-1", "proj-2"]))
     return client
 
 
@@ -375,9 +373,7 @@ def test_handle_new_sends_plain_acknowledgment_when_no_gate_is_pending(
     message.answer.assert_awaited_once_with("Got it -- working on that.")
 
 
-def test_handle_new_renders_task_progress_when_no_gate_is_pending(
-    message, orchestrator, poller
-):
+def test_handle_new_renders_task_progress_when_no_gate_is_pending(message, orchestrator, poller):
     response = MagicMock()
     response.status_code = 200
     response.json.return_value = {

@@ -56,9 +56,7 @@ def build_parser(stack_choices: Sequence[str]) -> argparse.ArgumentParser:
     parser.add_argument("--name", required=True)
     parser.add_argument("--stack", required=True, choices=sorted(stack_choices))
     parser.add_argument("--coverage-threshold", type=int, default=80)
-    parser.add_argument(
-        "--pr-mode", choices=["auto", "manual", "configurable"], default="manual"
-    )
+    parser.add_argument("--pr-mode", choices=["auto", "manual", "configurable"], default="manual")
     parser.add_argument(
         "--coverage-gate-mode", choices=["hard", "soft", "configurable"], default="hard"
     )

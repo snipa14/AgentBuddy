@@ -1,9 +1,9 @@
 """Capability vocabulary shared by role requirements and provider declarations."""
 
-from enum import Enum
+from enum import StrEnum
 
 
-class Capability(str, Enum):
+class Capability(StrEnum):
     """A trait a provider may support and a role may require.
 
     Providers declare which of these they satisfy explicitly in

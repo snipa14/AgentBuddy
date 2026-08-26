@@ -71,9 +71,7 @@ def test_tool_run_command_creates_locked_down_container_and_removes_it(
     mock_container.remove.assert_called_once_with(force=True)
 
 
-def test_tool_run_command_removes_container_even_on_exec_error(
-    mock_client, mock_container, config
-):
+def test_tool_run_command_removes_container_even_on_exec_error(mock_client, mock_container, config):
     mock_container.exec_run.side_effect = RuntimeError("boom")
 
     with pytest.raises(RuntimeError):

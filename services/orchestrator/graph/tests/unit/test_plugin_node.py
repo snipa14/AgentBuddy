@@ -42,8 +42,11 @@ class RecordingExecutorClient:
 def _gating_manifest() -> PluginManifest:
     return PluginManifest.model_validate(
         {
-            "name": "security-audit-reviewer", "role": "security_audit_reviewer",
-            "slot": "after_reviewer", "mode": "gating", "requires": ["tool_calling"],
+            "name": "security-audit-reviewer",
+            "role": "security_audit_reviewer",
+            "slot": "after_reviewer",
+            "mode": "gating",
+            "requires": ["tool_calling"],
         }
     )
 
@@ -51,8 +54,11 @@ def _gating_manifest() -> PluginManifest:
 def _advisory_manifest() -> PluginManifest:
     return PluginManifest.model_validate(
         {
-            "name": "style-advisor", "role": "style_advisor",
-            "slot": "after_coder", "mode": "advisory", "requires": [],
+            "name": "style-advisor",
+            "role": "style_advisor",
+            "slot": "after_coder",
+            "mode": "advisory",
+            "requires": [],
         }
     )
 
@@ -85,9 +91,7 @@ def test_run_plugin_review_lists_whole_workspace_when_changed_files_empty():
     executor = RecordingExecutorClient(files={"a.py": "print(1)\n", "b.py": "print(2)\n"})
 
     result, message = asyncio.run(
-        run_plugin_review(
-            router, executor, "proj-1", "security_audit_reviewer", "Skill body.", []
-        )
+        run_plugin_review(router, executor, "proj-1", "security_audit_reviewer", "Skill body.", [])
     )
 
     assert result.verdict == "approve"
@@ -133,8 +137,12 @@ def test_run_plugin_review_raises_when_all_changed_files_fail_to_read():
     with pytest.raises(PluginFileReadError):
         asyncio.run(
             run_plugin_review(
-                router, AlwaysFailingExecutorClient(), "proj-1", "security_audit_reviewer",
-                "Skill body.", ["a.py", "b.py"],
+                router,
+                AlwaysFailingExecutorClient(),
+                "proj-1",
+                "security_audit_reviewer",
+                "Skill body.",
+                ["a.py", "b.py"],
             )
         )
 
@@ -154,8 +162,12 @@ def test_run_plugin_review_raises_when_list_files_fails_in_fallback():
     with pytest.raises(PluginFileReadError):
         asyncio.run(
             run_plugin_review(
-                router, ListFailingExecutorClient(), "proj-1", "security_audit_reviewer",
-                "Skill body.", [],
+                router,
+                ListFailingExecutorClient(),
+                "proj-1",
+                "security_audit_reviewer",
+                "Skill body.",
+                [],
             )
         )
 
@@ -177,8 +189,12 @@ def test_run_plugin_review_raises_when_all_listed_files_fail_to_read_in_fallback
     with pytest.raises(PluginFileReadError):
         asyncio.run(
             run_plugin_review(
-                router, AllReadsFailExecutorClient(), "proj-1", "security_audit_reviewer",
-                "Skill body.", [],
+                router,
+                AllReadsFailExecutorClient(),
+                "proj-1",
+                "security_audit_reviewer",
+                "Skill body.",
+                [],
             )
         )
 
@@ -197,8 +213,12 @@ def test_run_plugin_review_proceeds_when_fallback_lists_zero_files():
 
     result, _ = asyncio.run(
         run_plugin_review(
-            router, EmptyProjectExecutorClient(), "proj-1", "security_audit_reviewer",
-            "Skill body.", [],
+            router,
+            EmptyProjectExecutorClient(),
+            "proj-1",
+            "security_audit_reviewer",
+            "Skill body.",
+            [],
         )
     )
 
@@ -218,8 +238,12 @@ def test_node_plugin_gating_file_read_failure_reopens_task_instead_of_approving(
     )
 
     update = node_plugin(
-        state, router=router, executor_client=_AlwaysFailingExecutorClient(),
-        manifest=_gating_manifest(), skill_body="Skill body.", next_node="frontend_review",
+        state,
+        router=router,
+        executor_client=_AlwaysFailingExecutorClient(),
+        manifest=_gating_manifest(),
+        skill_body="Skill body.",
+        next_node="frontend_review",
     )
 
     assert router.model.requests == []
@@ -234,8 +258,12 @@ def test_node_plugin_gating_file_read_failure_blocks_with_no_reopenable_task():
     state = _state(task_queue=[], changed_files=["a.py"])
 
     update = node_plugin(
-        state, router=router, executor_client=_AlwaysFailingExecutorClient(),
-        manifest=_gating_manifest(), skill_body="Skill body.", next_node="frontend_review",
+        state,
+        router=router,
+        executor_client=_AlwaysFailingExecutorClient(),
+        manifest=_gating_manifest(),
+        skill_body="Skill body.",
+        next_node="frontend_review",
     )
 
     assert router.model.requests == []
@@ -252,8 +280,12 @@ def test_node_plugin_advisory_file_read_failure_continues_to_next_node():
     )
 
     update = node_plugin(
-        state, router=router, executor_client=_AlwaysFailingExecutorClient(),
-        manifest=_advisory_manifest(), skill_body="Skill body.", next_node="reviewer",
+        state,
+        router=router,
+        executor_client=_AlwaysFailingExecutorClient(),
+        manifest=_advisory_manifest(),
+        skill_body="Skill body.",
+        next_node="reviewer",
     )
 
     assert router.model.requests == []
@@ -270,8 +302,12 @@ def test_node_plugin_gating_changes_requested_reopens_task_and_routes_to_coder()
     )
 
     update = node_plugin(
-        state, router=router, executor_client=executor,
-        manifest=_gating_manifest(), skill_body="Skill body.", next_node="frontend_review",
+        state,
+        router=router,
+        executor_client=executor,
+        manifest=_gating_manifest(),
+        skill_body="Skill body.",
+        next_node="frontend_review",
     )
 
     assert update["phase"] == "implementing"
@@ -294,8 +330,12 @@ def test_node_plugin_gating_changes_requested_clears_stale_pending_approval():
     }
 
     update = node_plugin(
-        state, router=router, executor_client=executor,
-        manifest=_gating_manifest(), skill_body="Skill body.", next_node="frontend_review",
+        state,
+        router=router,
+        executor_client=executor,
+        manifest=_gating_manifest(),
+        skill_body="Skill body.",
+        next_node="frontend_review",
     )
 
     assert update["pending_approval"] is None
@@ -307,8 +347,12 @@ def test_node_plugin_gating_approve_continues_to_next_node():
     state = _state(task_queue=[], changed_files=["a.py"])
 
     update = node_plugin(
-        state, router=router, executor_client=executor,
-        manifest=_gating_manifest(), skill_body="Skill body.", next_node="frontend_review",
+        state,
+        router=router,
+        executor_client=executor,
+        manifest=_gating_manifest(),
+        skill_body="Skill body.",
+        next_node="frontend_review",
     )
 
     assert set(update) == {"cost_usd_session", "cost_usd_weekly"}
@@ -325,8 +369,12 @@ def test_node_plugin_advisory_changes_requested_never_reopens_a_task():
     )
 
     update = node_plugin(
-        state, router=router, executor_client=executor,
-        manifest=_advisory_manifest(), skill_body="Skill body.", next_node="reviewer",
+        state,
+        router=router,
+        executor_client=executor,
+        manifest=_advisory_manifest(),
+        skill_body="Skill body.",
+        next_node="reviewer",
     )
 
     assert "task_queue" not in update

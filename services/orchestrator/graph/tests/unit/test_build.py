@@ -12,7 +12,6 @@ from services.orchestrator.plugins.discovery import LoadedPlugin, discover_plugi
 from services.orchestrator.plugins.manifest import PluginManifest
 from services.orchestrator.stacks import StacksConfig
 
-
 FIXTURE_PLUGINS_DIR = Path(__file__).parents[3] / "plugins" / "tests" / "fixtures"
 
 
@@ -33,8 +32,13 @@ class _StubExecutorClient:
 def _build_graph(tmp_path, memory_conn, projects_root, plugins):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
     return build_project_graph(
-        checkpointer, FakeRouter([]), _StubExecutorClient(), memory_conn, projects_root,
-        StacksConfig(stacks={}), plugins=plugins,
+        checkpointer,
+        FakeRouter([]),
+        _StubExecutorClient(),
+        memory_conn,
+        projects_root,
+        StacksConfig(stacks={}),
+        plugins=plugins,
     )
 
 
@@ -53,8 +57,11 @@ def test_build_project_graph_wires_an_after_reviewer_plugin_between_reviewer_and
 ):
     manifest = PluginManifest.model_validate(
         {
-            "name": "security-audit-reviewer", "role": "security_audit_reviewer",
-            "slot": "after_reviewer", "mode": "gating", "requires": ["tool_calling"],
+            "name": "security-audit-reviewer",
+            "role": "security_audit_reviewer",
+            "slot": "after_reviewer",
+            "mode": "gating",
+            "requires": ["tool_calling"],
         }
     )
     plugin = LoadedPlugin(manifest=manifest, skill_body="Audit for security issues.")
@@ -74,7 +81,11 @@ def test_build_project_graph_with_no_plugins_omits_default_argument(
     the load-bearing guarantee this whole task rests on."""
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
     graph = build_project_graph(
-        checkpointer, FakeRouter([]), _StubExecutorClient(), memory_conn, projects_root,
+        checkpointer,
+        FakeRouter([]),
+        _StubExecutorClient(),
+        memory_conn,
+        projects_root,
         StacksConfig(stacks={}),
     )
 
@@ -88,8 +99,11 @@ def test_build_project_graph_wires_an_after_coder_plugin_before_static_checks_re
 ):
     manifest = PluginManifest.model_validate(
         {
-            "name": "style-advisor", "role": "style_advisor",
-            "slot": "after_coder", "mode": "advisory", "requires": [],
+            "name": "style-advisor",
+            "role": "style_advisor",
+            "slot": "after_coder",
+            "mode": "advisory",
+            "requires": [],
         }
     )
     plugin = LoadedPlugin(manifest=manifest, skill_body="Advise on style.")
@@ -106,8 +120,11 @@ def test_build_project_graph_wires_an_after_tester_plugin_before_memory_curator(
 ):
     manifest = PluginManifest.model_validate(
         {
-            "name": "coverage-auditor", "role": "coverage_auditor",
-            "slot": "after_tester", "mode": "advisory", "requires": [],
+            "name": "coverage-auditor",
+            "role": "coverage_auditor",
+            "slot": "after_tester",
+            "mode": "advisory",
+            "requires": [],
         }
     )
     plugin = LoadedPlugin(manifest=manifest, skill_body="Audit coverage.")
@@ -124,14 +141,20 @@ def test_build_project_graph_chains_two_plugins_in_the_same_slot(
 ):
     first = PluginManifest.model_validate(
         {
-            "name": "first-reviewer", "role": "first_reviewer",
-            "slot": "after_reviewer", "mode": "advisory", "requires": [],
+            "name": "first-reviewer",
+            "role": "first_reviewer",
+            "slot": "after_reviewer",
+            "mode": "advisory",
+            "requires": [],
         }
     )
     second = PluginManifest.model_validate(
         {
-            "name": "second-reviewer", "role": "second_reviewer",
-            "slot": "after_reviewer", "mode": "advisory", "requires": [],
+            "name": "second-reviewer",
+            "role": "second_reviewer",
+            "slot": "after_reviewer",
+            "mode": "advisory",
+            "requires": [],
         }
     )
     plugins = [
@@ -164,8 +187,11 @@ def test_build_project_graph_testing_edge_is_conditional_not_a_plain_passthrough
     """
     manifest = PluginManifest.model_validate(
         {
-            "name": "coverage-auditor", "role": "coverage_auditor",
-            "slot": "after_tester", "mode": "advisory", "requires": [],
+            "name": "coverage-auditor",
+            "role": "coverage_auditor",
+            "slot": "after_tester",
+            "mode": "advisory",
+            "requires": [],
         }
     )
     plugin = LoadedPlugin(manifest=manifest, skill_body="Audit coverage.")

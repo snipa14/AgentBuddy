@@ -22,9 +22,7 @@ def test_invoke_structured_returns_parsed_and_raw_on_success():
     raw = AIMessage(content="", usage_metadata=usage())
     llm = FakeChatModel([ScriptedStructured(parsed=_Schema(value="x"), raw=raw)])
 
-    parsed, ai_message = asyncio.run(
-        invoke_structured(llm, _Schema, [HumanMessage(content="hi")])
-    )
+    parsed, ai_message = asyncio.run(invoke_structured(llm, _Schema, [HumanMessage(content="hi")]))
 
     assert parsed == _Schema(value="x")
     assert ai_message is raw
@@ -76,9 +74,7 @@ def test_invoke_structured_retries_after_a_transient_failure_and_aggregates_usag
         ]
     )
 
-    parsed, ai_message = asyncio.run(
-        invoke_structured(llm, _Schema, [HumanMessage(content="hi")])
-    )
+    parsed, ai_message = asyncio.run(invoke_structured(llm, _Schema, [HumanMessage(content="hi")]))
 
     assert parsed == _Schema(value="x")
     assert ai_message.usage_metadata["input_tokens"] == 60

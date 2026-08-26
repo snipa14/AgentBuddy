@@ -29,9 +29,7 @@ def main(argv: list[str] | None = None) -> int:
         0 on success.
     """
     parser = argparse.ArgumentParser(prog="gen_workspace_images")
-    parser.add_argument(
-        "--stacks-config", type=Path, default=REPO_ROOT / "config" / "stacks.yaml"
-    )
+    parser.add_argument("--stacks-config", type=Path, default=REPO_ROOT / "config" / "stacks.yaml")
     parser.add_argument(
         "--template",
         type=Path,

@@ -132,7 +132,9 @@ def test_node_intake_advances_to_planning():
 
 
 def test_node_planner_ask_arms_the_question_gate_when_more_info_needed():
-    router = FakeRouter([structured(InterviewTurn(status="questions", questions=["What language?"]))])
+    router = FakeRouter(
+        [structured(InterviewTurn(status="questions", questions=["What language?"]))]
+    )
     state = new_project_state("proj-1", initial_message="build a thing")
 
     update = node_planner_ask(state, router)
@@ -161,8 +163,9 @@ def test_node_planner_ask_advances_to_roasting_when_ready():
 
 
 def test_extract_description_and_history_uses_summary_and_cursor_when_set():
-    from services.orchestrator.graph.nodes import _extract_description_and_history
     from langchain_core.messages import HumanMessage
+
+    from services.orchestrator.graph.nodes import _extract_description_and_history
 
     state = new_project_state("proj-1")
     state["messages"] = [
@@ -285,7 +288,9 @@ def test_task_decomposition_preserves_done_tasks():
     update = node_task_decomposition(state, router)
 
     assert update["task_queue"][0] == {
-        "description": "keep me", "status": "done", "attempts": 1,
+        "description": "keep me",
+        "status": "done",
+        "attempts": 1,
     }
     assert update["task_queue"][1:] == [
         {"description": "New task A", "status": "pending", "attempts": 0},
@@ -305,9 +310,7 @@ def test_node_coder_returns_reviewing_phase_when_queue_already_empty():
 
 def test_node_coder_returns_reviewing_phase_when_every_task_is_already_done():
     state = new_project_state("proj-1")
-    state["task_queue"] = [
-        {"description": "First task", "status": "done", "attempts": 1}
-    ]
+    state["task_queue"] = [{"description": "First task", "status": "done", "attempts": 1}]
 
     update = node_coder(state, router=None, executor_client=None)
 
@@ -713,9 +716,7 @@ def test_static_checks_failure_with_no_done_task_blocks(two_stack_registry):
 
 
 def test_static_checks_pass_with_nothing_applicable_keeps_reviewing_phase(two_stack_registry):
-    state = _checked_state(
-        [{"description": "t", "status": "done", "attempts": 0}], stack="node"
-    )
+    state = _checked_state([{"description": "t", "status": "done", "attempts": 0}], stack="node")
 
     update = node_static_checks(
         state, executor_client=_passing_checks_client(), stacks_config=two_stack_registry
@@ -727,9 +728,7 @@ def test_static_checks_pass_with_nothing_applicable_keeps_reviewing_phase(two_st
 def test_reopen_last_done_task_or_block_reopens_the_last_done_task():
     state = _checked_state([{"description": "t1", "status": "done", "attempts": 0}])
 
-    update = _reopen_last_done_task_or_block(
-        state, AIMessage(content="feedback"), "static_checks"
-    )
+    update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
 
     assert update["phase"] == "implementing"
     assert update["task_queue"][0]["status"] == "in_progress"
@@ -741,9 +740,7 @@ def test_reopen_last_done_task_or_block_blocks_at_max_attempts():
         [{"description": "t1", "status": "done", "attempts": MAX_TASK_ATTEMPTS - 1}]
     )
 
-    update = _reopen_last_done_task_or_block(
-        state, AIMessage(content="feedback"), "static_checks"
-    )
+    update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
 
     assert update["phase"] == "blocked"
     assert update["task_queue"][0]["status"] == "blocked"
@@ -752,9 +749,7 @@ def test_reopen_last_done_task_or_block_blocks_at_max_attempts():
 def test_reopen_last_done_task_or_block_blocks_when_no_done_task_exists():
     state = _checked_state([])
 
-    update = _reopen_last_done_task_or_block(
-        state, AIMessage(content="feedback"), "static_checks"
-    )
+    update = _reopen_last_done_task_or_block(state, AIMessage(content="feedback"), "static_checks")
 
     assert update["phase"] == "blocked"
     assert "task_queue" not in update
@@ -789,9 +784,7 @@ class _FakeCheckpointer:
 
     def list(self, config):
         for thread_id in self._others:
-            yield type(
-                "T", (), {"config": {"configurable": {"thread_id": thread_id}}}
-            )()
+            yield type("T", (), {"config": {"configurable": {"thread_id": thread_id}}})()
 
     def get_tuple(self, config):
         thread_id = config["configurable"]["thread_id"]
@@ -867,7 +860,9 @@ def test_node_testing_arms_merge_gate_on_pass():
 def test_node_testing_routes_back_to_coder_on_test_failure():
     executor = _RecordingExecutorClient()
     executor.test_result = ExecutorTestResult(
-        passed=2, failed=1, coverage_pct=95.0,
+        passed=2,
+        failed=1,
+        coverage_pct=95.0,
         report="FAILED tests/test_models.py::test_user_creation - AssertionError",
     )
     state = new_project_state("proj-1")
@@ -885,7 +880,9 @@ def test_node_testing_reports_collection_errors_without_crashing():
     coverage percentage -- the feedback path must not assume either exists."""
     executor = _RecordingExecutorClient()
     executor.test_result = ExecutorTestResult(
-        passed=0, failed=2, coverage_pct=None,
+        passed=0,
+        failed=2,
+        coverage_pct=None,
         report="ERROR tests/test_x.py - ImportError: boom\n2 errors",
     )
     state = new_project_state("proj-1")
@@ -901,7 +898,9 @@ def test_node_testing_reports_collection_errors_without_crashing():
 def test_node_testing_coverage_failure_attaches_uncovered_lines():
     executor = _RecordingExecutorClient()
     executor.test_result = ExecutorTestResult(
-        passed=3, failed=0, coverage_pct=50.0,
+        passed=3,
+        failed=0,
+        coverage_pct=50.0,
         report=(
             "Name                  Stmts   Miss  Cover   Missing\n"
             "services/foo/bar.py      20     10    50%   5-14\n"
@@ -921,9 +920,7 @@ def test_node_testing_coverage_failure_attaches_uncovered_lines():
 def test_node_testing_hard_mode_blocks_on_low_coverage():
     executor = _RecordingExecutorClient()
     executor.test_result = ExecutorTestResult(passed=3, failed=0, coverage_pct=50.0, report="")
-    state = new_project_state(
-        "proj-1", coverage_gate_mode="hard", coverage_threshold=80
-    )
+    state = new_project_state("proj-1", coverage_gate_mode="hard", coverage_threshold=80)
 
     update = node_testing(state, executor)
 
@@ -934,9 +931,7 @@ def test_node_testing_hard_mode_blocks_on_low_coverage():
 def test_node_testing_soft_mode_passes_on_low_coverage():
     executor = _RecordingExecutorClient()
     executor.test_result = ExecutorTestResult(passed=3, failed=0, coverage_pct=50.0, report="")
-    state = new_project_state(
-        "proj-1", coverage_gate_mode="soft", coverage_threshold=80
-    )
+    state = new_project_state("proj-1", coverage_gate_mode="soft", coverage_threshold=80)
 
     update = node_testing(state, executor)
 
@@ -1011,7 +1006,9 @@ def test_node_done_derives_branch_name_from_project_id_when_unset():
 
     node_done(state, executor)
 
-    checkout_calls = [c for c in executor.calls if c[0] == "run_command" and c[2][:2] == ("git", "checkout")]
+    checkout_calls = [
+        c for c in executor.calls if c[0] == "run_command" and c[2][:2] == ("git", "checkout")
+    ]
     assert checkout_calls
     assert "feature/proj-xyz" in checkout_calls[0][2]
 
@@ -1064,17 +1061,14 @@ def test_task_progress_lines_returns_empty_list_for_empty_queue():
 def test_task_progress_lines_caps_done_tasks_to_the_most_recent_limit():
     from services.orchestrator.graph.nodes import _task_progress_lines
 
-    task_queue = (
-        [{"description": f"Old done task {i}", "status": "done", "attempts": 0} for i in range(15)]
-        + [{"description": "Still pending", "status": "pending", "attempts": 0}]
-    )
+    task_queue = [
+        {"description": f"Old done task {i}", "status": "done", "attempts": 0} for i in range(15)
+    ] + [{"description": "Still pending", "status": "pending", "attempts": 0}]
 
     lines = _task_progress_lines(task_queue, recent_done_limit=10)
 
     assert len(lines) == 11
-    assert lines[:10] == [
-        f"[done] Old done task {i} (attempts: 0)" for i in range(5, 15)
-    ]
+    assert lines[:10] == [f"[done] Old done task {i} (attempts: 0)" for i in range(5, 15)]
     assert lines[10] == "[pending] Still pending (attempts: 0)"
 
 
@@ -1087,7 +1081,9 @@ _CHANGES_REQUESTED_REVIEW = structured(
         verdict="changes-requested",
         findings=[
             ReviewFinding(
-                file="models.py", line=15, severity="critical",
+                file="models.py",
+                line=15,
+                severity="critical",
                 message="hardcoded password in source code",
             )
         ],
@@ -1114,7 +1110,9 @@ def test_node_reviewer_requests_changes_and_routes_back_to_coder():
     assert update["phase"] == "implementing"
     assert len(update["messages"]) == 1
     assert "Reviewer feedback:" in update["messages"][0].content
-    assert "models.py:15 [critical] hardcoded password in source code" in update["messages"][0].content
+    assert (
+        "models.py:15 [critical] hardcoded password in source code" in update["messages"][0].content
+    )
 
 
 def test_node_reviewer_reads_only_changed_files_when_populated():
@@ -1195,7 +1193,9 @@ _FRONTEND_CHANGES_REQUESTED = structured(
     FrontendReviewResult(
         verdict="changes-requested",
         findings=[
-            FrontendFinding(line=5, severity="critical", message="text unreadable on dark background")
+            FrontendFinding(
+                line=5, severity="critical", message="text unreadable on dark background"
+            )
         ],
     )
 )
@@ -1266,9 +1266,7 @@ def _replan_pending_approval() -> dict:
 
 
 def test_replan_wait_approve_returns_to_planning_and_increments_count(monkeypatch):
-    monkeypatch.setattr(
-        "services.orchestrator.graph.nodes.interrupt", lambda payload: "approve"
-    )
+    monkeypatch.setattr("services.orchestrator.graph.nodes.interrupt", lambda payload: "approve")
     state = new_project_state("proj-1")
     state["replan_count"] = 0
     state["pending_approval"] = _replan_pending_approval()
@@ -1283,9 +1281,7 @@ def test_replan_wait_approve_returns_to_planning_and_increments_count(monkeypatc
 
 
 def test_replan_wait_reject_blocks(monkeypatch):
-    monkeypatch.setattr(
-        "services.orchestrator.graph.nodes.interrupt", lambda payload: "reject"
-    )
+    monkeypatch.setattr("services.orchestrator.graph.nodes.interrupt", lambda payload: "reject")
     state = new_project_state("proj-1")
     state["pending_approval"] = _replan_pending_approval()
 

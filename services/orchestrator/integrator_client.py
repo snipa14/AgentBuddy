@@ -121,9 +121,7 @@ class IntegratorClient:
             await self._executor.run_command(
                 project_id, ["git", "remote", "set-url", "origin", remote_url]
             )
-        await self._executor.run_command(
-            project_id, ["git", "push", "-u", "origin", branch_name]
-        )
+        await self._executor.run_command(project_id, ["git", "push", "-u", "origin", branch_name])
         logger.info("project %s: pushed to %s/%s", project_id, remote_url, branch_name)
         return branch_name, remote_url
 

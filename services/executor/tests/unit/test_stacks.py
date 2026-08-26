@@ -44,9 +44,7 @@ def test_stack_config_full_entry_validates():
             "sandbox_user_mode": "rename",
             "rename_from": "node",
             "env": {"GOMODCACHE": "/home/sandbox/go/pkg/mod"},
-            "manifests": [
-                {"file": "package.json", "install_command": ["npm", "install"]}
-            ],
+            "manifests": [{"file": "package.json", "install_command": ["npm", "install"]}],
             "cache_dir": "/home/sandbox/.npm",
             "check_commands": [
                 {
@@ -67,9 +65,7 @@ def test_stack_config_full_entry_validates():
 
 def test_stack_config_rename_mode_requires_rename_from():
     with pytest.raises(ValidationError):
-        StackConfig.model_validate(
-            {**_minimal_stack(), "sandbox_user_mode": "rename"}
-        )
+        StackConfig.model_validate({**_minimal_stack(), "sandbox_user_mode": "rename"})
 
 
 def test_stack_config_relative_cache_dir_rejected():
@@ -89,9 +85,7 @@ def test_stack_config_empty_install_command_rejected():
 
 def test_stack_config_empty_check_command_rejected():
     with pytest.raises(ValidationError):
-        StackConfig.model_validate(
-            {**_minimal_stack(), "check_commands": [{"command": []}]}
-        )
+        StackConfig.model_validate({**_minimal_stack(), "check_commands": [{"command": []}]})
 
 
 def test_stack_config_test_command_defaults_to_none():

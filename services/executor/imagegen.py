@@ -85,18 +85,12 @@ def render_dockerfile(stack_name: str, stack: StackConfig, template_text: str) -
             f"stack {stack_name!r} declares no pip_packages; every workspace "
             "image needs at least Playwright (ADR-028)"
         )
-    apt_package_lines = "\n".join(
-        f"{_APT_INDENT}{package} \\" for package in stack.apt_packages
-    )
-    env_lines = "".join(
-        f"\nENV {key}={value}" for key, value in sorted(stack.env.items())
-    )
+    apt_package_lines = "\n".join(f"{_APT_INDENT}{package} \\" for package in stack.apt_packages)
+    env_lines = "".join(f"\nENV {key}={value}" for key, value in sorted(stack.env.items()))
     if env_lines:
         env_lines += "\n"
     if stack.sandbox_user_mode == "rename":
-        sandbox_user_block = _RENAME_SANDBOX_BLOCK.format(
-            rename_from=stack.rename_from
-        )
+        sandbox_user_block = _RENAME_SANDBOX_BLOCK.format(rename_from=stack.rename_from)
     else:
         sandbox_user_block = _CREATE_SANDBOX_BLOCK
     rendered = string.Template(template_text).substitute(
@@ -141,9 +135,7 @@ def instruction_lines(dockerfile_text: str) -> list[str]:
     return logical
 
 
-def generate_all(
-    stacks: StacksConfig, template_path: Path, images_root: Path
-) -> dict[str, Path]:
+def generate_all(stacks: StacksConfig, template_path: Path, images_root: Path) -> dict[str, Path]:
     """Renders and writes every stack's Dockerfile under images_root.
 
     Args:
