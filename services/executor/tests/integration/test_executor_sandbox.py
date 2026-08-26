@@ -298,3 +298,17 @@ def test_run_command_fork_bomb_is_capped_and_leaves_no_orphaned_container(
         all=True, filters={"ancestor": executor_config.workspace_image}
     )
     assert leftover == []
+
+
+def test_run_command_never_logs_literal_file_contents(
+    docker_client, executor_config, project_roots, project_id, caplog
+):
+    fake_secret_value = "totally-not-a-real-credential-value-12345"
+    secret_file = project_roots.local / project_id / "secret.env"
+    secret_file.write_text(f"API_KEY={fake_secret_value}\n")
+
+    with caplog.at_level("DEBUG"):
+        tool_run_command(docker_client, executor_config, project_id, ["cat", "secret.env"])
+
+    for record in caplog.records:
+        assert fake_secret_value not in record.getMessage()
