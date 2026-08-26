@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from langgraph.types import Command
 
-from services.orchestrator.executor_client import CommandResult, ExecutorClientError
+from services.orchestrator.executor_client import CommandResult, ExecutorClientError, FileEntry
 from services.orchestrator.graph.build import build_project_graph
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
 from services.orchestrator.graph.nodes import node_done, route_after_merge_wait
@@ -23,11 +23,18 @@ from services.orchestrator.stacks import StacksConfig
 #    argv list in, a CommandResult out -- see integrator_client.py's module
 #    docstring for why this matters) ----------------------------------------
 
+
 class _RecordingExecutorClient:
-    """Minimal fake matching ExecutorClient's async surface, recording calls."""
+    """Minimal fake matching ExecutorClient's async surface, recording calls.
+
+    Defaults to one dummy file so node_reviewer's review_changes() has
+    something to send to the (fake) LLM instead of failing closed when
+    every file read fails (see agents/reviewer.py) -- fast_track_router()'s
+    CODER_DONE has no tool_calls, so changed_files stays empty and
+    review_changes() always falls back to list_files/read_file."""
 
     def __init__(self, files: dict[str, str] | None = None, diff_has_changes: bool = True):
-        self.files = dict(files or {})
+        self.files = dict(files) if files is not None else {"main.py": "x = 1\n"}
         self.calls: list[tuple] = []
         self._diff_has_changes = diff_has_changes
 
@@ -41,6 +48,10 @@ class _RecordingExecutorClient:
         self.calls.append(("write_file", project_id, path, content))
         self.files[path] = content
         return True
+
+    async def list_files(self, project_id, path=".", stack: str = "python"):
+        self.calls.append(("list_files", project_id, path))
+        return [FileEntry(name=name, is_dir=False) for name in self.files]
 
     async def run_command(
         self, project_id: str, command: list[str], timeout=None, stack: str = "python"
@@ -84,8 +95,8 @@ class TestBlockedWithoutApproval:
         )
         config = {"configurable": {"thread_id": "proj-blocked"}}
 
-        graph.invoke(new_project_state("proj-blocked"), config=config)
-        graph.invoke(Command(resume="approve"), config=config)
+        graph.invoke(new_project_state("proj-blocked"), config=config, durability="sync")
+        graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
         snapshot = graph.get_state(config)
         assert snapshot.values["phase"] == "awaiting_merge_approval"
@@ -271,12 +282,8 @@ class TestIntegratorClient:
         cmd_calls = [c[2] for c in executor.calls if c[0] == "run_command"]
         push_commands = [c for c in cmd_calls if c[:2] == ("git", "push")]
         assert push_commands and all("--force" not in c for c in push_commands)
-        checkout_index = next(
-            i for i, c in enumerate(cmd_calls) if c[:2] == ("git", "checkout")
-        )
-        commit_index = next(
-            i for i, c in enumerate(cmd_calls) if c[:2] == ("git", "commit")
-        )
+        checkout_index = next(i for i, c in enumerate(cmd_calls) if c[:2] == ("git", "checkout"))
+        commit_index = next(i for i, c in enumerate(cmd_calls) if c[:2] == ("git", "commit"))
         assert checkout_index < commit_index
 
     def test_commit_and_push_uses_argv_lists_not_shell_strings(self):
@@ -285,9 +292,7 @@ class TestIntegratorClient:
         executor = _RecordingExecutorClient()
         client = IntegratorClient(executor)
 
-        asyncio.run(
-            client.commit_and_push("proj-1", branch_name="feature/test", remote_url=None)
-        )
+        asyncio.run(client.commit_and_push("proj-1", branch_name="feature/test", remote_url=None))
 
         for call in executor.calls:
             command = call[2]
@@ -300,7 +305,9 @@ class TestIntegratorClient:
             async def run_command(self, project_id, command, timeout=None):
                 self.calls.append(("run_command", project_id, tuple(command)))
                 if tuple(command[:3]) == ("git", "remote", "add"):
-                    return CommandResult(stdout="", stderr="remote origin already exists", exit_code=1)
+                    return CommandResult(
+                        stdout="", stderr="remote origin already exists", exit_code=1
+                    )
                 if tuple(command[:3]) == ("git", "diff", "--cached"):
                     return CommandResult(stdout="", stderr="", exit_code=1)
                 return CommandResult(stdout="", stderr="", exit_code=0)

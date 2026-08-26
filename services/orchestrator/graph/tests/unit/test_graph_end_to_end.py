@@ -26,7 +26,7 @@ from langgraph.types import Command
 
 from services.orchestrator.agents.coder import CoderTask, _TaskList
 from services.orchestrator.agents.planner import InterviewTurn
-from services.orchestrator.executor_client import CommandResult, TestResult
+from services.orchestrator.executor_client import CommandResult, FileEntry, TestResult
 from services.orchestrator.graph.build import DEFAULT_GLOBAL_COST_THRESHOLD_USD, build_project_graph
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
 from services.orchestrator.graph.nodes import MAX_REPLANS, MAX_TASK_ATTEMPTS
@@ -50,7 +50,13 @@ class _StubExecutorClient:
     """Placeholder ExecutorClient for tests that drive the graph past
     node_testing/node_done but don't care about real test execution or git
     output -- always reports a clean passing test run and a successful git
-    command."""
+    command.
+
+    list_files/read_file report one dummy file so node_reviewer's
+    review_changes() has something to send to the (fake) LLM instead of
+    failing closed (see agents/reviewer.py) -- fast_track_router()'s
+    CODER_DONE has no tool_calls, so changed_files stays empty and
+    review_changes() always falls back to this list_files/read_file path."""
 
     async def run_tests(
         self, project_id: str, framework: str = "pytest", stack: str = "python"
@@ -61,6 +67,14 @@ class _StubExecutorClient:
         self, project_id: str, command, timeout=None, stack: str = "python"
     ) -> CommandResult:
         return CommandResult(stdout="", stderr="", exit_code=0)
+
+    async def list_files(
+        self, project_id: str, path: str = ".", stack: str = "python"
+    ) -> list[FileEntry]:
+        return [FileEntry(name="main.py", is_dir=False)]
+
+    async def read_file(self, project_id: str, path: str, stack: str = "python") -> str:
+        return "x = 1\n"
 
 
 _UNUSED_EXECUTOR_CLIENT = _StubExecutorClient()
@@ -93,7 +107,9 @@ def test_planner_interview_asks_a_question_before_reaching_plan_approval(
     config = _config("proj-interview")
 
     graph.invoke(
-        new_project_state("proj-interview", initial_message="build a thing"), config=config
+        new_project_state("proj-interview", initial_message="build a thing"),
+        config=config,
+        durability="sync",
     )
 
     snapshot = graph.get_state(config)
@@ -108,7 +124,7 @@ def test_planner_interview_asks_a_question_before_reaching_plan_approval(
     assert snapshot.next == ("planner_wait",)
     assert any(task.interrupts for task in snapshot.tasks)
 
-    graph.invoke(Command(resume="Python"), config=config)
+    graph.invoke(Command(resume="Python"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "awaiting_plan_approval"
@@ -130,13 +146,13 @@ def test_project_below_cost_threshold_reaches_plan_approval_then_merge_gate(
     )
     config = _config("proj-under-budget")
 
-    graph.invoke(new_project_state("proj-under-budget"), config=config)
+    graph.invoke(new_project_state("proj-under-budget"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "awaiting_plan_approval"
     assert snapshot.next == ("plan_wait",)
 
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "awaiting_merge_approval"
@@ -164,8 +180,9 @@ def test_cost_interrupt_fires_at_threshold(tmp_path, memory_conn, projects_root)
     graph.invoke(
         new_project_state("proj-over-budget", cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
         config=config,
+        durability="sync",
     )
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "awaiting_cost_approval"
@@ -188,12 +205,15 @@ def test_resume_approve_after_cost_interrupt_reaches_merge_gate(
     )
     config = _config("proj-resume-continue")
     graph.invoke(
-        new_project_state("proj-resume-continue", cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
+        new_project_state(
+            "proj-resume-continue", cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD
+        ),
         config=config,
+        durability="sync",
     )
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "awaiting_merge_approval"
@@ -216,19 +236,18 @@ def test_resume_reject_after_cost_interrupt_blocks_and_halts_the_run(
     graph.invoke(
         new_project_state("proj-resume-pause", cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
         config=config,
+        durability="sync",
     )
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
-    graph.invoke(Command(resume="reject"), config=config)
+    graph.invoke(Command(resume="reject"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "blocked"
     assert snapshot.next == ()
 
 
-def test_resume_reject_at_merge_gate_blocks_and_halts_the_run(
-    tmp_path, memory_conn, projects_root
-):
+def test_resume_reject_at_merge_gate_blocks_and_halts_the_run(tmp_path, memory_conn, projects_root):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
     graph = build_project_graph(
         checkpointer,
@@ -239,19 +258,17 @@ def test_resume_reject_at_merge_gate_blocks_and_halts_the_run(
         StacksConfig(stacks={}),
     )
     config = _config("proj-reject-merge")
-    graph.invoke(new_project_state("proj-reject-merge"), config=config)
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(new_project_state("proj-reject-merge"), config=config, durability="sync")
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
-    graph.invoke(Command(resume="reject"), config=config)
+    graph.invoke(Command(resume="reject"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "blocked"
     assert snapshot.next == ()
 
 
-def test_resume_approve_at_merge_gate_reaches_done(
-    tmp_path, memory_conn, projects_root
-):
+def test_resume_approve_at_merge_gate_reaches_done(tmp_path, memory_conn, projects_root):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
     graph = build_project_graph(
         checkpointer,
@@ -262,19 +279,17 @@ def test_resume_approve_at_merge_gate_reaches_done(
         StacksConfig(stacks={}),
     )
     config = _config("proj-approve-merge")
-    graph.invoke(new_project_state("proj-approve-merge"), config=config)
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(new_project_state("proj-approve-merge"), config=config, durability="sync")
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "done"
     assert snapshot.next == ()
 
 
-def test_pending_interrupt_survives_a_simulated_restart(
-    tmp_path, memory_conn, projects_root
-):
+def test_pending_interrupt_survives_a_simulated_restart(tmp_path, memory_conn, projects_root):
     """Proves checkpointer persistence, not just in-memory graph state.
 
     Builds the graph, gets through plan approval and trips the cost gate,
@@ -300,8 +315,9 @@ def test_pending_interrupt_survives_a_simulated_restart(
     graph_before_restart.invoke(
         new_project_state(project_id, cost_usd_weekly=DEFAULT_GLOBAL_COST_THRESHOLD_USD),
         config=config,
+        durability="sync",
     )
-    graph_before_restart.invoke(Command(resume="approve"), config=config)
+    graph_before_restart.invoke(Command(resume="approve"), config=config, durability="sync")
     snapshot_before_restart = graph_before_restart.get_state(config)
     assert snapshot_before_restart.values["phase"] == "awaiting_cost_approval"
     checkpointer_before_restart.conn.close()
@@ -322,8 +338,8 @@ def test_pending_interrupt_survives_a_simulated_restart(
     assert snapshot_after_restart.next == ("cost_wait",)
     assert any(task.interrupts for task in snapshot_after_restart.tasks)
 
-    graph_after_restart.invoke(Command(resume="approve"), config=config)
-    graph_after_restart.invoke(Command(resume="approve"), config=config)
+    graph_after_restart.invoke(Command(resume="approve"), config=config, durability="sync")
+    graph_after_restart.invoke(Command(resume="approve"), config=config, durability="sync")
 
     final_snapshot = graph_after_restart.get_state(config)
     assert final_snapshot.values["phase"] == "done"
@@ -345,8 +361,10 @@ def test_cost_interrupt_fires_from_a_lower_configured_global_threshold(
     )
     config = _config("proj-tiny-budget")
 
-    graph.invoke(new_project_state("proj-tiny-budget", cost_usd_weekly=2.0), config=config)
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(
+        new_project_state("proj-tiny-budget", cost_usd_weekly=2.0), config=config, durability="sync"
+    )
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "awaiting_cost_approval"
@@ -405,9 +423,7 @@ class _StaticCheckExecutorClient(_StubExecutorClient):
         self, project_id: str, command, timeout=None, stack: str = "python"
     ) -> CommandResult:
         self.calls.append((project_id, tuple(command)))
-        return CommandResult(
-            stdout=self.check_output, stderr="", exit_code=self.check_exit_code
-        )
+        return CommandResult(stdout=self.check_output, stderr="", exit_code=self.check_exit_code)
 
 
 def test_lint_broken_diff_never_reaches_reviewer(
@@ -445,12 +461,12 @@ def test_lint_broken_diff_never_reaches_reviewer(
     )
     config = _config("proj-lint-broken")
 
-    graph.invoke(new_project_state("proj-lint-broken"), config=config)
+    graph.invoke(new_project_state("proj-lint-broken"), config=config, durability="sync")
     snapshot = graph.get_state(config)
     assert snapshot.next == ("plan_wait",)
 
     with pytest.raises(IndexError):
-        graph.invoke(Command(resume="approve"), config=config)
+        graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "implementing"
@@ -481,8 +497,8 @@ def test_clean_diff_reaches_reviewer_exactly_as_before(
     )
     config = _config("proj-lint-clean")
 
-    graph.invoke(new_project_state("proj-lint-clean"), config=config)
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(new_project_state("proj-lint-clean"), config=config, durability="sync")
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "awaiting_merge_approval"
@@ -545,9 +561,7 @@ def _replan_router() -> FakeRouter:
     )
 
 
-def test_replan_interrupt_fires_survives_restart_and_resumes(
-    tmp_path, memory_conn, projects_root
-):
+def test_replan_interrupt_fires_survives_restart_and_resumes(tmp_path, memory_conn, projects_root):
     """ADR-047 DoD: a project whose plan rests on a false assumption reaches
     replan_wait, survives a restart there, and on approval produces a new
     plan that goes through normal plan approval with done tasks preserved.
@@ -582,8 +596,8 @@ def test_replan_interrupt_fires_survives_restart_and_resumes(
         StacksConfig(stacks={}),
     )
 
-    graph_before_restart.invoke(new_project_state(project_id), config=config)
-    graph_before_restart.invoke(Command(resume="approve"), config=config)
+    graph_before_restart.invoke(new_project_state(project_id), config=config, durability="sync")
+    graph_before_restart.invoke(Command(resume="approve"), config=config, durability="sync")
 
     snapshot = graph_before_restart.get_state(config)
     assert snapshot.values["phase"] == "awaiting_replan_approval"
@@ -617,7 +631,7 @@ def test_replan_interrupt_fires_survives_restart_and_resumes(
     assert snapshot_after_restart.next == ("replan_wait",)
     assert any(task.interrupts for task in snapshot_after_restart.tasks)
 
-    graph_after_restart.invoke(Command(resume="approve"), config=config)
+    graph_after_restart.invoke(Command(resume="approve"), config=config, durability="sync")
 
     final_snapshot = graph_after_restart.get_state(config)
     assert final_snapshot.values["phase"] == "awaiting_plan_approval"
@@ -649,14 +663,14 @@ def test_replan_reject_halts(tmp_path, memory_conn, projects_root):
     )
     config = _config("proj-replan-reject")
 
-    graph.invoke(new_project_state("proj-replan-reject"), config=config)
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(new_project_state("proj-replan-reject"), config=config, durability="sync")
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "awaiting_replan_approval"
     assert snapshot.next == ("replan_wait",)
 
-    graph.invoke(Command(resume="reject"), config=config)
+    graph.invoke(Command(resume="reject"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "blocked"
@@ -697,8 +711,8 @@ def test_third_replan_attempt_halts(tmp_path, memory_conn, projects_root):
     initial_state = new_project_state("proj-replan-cap")
     initial_state["replan_count"] = MAX_REPLANS
 
-    graph.invoke(initial_state, config=config)
-    graph.invoke(Command(resume="approve"), config=config)
+    graph.invoke(initial_state, config=config, durability="sync")
+    graph.invoke(Command(resume="approve"), config=config, durability="sync")
 
     snapshot = graph.get_state(config)
     assert snapshot.values["phase"] == "blocked"

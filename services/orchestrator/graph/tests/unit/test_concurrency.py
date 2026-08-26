@@ -25,7 +25,7 @@ from langgraph.types import Command
 
 from services.orchestrator.agents.coder import CoderTask, _TaskList
 from services.orchestrator.agents.planner import CritiqueResult, DraftPlan, InterviewTurn
-from services.orchestrator.executor_client import CommandResult, TestResult
+from services.orchestrator.executor_client import CommandResult, FileEntry, TestResult
 from services.orchestrator.graph.build import build_project_graph
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
 from services.orchestrator.graph.state import new_project_state
@@ -42,13 +42,26 @@ class _StubExecutorClient:
     """Reports a clean passing test run and successful git commands --
     same shape as test_graph_end_to_end.py's copy (deliberately not shared,
     per planner_fakes.py's own precedent for not coupling test fixtures
-    across files)."""
+    across files).
+
+    list_files/read_file report one dummy file so node_reviewer's
+    review_changes() has something to send to the (fake) LLM instead of
+    failing closed (ADR: Reviewer fails closed when every file read fails,
+    see agents/reviewer.py) -- CODER_DONE's empty tool_calls mean
+    changed_files stays empty every round, so review_changes() always falls
+    back to this list_files/read_file path."""
 
     async def run_tests(self, project_id: str, framework: str = "pytest", stack: str = "python"):
         return TestResult(passed=1, failed=0, coverage_pct=100.0, report="1 passed")
 
     async def run_command(self, project_id: str, command, timeout=None, stack: str = "python"):
         return CommandResult(stdout="", stderr="", exit_code=0)
+
+    async def list_files(self, project_id: str, path: str = ".", stack: str = "python"):
+        return [FileEntry(name="main.py", is_dir=False)]
+
+    async def read_file(self, project_id: str, path: str, stack: str = "python"):
+        return "x = 1\n"
 
 
 def _config(project_id: str) -> dict:
@@ -105,8 +118,8 @@ def test_two_interleaved_projects_do_not_bleed_plan_or_task_queue(
     config_a = _config("proj-alpha")
     config_b = _config("proj-beta")
 
-    graph.invoke(new_project_state("proj-alpha"), config=config_a)
-    graph.invoke(new_project_state("proj-beta"), config=config_b)
+    graph.invoke(new_project_state("proj-alpha"), config=config_a, durability="sync")
+    graph.invoke(new_project_state("proj-beta"), config=config_b, durability="sync")
 
     snapshot_a = graph.get_state(config_a)
     snapshot_b = graph.get_state(config_b)
@@ -117,8 +130,8 @@ def test_two_interleaved_projects_do_not_bleed_plan_or_task_queue(
     assert snapshot_a.values["project_id"] == "proj-alpha"
     assert snapshot_b.values["project_id"] == "proj-beta"
 
-    graph.invoke(Command(resume="approve"), config=config_a)
-    graph.invoke(Command(resume="approve"), config=config_b)
+    graph.invoke(Command(resume="approve"), config=config_a, durability="sync")
+    graph.invoke(Command(resume="approve"), config=config_b, durability="sync")
 
     final_a = graph.get_state(config_a)
     final_b = graph.get_state(config_b)

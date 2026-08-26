@@ -23,4 +23,5 @@ def build_sqlite_checkpointer(db_path: Path) -> SqliteSaver:
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
     return SqliteSaver(conn)

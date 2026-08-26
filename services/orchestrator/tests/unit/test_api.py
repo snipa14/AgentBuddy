@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from services.orchestrator.api import build_app
-from services.orchestrator.executor_client import CommandResult, TestResult
+from services.orchestrator.executor_client import CommandResult, FileEntry, TestResult
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
 from services.orchestrator.graph.tests.unit.planner_fakes import (
     fast_track_router_with_curation,
@@ -18,7 +18,13 @@ from services.orchestrator.stacks import StacksConfig
 
 class _StubExecutorClient:
     """Reports a clean passing test run and successful git commands for
-    tests that drive the graph all the way to node_testing/node_done."""
+    tests that drive the graph all the way to node_testing/node_done.
+
+    list_files/read_file report one dummy file so node_reviewer's
+    review_changes() has something to send to the (fake) LLM instead of
+    failing closed (see agents/reviewer.py) -- fast_track_router()'s
+    CODER_DONE has no tool_calls, so changed_files stays empty and
+    review_changes() always falls back to this list_files/read_file path."""
 
     async def run_tests(
         self, project_id: str, framework: str = "pytest", stack: str = "python"
@@ -29,6 +35,14 @@ class _StubExecutorClient:
         self, project_id: str, command, timeout=None, stack: str = "python"
     ) -> CommandResult:
         return CommandResult(stdout="", stderr="", exit_code=0)
+
+    async def list_files(
+        self, project_id: str, path: str = ".", stack: str = "python"
+    ) -> list[FileEntry]:
+        return [FileEntry(name="main.py", is_dir=False)]
+
+    async def read_file(self, project_id: str, path: str, stack: str = "python") -> str:
+        return "x = 1\n"
 
 
 @pytest.fixture
@@ -187,7 +201,22 @@ def test_status_of_a_terminal_project_clears_its_progress_buffer(client):
     assert get_chunks_since("terminal-project") == []
 
 
-def test_webhook_force_new_starts_a_fresh_project_even_with_an_active_one(client):
+def test_webhook_force_new_starts_a_fresh_project_even_with_an_active_one(tmp_path):
+    """Uses start_only_router(), not the shared `client` fixture: neither
+    project here ever resumes past plan_wait (see
+    test_list_projects_returns_created_ids's identical reasoning above)."""
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    client = TestClient(build_app(service))
+
     client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"})
 
     response = client.post(

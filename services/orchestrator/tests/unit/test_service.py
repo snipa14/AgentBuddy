@@ -6,7 +6,7 @@ import pytest
 
 from services.orchestrator.agents.coder import CoderTask, _TaskList
 from services.orchestrator.agents.planner import InterviewTurn
-from services.orchestrator.executor_client import CommandResult, TestResult
+from services.orchestrator.executor_client import CommandResult, FileEntry, TestResult
 from services.orchestrator.graph.checkpointer import build_sqlite_checkpointer
 from services.orchestrator.graph.tests.unit.planner_fakes import (
     CODER_DONE,
@@ -29,7 +29,13 @@ from services.orchestrator.stacks import StacksConfig
 
 class _StubExecutorClient:
     """Reports a clean passing test run and successful git commands for
-    tests that drive the graph all the way to node_testing/node_done."""
+    tests that drive the graph all the way to node_testing/node_done.
+
+    list_files/read_file report one dummy file so node_reviewer's
+    review_changes() has something to send to the (fake) LLM instead of
+    failing closed (see agents/reviewer.py) -- fast_track_router()'s
+    CODER_DONE has no tool_calls, so changed_files stays empty and
+    review_changes() always falls back to this list_files/read_file path."""
 
     async def run_tests(
         self, project_id: str, framework: str = "pytest", stack: str = "python"
@@ -40,6 +46,14 @@ class _StubExecutorClient:
         self, project_id: str, command, timeout=None, stack: str = "python"
     ) -> CommandResult:
         return CommandResult(stdout="", stderr="", exit_code=0)
+
+    async def list_files(
+        self, project_id: str, path: str = ".", stack: str = "python"
+    ) -> list[FileEntry]:
+        return [FileEntry(name="main.py", is_dir=False)]
+
+    async def read_file(self, project_id: str, path: str, stack: str = "python") -> str:
+        return "x = 1\n"
 
 
 @pytest.fixture

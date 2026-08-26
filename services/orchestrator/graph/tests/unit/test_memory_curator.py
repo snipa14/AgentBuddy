@@ -91,7 +91,7 @@ def test_node_memory_curator_runs_curation_and_stores(tmp_path):
     )
     assert update["messages_curated_through"] == 2
     # Check LEARNINGS.md was written
-    learnings = (projects_root / "proj-curate" / "LEARNINGS.md").read_text()
+    learnings = (projects_root / "proj-curate" / "memory" / "LEARNINGS.md").read_text()
     assert "Completed implementation and testing" in learnings
     # Check global memory was recorded
     from services.orchestrator.memory.global_store import recall

@@ -1099,7 +1099,7 @@ def test_node_reviewer_approves_and_advances_to_testing():
     router = FakeRouter([_APPROVE_REVIEW])
     state = new_project_state("proj-1")
 
-    update = node_reviewer(state, router, _RecordingExecutorClient())
+    update = node_reviewer(state, router, _RecordingExecutorClient(files={"models.py": "x = 1"}))
 
     assert update["phase"] == "testing"
     assert update["cost_usd_session"] > 0
@@ -1109,7 +1109,7 @@ def test_node_reviewer_requests_changes_and_routes_back_to_coder():
     router = FakeRouter([_CHANGES_REQUESTED_REVIEW])
     state = new_project_state("proj-1")
 
-    update = node_reviewer(state, router, _RecordingExecutorClient())
+    update = node_reviewer(state, router, _RecordingExecutorClient(files={"models.py": "x = 1"}))
 
     assert update["phase"] == "implementing"
     assert len(update["messages"]) == 1
@@ -1168,7 +1168,7 @@ def test_reviewer_replan_needed_arms_replan_gate():
     state = new_project_state("proj-1")
     state["replan_count"] = 0
 
-    update = node_reviewer(state, router, _RecordingExecutorClient())
+    update = node_reviewer(state, router, _RecordingExecutorClient(files={"models.py": "x = 1"}))
 
     assert update["phase"] == "awaiting_replan_approval"
     assert update["curator_source"] == "reviewer"
@@ -1181,7 +1181,7 @@ def test_reviewer_replan_needed_at_cap_degrades_to_changes_requested():
     state = new_project_state("proj-1")
     state["replan_count"] = MAX_REPLANS
 
-    update = node_reviewer(state, router, _RecordingExecutorClient())
+    update = node_reviewer(state, router, _RecordingExecutorClient(files={"models.py": "x = 1"}))
 
     assert update["phase"] == "implementing"
     assert "false assumption" in update["messages"][0].content

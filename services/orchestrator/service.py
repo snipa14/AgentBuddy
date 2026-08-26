@@ -77,8 +77,14 @@ class OrchestratorService:
         self._checkpointer = checkpointer
         self._projects_root = projects_root
         self._graph = build_project_graph(
-            checkpointer, router, executor_client, memory_conn, projects_root,
-            stacks_config, plugins, global_cost_threshold_usd,
+            checkpointer,
+            router,
+            executor_client,
+            memory_conn,
+            projects_root,
+            stacks_config,
+            plugins,
+            global_cost_threshold_usd,
         )
 
     def _invoke_graph(self, input_: Any, project_id: str) -> None:
@@ -103,7 +109,7 @@ class OrchestratorService:
             project_id: The project thread being invoked.
         """
         try:
-            self._graph.invoke(input_, config=self._config(project_id))
+            self._graph.invoke(input_, config=self._config(project_id), durability="sync")
         except Exception as exc:
             logger.exception("project %s: graph run crashed", project_id)
             add_progress(project_id, f"❌ crashed: {type(exc).__name__}: {exc}")
@@ -199,7 +205,7 @@ class OrchestratorService:
 
         A project mid-task-loop (non-terminal, no pending_approval) with no
         further progress happening isn't waiting on anything -- it's stuck
-        because whatever last called `_graph.invoke()` never returned, most
+        because whatever last called `_graph.invoke(, durability="sync")` never returned, most
         often because the Orchestrator process itself stopped (e.g. a Docker
         stack restart) partway through. The checkpointer persists state after
         every completed superstep, but nothing else re-invokes the compiled
