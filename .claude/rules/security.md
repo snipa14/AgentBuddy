@@ -29,6 +29,7 @@ Every container spawned by the Executor must have all of the following — no ex
 - Isolated bridge network with an explicit `--network` argument. Never `host` networking.
 - `mem_limit` set (default: `2g`, configurable per project but not removable)
 - `nano_cpus` set (default: `2e9`, configurable per project but not removable)
+- `pids_limit` set (default: `256`, configurable per project but not removable)
 - The container is removed (`auto_remove=True` or explicit `remove()` in `finally`) after the task completes regardless of outcome.
 
 ## What agents never get

@@ -14,7 +14,7 @@ prevent, how, and what's accepted as residual risk for v1.
 | An agent reads/writes another project's files | Every workspace container gets exactly one bind mount: `<projects_host_path>/<project_id>` -> `/workspace`. No other host path is ever mounted. `test_run_command_cannot_read_a_sibling_projects_files` proves a path-traversal attempt from inside `/workspace` can't reach a sibling project's directory, because that directory was never mounted into this container at all. |
 | An agent escapes `/workspace` via `tool_read_file`/`tool_write_file`/`tool_list_files` | `services/executor/paths.py::resolve_project_path` rejects any `path` argument (`..` segments, absolute paths) that would resolve outside the project root, before any Docker call is made. Raises `PathTraversalError`, a `ValueError` subclass. |
 | A container escalates privilege inside itself | Every workspace container runs as UID 1000 (never root), with `cap_drop=["ALL"]` and `security_opt=["no-new-privileges:true"]`. `images/workspace-python/Dockerfile` additionally strips setuid/setgid bits from the base image at build time, as defense in depth beyond the runtime flags. |
-| A container exhausts host CPU/memory | Every container gets an explicit `mem_limit` and `nano_cpus` (configurable via `ExecutorConfig`, not removable). `test_run_command_is_capped_by_the_configured_memory_limit` proves an over-limit allocation is killed. |
+| A container exhausts host CPU/memory/process-count | Every container gets an explicit `mem_limit`, `nano_cpus`, and `pids_limit` (configurable via `ExecutorConfig`, not removable). `test_run_command_is_capped_by_the_configured_memory_limit` proves an over-limit memory allocation is killed; `test_run_command_fork_bomb_is_capped_and_leaves_no_orphaned_container` proves a fork bomb is capped and the container still gets cleaned up. |
 | A container pivots to core services (Orchestrator, docker-socket-proxy, Telegram Gateway) | Workspace containers attach only to `foundry_workspace`, a network isolated from `foundry_internal` (where the core services and the proxy live) -- never `host` networking, always an explicit `--network`. |
 | A crashed or timed-out task leaves an orphaned container | `services/executor/containers.py::workspace_container` is a context manager whose `finally` block calls `container.remove(force=True)` unconditionally. `exec_in_container` runs the exec call in a background thread with a timeout; on timeout it kills the container (unblocking the exec call) before the context manager removes it. `test_command_exceeding_timeout_raises_and_leaves_no_orphaned_container` proves no container survives a timeout. |
 | The Executor's own Docker calls exceed the whitelisted proxy scope | `docker-socket-proxy` is configured with `CONTAINERS=1 EXEC=1 IMAGES=1 POST=1` and everything else `0` (`BUILD`, `NETWORKS`, `VOLUMES`, `SWARM`, `SYSTEM`, ...). The Executor's own code never calls network- or volume-mutating APIs -- it only ever references the pre-provisioned `foundry_workspace` network by name, since the proxy would deny a `NETWORKS`-scoped call outright. |
@@ -82,6 +82,13 @@ mocked `docker.from_env()` for this). It covers:
 - an over-`mem_limit` allocation is killed
 - a command exceeding its timeout raises `CommandTimeoutError` and leaves
   no orphaned container
+- a fork bomb is capped by `pids_limit` and the container still gets
+  cleaned up
+- `docker-socket-proxy`'s whitelist holds in both directions: `BUILD`/
+  `NETWORKS` return 403, `CONTAINERS` still works (`test_proxy_boundary.py`,
+  run separately from `test_executor_sandbox.py`)
+- file contents read via `tool_run_command` never reach the Executor's own
+  log stream, only `project_id`/command/path
 
 Run it with `pytest -m integration services/executor/tests/integration`.
 

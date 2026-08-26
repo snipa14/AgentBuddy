@@ -3,7 +3,7 @@
 Every container this module creates satisfies the full checklist in
 .claude/rules/security.md: non-root user, all capabilities dropped,
 no-new-privileges, project-scoped bind mount only, an isolated network,
-explicit CPU/memory limits, and guaranteed removal in a finally block. From
+explicit CPU/memory/process-count limits, and guaranteed removal in a finally block. From
 Phase 17 onward a container may also get a second mount: a per-project,
 per-stack named cache volume for its package manager (`pip`/`npm`) --
 still zero host paths outside `projects/<id>/`, since a Docker-managed named
