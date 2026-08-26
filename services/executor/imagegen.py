@@ -35,19 +35,26 @@ def _cache_dir_setup(cache_dir: str | None) -> str:
     directory in the image with the sandbox UID/GID lets Docker seed the
     volume's initial content (and ownership) from the image layer on first
     mount instead, so the non-root sandbox user can write into its
-    package-manager cache from the very first container run.
+    package-manager cache from the very first container run. The chown is
+    recursive over the whole sandbox home directory, not just cache_dir
+    itself, so any parent directories mkdir -p creates along the way (e.g.
+    the go stack's GOPATH at /home/sandbox/go, above /home/sandbox/go/pkg/mod)
+    are owned by the sandbox user too, not left root-owned. This is cheap
+    and safe to run unconditionally here: at this point in the Dockerfile,
+    right after the sandbox user block creates/renames the home directory,
+    it's small and either already correctly owned or about to be created.
 
     Args:
         cache_dir: The stack's cache directory, or None if it has no
             per-project cache volume.
 
     Returns:
-        A RUN instruction pre-creating and chowning cache_dir, or "" if
-        cache_dir is None.
+        A RUN instruction pre-creating cache_dir and recursively chowning
+        /home/sandbox, or "" if cache_dir is None.
     """
     if cache_dir is None:
         return ""
-    return f"RUN mkdir -p {cache_dir} && chown 1000:1000 {cache_dir}\n"
+    return f"RUN mkdir -p {cache_dir} && chown -R 1000:1000 /home/sandbox\n"
 
 
 def render_dockerfile(stack_name: str, stack: StackConfig, template_text: str) -> str:
