@@ -123,6 +123,7 @@ services:
 networks:
   foundry_internal:
     driver: bridge
+    name: foundry_internal
   # Not attached to any service below -- ephemeral workspace containers are
   # spawned dynamically by the Executor (ARCHITECTURE.md §6/§7), not declared
   # here. docker-socket-proxy's NETWORKS=0 means the Executor itself can
