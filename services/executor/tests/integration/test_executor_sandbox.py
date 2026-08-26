@@ -22,6 +22,7 @@ import docker
 import pytest
 
 from services.executor.config import DEFAULT_STACKS_CONFIG_PATH, ExecutorConfig
+from services.executor.containers import WORKSPACE_UID
 from services.executor.docker_client import build_docker_client
 from services.executor.errors import CommandTimeoutError
 from services.executor.stacks import load_stacks_config
@@ -85,6 +86,26 @@ def _make_project_roots(tmp_path_factory) -> ProjectRoots:
     return ProjectRoots(local=local, host=host)
 
 
+def _chown_to_workspace_uid_if_root(path: Path) -> None:
+    """Chowns *path* to the workspace container's UID, mirroring production.
+
+    services/orchestrator/registry/registration.py does this for every real
+    project directory immediately after creating it (via
+    services.orchestrator.memory.project_memory.chown_to_workspace_uid) --
+    a directory created by a root process (the Orchestrator's own container
+    runs as root) is otherwise left root-owned at mode 755, which blocks
+    the non-root UID-1000 workspace container from creating anything inside
+    it. This test's own directories need the same treatment to faithfully
+    reproduce production's actual permission state; a non-root test process
+    can't chown to an arbitrary UID at all, so this is a no-op in that case.
+
+    Args:
+        path: The directory to chown.
+    """
+    if os.geteuid() == 0:
+        os.chown(path, WORKSPACE_UID, WORKSPACE_UID)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _cleanup_dood_local_projects_dir():
     yield
@@ -142,7 +163,9 @@ def executor_config(project_roots, workspace_image, workspace_network):
 @pytest.fixture
 def project_id(project_roots):
     new_project_id = f"proj-{uuid.uuid4().hex[:8]}"
-    (project_roots.local / new_project_id).mkdir()
+    project_dir = project_roots.local / new_project_id
+    project_dir.mkdir()
+    _chown_to_workspace_uid_if_root(project_dir)
     return new_project_id
 
 
@@ -160,6 +183,7 @@ def node_project_id(project_roots, node_workspace_image):
     new_project_id = f"proj-{uuid.uuid4().hex[:8]}"
     project_dir = project_roots.local / new_project_id
     project_dir.mkdir()
+    _chown_to_workspace_uid_if_root(project_dir)
     (project_dir / "package.json").write_text(
         '{"name": "sandbox-check", "version": "1.0.0",'
         ' "dependencies": {"left-pad": "1.3.0"}}'
