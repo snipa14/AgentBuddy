@@ -29,6 +29,14 @@ the same operations through the Docker SDK:
 When the `docker` CLI *is* present, the fixtures use it directly, matching
 the original subprocess-based design.
 
+The SDK-fallback branches never touch PROXY_CONTAINER_NAME/PROXY_NETWORK_NAME
+(the real names a docker-compose.yml-managed production deployment would
+use) -- they operate exclusively on FALLBACK_CONTAINER_NAME/
+FALLBACK_NETWORK_NAME, a private sandbox this fixture owns outright and
+tears down (stop + remove) after the module's tests finish. The CLI branch
+targets the real deployment on purpose and only stops what it itself
+started, leaving an already-running production proxy untouched.
+
 Run with: pytest -m integration services/executor/tests/integration/test_proxy_boundary.py
 """
 
@@ -48,6 +56,17 @@ PROXY_CONTAINER_NAME = "foundry-docker-socket-proxy"
 PROXY_NETWORK_NAME = "foundry_internal"
 PROXY_SERVICE_ALIAS = "docker-socket-proxy"
 PROXY_PORT = 2375
+
+# Used only by the SDK-fallback branches below (no `docker` CLI available).
+# Deliberately distinct from PROXY_CONTAINER_NAME/PROXY_NETWORK_NAME, which
+# are the real names a docker-compose.yml-managed production deployment
+# would use -- reusing those names here would risk this fixture adopting
+# and mutating a real, already-running production proxy container/network
+# on a host where the CLI happens to be unavailable. The CLI branch tests
+# the real deployment on purpose; the SDK-fallback branch needs its own
+# private sandbox instead.
+FALLBACK_CONTAINER_NAME = "foundry-docker-socket-proxy-sdk-fallback-test"
+FALLBACK_NETWORK_NAME = "foundry_internal_sdk_fallback_test"
 COMPOSE_FILE_PATH = Path(__file__).resolve().parents[4] / "docker-compose.yml"
 
 DOCKER_CLI_AVAILABLE = shutil.which("docker") is not None
@@ -89,6 +108,11 @@ def daemon_client():
 @pytest.fixture(scope="module")
 def running_proxy(daemon_client):
     if DOCKER_CLI_AVAILABLE:
+        try:
+            already_running = daemon_client.containers.get(PROXY_CONTAINER_NAME).status == "running"
+        except docker_errors.NotFound:
+            already_running = False
+
         up = subprocess.run(
             ["docker", "compose", "up", "-d", "docker-socket-proxy"],
             cwd="/workspace",
@@ -101,7 +125,21 @@ def running_proxy(daemon_client):
             daemon_client.containers.get(PROXY_CONTAINER_NAME).reload()
         except docker_errors.NotFound:
             pytest.skip("docker-socket-proxy container not found after compose up")
+
         yield PROXY_CONTAINER_NAME
+
+        if not already_running:
+            stop = subprocess.run(
+                ["docker", "compose", "stop", "docker-socket-proxy"],
+                cwd="/workspace",
+                capture_output=True,
+                text=True,
+            )
+            if stop.returncode != 0:
+                print(
+                    "proxy-boundary teardown: could not stop docker-socket-proxy "
+                    f"via compose: {stop.stderr}"
+                )
         return
 
     try:
@@ -110,12 +148,12 @@ def running_proxy(daemon_client):
         pytest.skip(f"could not read docker-socket-proxy service spec: {exc}")
 
     try:
-        network = daemon_client.networks.get(PROXY_NETWORK_NAME)
+        network = daemon_client.networks.get(FALLBACK_NETWORK_NAME)
     except docker_errors.NotFound:
-        network = daemon_client.networks.create(PROXY_NETWORK_NAME, driver="bridge")
+        network = daemon_client.networks.create(FALLBACK_NETWORK_NAME, driver="bridge")
 
     try:
-        container = daemon_client.containers.get(PROXY_CONTAINER_NAME)
+        container = daemon_client.containers.get(FALLBACK_CONTAINER_NAME)
     except docker_errors.NotFound:
         volume_spec = spec["volumes"][0]
         host_path, container_path, mode = volume_spec.split(":")
@@ -126,7 +164,7 @@ def running_proxy(daemon_client):
         try:
             container = daemon_client.containers.create(
                 spec["image"],
-                name=PROXY_CONTAINER_NAME,
+                name=FALLBACK_CONTAINER_NAME,
                 environment={str(k): str(v) for k, v in spec["environment"].items()},
                 volumes={host_path: {"bind": container_path, "mode": mode}},
                 detach=True,
@@ -135,11 +173,11 @@ def running_proxy(daemon_client):
             pytest.skip(f"could not create docker-socket-proxy via Docker SDK: {exc}")
 
     container.reload()
-    if PROXY_NETWORK_NAME not in container.attrs["NetworkSettings"]["Networks"]:
+    if FALLBACK_NETWORK_NAME not in container.attrs["NetworkSettings"]["Networks"]:
         try:
             network.connect(container, aliases=[PROXY_SERVICE_ALIAS])
         except docker_errors.APIError as exc:
-            pytest.skip(f"could not connect docker-socket-proxy to {PROXY_NETWORK_NAME}: {exc}")
+            pytest.skip(f"could not connect docker-socket-proxy to {FALLBACK_NETWORK_NAME}: {exc}")
 
     container.reload()
     if container.status != "running":
@@ -148,7 +186,26 @@ def running_proxy(daemon_client):
         except docker_errors.APIError as exc:
             pytest.skip(f"could not start docker-socket-proxy via Docker SDK: {exc}")
 
-    yield PROXY_CONTAINER_NAME
+    yield FALLBACK_CONTAINER_NAME
+
+    # This fixture owns this container exclusively (it's a test-scoped name
+    # that can never collide with a real deployment), so stopping and
+    # removing it unconditionally is always safe.
+    try:
+        container.reload()
+        container.stop()
+    except docker_errors.APIError as exc:
+        print(f"proxy-boundary teardown: could not stop {FALLBACK_CONTAINER_NAME}: {exc}")
+    try:
+        container.remove(force=True)
+    except docker_errors.APIError as exc:
+        print(f"proxy-boundary teardown: could not remove {FALLBACK_CONTAINER_NAME}: {exc}")
+    try:
+        daemon_client.networks.get(FALLBACK_NETWORK_NAME).remove()
+    except docker_errors.NotFound:
+        pass
+    except docker_errors.APIError as exc:
+        print(f"proxy-boundary teardown: could not remove {FALLBACK_NETWORK_NAME}: {exc}")
 
 
 @pytest.fixture(scope="module")
@@ -168,25 +225,33 @@ def proxy_reachable_from_this_process(running_proxy, daemon_client):
         if connect.returncode != 0 and "already exists" not in connect.stderr:
             pytest.skip(f"could not join {PROXY_NETWORK_NAME}: {connect.stderr}")
         yield
-        subprocess.run(
+        disconnect = subprocess.run(
             ["docker", "network", "disconnect", PROXY_NETWORK_NAME, self_id],
             capture_output=True,
             text=True,
         )
+        if disconnect.returncode != 0:
+            print(
+                f"proxy-boundary teardown: could not disconnect {self_id} from "
+                f"{PROXY_NETWORK_NAME}: {disconnect.stderr}"
+            )
         return
 
     try:
-        network = daemon_client.networks.get(PROXY_NETWORK_NAME)
+        network = daemon_client.networks.get(FALLBACK_NETWORK_NAME)
         network.connect(self_id)
     except docker_errors.APIError as exc:
         if "already exists" not in str(exc):
-            pytest.skip(f"could not join {PROXY_NETWORK_NAME} via Docker SDK: {exc}")
+            pytest.skip(f"could not join {FALLBACK_NETWORK_NAME} via Docker SDK: {exc}")
     yield
     try:
-        network = daemon_client.networks.get(PROXY_NETWORK_NAME)
+        network = daemon_client.networks.get(FALLBACK_NETWORK_NAME)
         network.disconnect(self_id)
-    except docker_errors.APIError:
-        pass
+    except docker_errors.APIError as exc:
+        print(
+            f"proxy-boundary teardown: could not disconnect {self_id} from "
+            f"{FALLBACK_NETWORK_NAME}: {exc}"
+        )
 
 
 @pytest.fixture
