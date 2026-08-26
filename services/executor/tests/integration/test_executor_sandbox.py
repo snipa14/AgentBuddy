@@ -22,7 +22,7 @@ import docker
 import pytest
 
 from services.executor.config import DEFAULT_STACKS_CONFIG_PATH, ExecutorConfig
-from services.executor.containers import WORKSPACE_UID
+from services.executor.containers import WORKSPACE_UID, cache_volume_name
 from services.executor.docker_client import build_docker_client
 from services.executor.errors import CommandTimeoutError
 from services.executor.stacks import load_stacks_config
@@ -161,12 +161,26 @@ def executor_config(project_roots, workspace_image, workspace_network):
 
 
 @pytest.fixture
-def project_id(project_roots):
+def project_id(project_roots, docker_client):
+    """Mints a fresh project id and removes its stray python cache volume afterward.
+
+    tool_run_command's default stack is python, so any test that runs a
+    command through this project id may cause containers.py's Phase-17
+    cache-volume mechanism to create a `foundry-cache-{project_id}-python`
+    named volume; without this cleanup every such test run strands one more
+    volume on the daemon forever. Not every test using this fixture calls
+    tool_run_command, so the volume may never have been created -- that's
+    tolerated below, not an error.
+    """
     new_project_id = f"proj-{uuid.uuid4().hex[:8]}"
     project_dir = project_roots.local / new_project_id
     project_dir.mkdir()
     _chown_to_workspace_uid_if_root(project_dir)
-    return new_project_id
+    yield new_project_id
+    try:
+        docker_client.volumes.get(cache_volume_name(new_project_id, "python")).remove()
+    except docker.errors.NotFound:
+        pass
 
 
 @pytest.fixture(scope="session")
@@ -179,7 +193,12 @@ def node_workspace_image(docker_client):
 
 
 @pytest.fixture
-def node_project_id(project_roots, node_workspace_image):
+def node_project_id(project_roots, node_workspace_image, docker_client):
+    """Mints a fresh node-stack project id and removes its stray cache volume afterward.
+
+    Same rationale as project_id's docstring, but for the node stack's
+    `foundry-cache-{project_id}-node` volume.
+    """
     new_project_id = f"proj-{uuid.uuid4().hex[:8]}"
     project_dir = project_roots.local / new_project_id
     project_dir.mkdir()
@@ -188,7 +207,11 @@ def node_project_id(project_roots, node_workspace_image):
         '{"name": "sandbox-check", "version": "1.0.0",'
         ' "dependencies": {"left-pad": "1.3.0"}}'
     )
-    return new_project_id
+    yield new_project_id
+    try:
+        docker_client.volumes.get(cache_volume_name(new_project_id, "node")).remove()
+    except docker.errors.NotFound:
+        pass
 
 
 def test_write_file_round_trip_is_visible_on_the_host(
