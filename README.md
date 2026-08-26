@@ -8,7 +8,7 @@
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB.svg?style=flat-square&logo=python&logoColor=white)
 ![Docker Compose native](https://img.shields.io/badge/docker-compose--native-2496ED.svg?style=flat-square&logo=docker&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-1C3C3C.svg?style=flat-square)
-![Status](https://img.shields.io/badge/phases-0--20%20of%2024%20done-orange.svg?style=flat-square)
+![Status](https://img.shields.io/badge/phases-24%20of%2024%20done-orange.svg?style=flat-square)
 
 *A self-hosted multi-agent dev team that plans, builds, reviews, tests,*
 *and PRs your code — supervised from your phone.*
@@ -25,11 +25,14 @@ Telegram, from wherever you are. It runs entirely in Docker containers on
 hardware you own, with inference routed to a local GPU, a remote
 OpenAI-compatible server, or the Claude API — your call, per agent role.
 
-> **Status:** Phases 0–20 of the build plan (see [`TODO.md`](TODO.md)) are
-> complete and running — secrets/compose bootstrap, model routing, the
-> Docker security boundary, the full agent lineup below, memory,
-> multi-project concurrency, and packaged skills. Security hardening
-> (Phase 21) is next.
+> **Status:** All 24 core phases of the build plan (see
+> [`TODO.md`](TODO.md)) are complete — secrets/compose bootstrap, model
+> routing, the Docker security boundary, the full agent lineup below,
+> memory, multi-project concurrency, packaged skills, and a security
+> hardening pass. Remaining work is Phase 25's opt-in stretch goals
+> (MCP servers, cross-project pattern memory, deployment tooling). CI
+> isn't wired up yet — see [`TODO.md`](TODO.md) for what's manually vs.
+> automatically verified.
 
 ## 🧠 Why Foundry
 

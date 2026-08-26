@@ -4,7 +4,9 @@ A self-hosted multi-agent software development platform. Agents plan, build, rev
 
 ## Current status
 
-This repo is pre-Phase-0: only planning docs (`ARCHITECTURE.md`, `TODO.md`, this file) and `.claude/` config exist. There is no `services/` tree, no `scripts/`, no `pyproject.toml`, no `docker-compose.yml`, and no git history yet. Every checkbox in `TODO.md` is unchecked. The Commands and Architecture map sections below describe the target end-state (what Phase 0+ builds toward) — before assuming a file or command exists, check whether the relevant `TODO.md` phase is actually done.
+Phases 0–24 of `TODO.md` are done and tagged (`phase-0-done` through `phase-24-done`, `v0.1.0`) — full `services/` tree, compose stack, the complete agent lineup, memory, multi-project concurrency, packaged skills, and the security hardening pass. Phase 25 ("Stretch / Future Work") is optional, unordered, and partially done — check its checkboxes individually rather than assuming it's a gate.
+
+**Caveat before trusting "done" at face value:** no CI has ever run against this repo (`.github/workflows` is empty), so `main`-always-green and the 80% coverage floor are enforced by convention, not automation, as of this note. Some Phase 21+ items were verified by hand-tracing rather than a live `pytest` run in the environment they were built in, because `langgraph`/`langchain-core`/`aiogram` weren't installable there. Treat a phase's checkbox as "implemented and reviewed," not as "passed CI" until a CI workflow actually exists and has run.
 
 ## Key references
 
