@@ -62,6 +62,7 @@ def test_tool_run_command_creates_locked_down_container_and_removes_it(
     assert create_kwargs["security_opt"] == ["no-new-privileges:true"]
     assert create_kwargs["mem_limit"] == config.mem_limit
     assert create_kwargs["nano_cpus"] == config.nano_cpus
+    assert create_kwargs["pids_limit"] == config.pids_limit
     assert create_kwargs["network"] == config.network_name
     assert create_kwargs["user"] == "1000:1000"
     mount_source = str((config.projects_host_path / "proj-1").resolve())

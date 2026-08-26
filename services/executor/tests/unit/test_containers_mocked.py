@@ -219,6 +219,18 @@ def test_workspace_container_omits_cache_volume_for_a_stack_with_none_registered
     assert "foundry-cache-proj-1-ruby" not in create_kwargs["volumes"]
 
 
+def test_workspace_container_passes_pids_limit_to_create(config, tmp_path):
+    mock_container = MagicMock(spec=Container)
+    client = MagicMock()
+    client.containers.create.return_value = mock_container
+
+    with workspace_container(client, config, tmp_path, stack="python", project_id="proj-1"):
+        pass
+
+    _, create_kwargs = client.containers.create.call_args
+    assert create_kwargs["pids_limit"] == config.pids_limit
+
+
 def test_workspace_container_unknown_stack_gets_only_the_project_bind_mount(config, tmp_path):
     mock_container = MagicMock(spec=Container)
     client = MagicMock()

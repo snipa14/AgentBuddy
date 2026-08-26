@@ -97,3 +97,20 @@ def test_from_env_reads_stacks_config_path(monkeypatch, tmp_path):
     monkeypatch.setenv("STACKS_CONFIG_PATH", str(stacks_file))
     config = ExecutorConfig.from_env()
     assert set(config.stacks.stacks) == {"python"}
+
+
+def test_executor_config_pids_limit_defaults_to_256():
+    config = ExecutorConfig(projects_host_path=Path("/tmp/whatever"))
+    assert config.pids_limit == 256
+
+
+def test_from_env_reads_workspace_pids_limit(monkeypatch, tmp_path):
+    stacks_path = tmp_path / "stacks.yaml"
+    stacks_path.write_text("stacks: {}\n")
+    monkeypatch.setenv("PROJECTS_HOST_PATH", "/tmp/whatever")
+    monkeypatch.setenv("STACKS_CONFIG_PATH", str(stacks_path))
+    monkeypatch.setenv("WORKSPACE_PIDS_LIMIT", "64")
+
+    config = ExecutorConfig.from_env()
+
+    assert config.pids_limit == 64

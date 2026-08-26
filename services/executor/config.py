@@ -18,6 +18,7 @@ DEFAULT_WORKSPACE_IMAGE = "foundry/workspace-python:3.12"
 DEFAULT_NETWORK_NAME = "foundry_workspace"
 DEFAULT_MEM_LIMIT = "2g"
 DEFAULT_NANO_CPUS = 2_000_000_000
+DEFAULT_PIDS_LIMIT = 256
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 DEFAULT_STACKS_CONFIG_PATH = "config/stacks.yaml"
 
@@ -25,7 +26,7 @@ DEFAULT_STACKS_CONFIG_PATH = "config/stacks.yaml"
 class ExecutorConfig(BaseModel):
     """Runtime configuration for the Executor, validated once at process startup.
 
-    mem_limit and nano_cpus are process-wide defaults for v1; Phase 7's
+    mem_limit, nano_cpus, and pids_limit are process-wide defaults for v1; Phase 7's
     projects.yaml is expected to add per-project overrides on top of these.
     `stacks` is the validated stack registry (ADR-045); it defaults to an
     empty registry so tests can construct a config without touching the
@@ -37,6 +38,7 @@ class ExecutorConfig(BaseModel):
     network_name: str = DEFAULT_NETWORK_NAME
     mem_limit: str = DEFAULT_MEM_LIMIT
     nano_cpus: int = DEFAULT_NANO_CPUS
+    pids_limit: int = DEFAULT_PIDS_LIMIT
     command_timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS
     stacks: StacksConfig = Field(default_factory=lambda: StacksConfig(stacks={}))
 
@@ -77,6 +79,7 @@ class ExecutorConfig(BaseModel):
             network_name=_env_or_default("WORKSPACE_NETWORK", DEFAULT_NETWORK_NAME),
             mem_limit=_env_or_default("WORKSPACE_MEM_LIMIT", DEFAULT_MEM_LIMIT),
             nano_cpus=int(_env_or_default("WORKSPACE_NANO_CPUS", str(DEFAULT_NANO_CPUS))),
+            pids_limit=int(_env_or_default("WORKSPACE_PIDS_LIMIT", str(DEFAULT_PIDS_LIMIT))),
             command_timeout_seconds=int(
                 _env_or_default(
                     "WORKSPACE_COMMAND_TIMEOUT_SECONDS", str(DEFAULT_COMMAND_TIMEOUT_SECONDS)

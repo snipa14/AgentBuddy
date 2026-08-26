@@ -137,6 +137,7 @@ def workspace_container(
                 network=config.network_name,
                 mem_limit=config.mem_limit,
                 nano_cpus=config.nano_cpus,
+                pids_limit=config.pids_limit,
             )
             container.start()
             logger.info(
