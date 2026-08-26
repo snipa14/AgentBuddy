@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, release/**]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+
+      # test_executor_sandbox.py and test_coder_end_to_end.py spin real
+      # workspace containers off these images (.claude/rules/security.md:
+      # every executor-launched container is a real Docker sandbox, never
+      # mocked in the integration tier -- see testing.md "the mock that
+      # proves nothing"). GitHub-hosted ubuntu runners ship a real Docker
+      # daemon, so this builds the same images ./scripts/start.sh's README
+      # instructions tell an operator to build before their first project.
+      - run: docker build -t foundry/workspace-python:3.12 images/workspace-python/
+      - run: docker build -t foundry/workspace-node:20 images/workspace-node/
+      - run: docker build -t foundry/workspace-go:1.22 images/workspace-go/
+
+      # Runs both unit and integration tiers in one pass (testing.md: "CI
+      # always runs both"), matching this repo's documented all-services
+      # test command exactly.
+      - run: pytest --cov=services --cov-report=term-missing --cov-fail-under=80
