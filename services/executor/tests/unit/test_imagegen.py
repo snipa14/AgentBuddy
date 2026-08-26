@@ -51,9 +51,7 @@ def test_render_python_contains_expected_instructions():
 def test_render_node_uses_rename_block_and_break_flag():
     rendered = render_dockerfile("node", _node_stack(), TEMPLATE_PATH.read_text())
     lines = instruction_lines(rendered)
-    assert (
-        "RUN pip install --break-system-packages --no-cache-dir playwright" in lines
-    )
+    assert "RUN pip install --break-system-packages --no-cache-dir playwright" in lines
     assert any(line.startswith("RUN groupmod --new-name sandbox node") for line in lines)
     assert not any("useradd" in line for line in lines)
 
@@ -87,8 +85,7 @@ def test_render_includes_cache_dir_setup_when_stack_declares_one():
     rendered = render_dockerfile("python", stack, TEMPLATE_PATH.read_text())
     lines = instruction_lines(rendered)
     assert (
-        "RUN mkdir -p /home/sandbox/.cache/pip "
-        "&& chown 1000:1000 /home/sandbox/.cache/pip"
+        "RUN mkdir -p /home/sandbox/.cache/pip && chown 1000:1000 /home/sandbox/.cache/pip"
     ) in lines
 
 
@@ -130,9 +127,7 @@ def test_golden_rendered_matches_committed_dockerfiles():
     stacks = load_stacks_config(REPO_ROOT / "config" / "stacks.yaml").stacks
     template_text = TEMPLATE_PATH.read_text()
     for stack_name, stack in stacks.items():
-        committed = (
-            REPO_ROOT / "images" / f"workspace-{stack_name}" / "Dockerfile"
-        ).read_text()
+        committed = (REPO_ROOT / "images" / f"workspace-{stack_name}" / "Dockerfile").read_text()
         assert render_dockerfile(stack_name, stack, template_text) == committed, (
             f"images/workspace-{stack_name}/Dockerfile is out of sync with the "
             "template -- rerun scripts/gen_workspace_images.py"
