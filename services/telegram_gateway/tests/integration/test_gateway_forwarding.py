@@ -12,7 +12,9 @@ import asyncio
 import json
 import threading
 import time
+from collections.abc import AsyncGenerator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
 import httpx
 import pytest
@@ -39,6 +41,17 @@ class NullTelegramSession(BaseSession):
 
     async def make_request(self, bot, method, timeout=None):
         return True
+
+    async def stream_content(
+        self,
+        url: str,
+        headers: dict[str, Any] | None = None,
+        timeout: int = 30,
+        chunk_size: int = 65536,
+        raise_for_status: bool = True,
+    ) -> AsyncGenerator[bytes, None]:
+        return
+        yield b""
 
 
 class _RecordingHandler(BaseHTTPRequestHandler):
@@ -73,8 +86,15 @@ def stub_orchestrator():
         thread.join(timeout=5)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def dispatcher():
+    """Module-scoped: aiogram's `router` (the module-level singleton from
+    services.telegram_gateway.bot) can only ever be attached to one parent
+    Dispatcher for its lifetime -- a function-scoped fixture rebuilding a
+    fresh Dispatcher per test would try to re-attach the same router a
+    second time and hit aiogram's "Router is already attached" RuntimeError.
+    One Dispatcher shared across this module's tests also matches how the
+    real Telegram Gateway runs: one process, one Dispatcher, many updates."""
     dp = Dispatcher()
     auth_middleware = AllowedUserMiddleware(ALLOWED_USER_ID)
     dp.message.outer_middleware(auth_middleware)
@@ -116,7 +136,11 @@ def test_authorized_message_reaches_stub_orchestrator(stub_orchestrator, dispatc
 
     assert len(requests) == 1
     assert requests[0]["path"] == "/webhook"
-    assert requests[0]["json"] == {"user_id": ALLOWED_USER_ID, "text": "hello foundry"}
+    assert requests[0]["json"] == {
+        "user_id": ALLOWED_USER_ID,
+        "text": "hello foundry",
+        "force_new": False,
+    }
 
 
 def test_unauthorized_message_never_reaches_stub_orchestrator(stub_orchestrator, dispatcher, bot):
