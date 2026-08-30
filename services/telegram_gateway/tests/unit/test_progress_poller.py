@@ -106,6 +106,45 @@ def test_poll_once_puts_each_event_from_one_fetch_on_its_own_line():
     bot.send_message.assert_awaited_once_with(7, "🔧 write_file src/a.py\n✅ write_file src/a.py")
 
 
+def test_poll_once_prefixes_the_first_message_with_the_project_name():
+    orchestrator = _fake_orchestrator(
+        [_stream_response([{"seq": 0, "text": "hello "}])],
+        [_status_response("implementing", name="Build Me A Cli")],
+    )
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot)
+    poller._since_seq["proj-1"] = -1
+    poller._idle_polls["proj-1"] = 0
+
+    asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    bot.send_message.assert_awaited_once_with(7, "📁 Build Me A Cli\nhello ")
+
+
+def test_poll_once_does_not_re_send_the_name_header_on_a_later_edit():
+    orchestrator = _fake_orchestrator(
+        [
+            _stream_response([{"seq": 0, "text": "hello "}]),
+            _stream_response([{"seq": 1, "text": "world"}]),
+        ],
+        [
+            _status_response("implementing", name="Build Me A Cli"),
+            _status_response("implementing", name="Build Me A Cli"),
+        ],
+    )
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot)
+    poller._since_seq["proj-1"] = -1
+    poller._idle_polls["proj-1"] = 0
+
+    asyncio.run(poller._poll_once("proj-1", chat_id=7))
+    asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    bot.edit_message_text.assert_awaited_once_with(
+        "📁 Build Me A Cli\nhello \nworld", chat_id=7, message_id=99
+    )
+
+
 def test_poll_once_never_requests_an_already_seen_chunk_again():
     orchestrator = _fake_orchestrator(
         [_stream_response([{"seq": 0, "text": "a"}, {"seq": 1, "text": "b"}])],
@@ -257,10 +296,17 @@ def test_poll_once_resets_the_idle_budget_while_a_project_waits_at_an_approval_g
     bot.send_message.assert_not_awaited()
 
 
-def test_poll_once_stops_after_idle_timeout_and_sends_a_give_up_message():
+def test_poll_once_idle_timeout_nudges_the_project_via_activate_and_reports_new_phase():
     orchestrator = _fake_orchestrator(
         [_stream_response([])],
-        [_status_response("implementing")],
+        [_status_response("implementing", name="Build Me A Cli")],
+    )
+    orchestrator.activate = AsyncMock(return_value=MagicMock(status_code=200))
+    orchestrator.get_status = AsyncMock(
+        side_effect=[
+            _status_response("implementing", name="Build Me A Cli"),
+            _status_response("awaiting_merge_approval", name="Build Me A Cli"),
+        ]
     )
     bot = _fake_bot()
     poller = ProgressPoller(orchestrator, bot, max_idle_polls=1)
@@ -270,7 +316,50 @@ def test_poll_once_stops_after_idle_timeout_and_sends_a_give_up_message():
     should_continue = asyncio.run(poller._poll_once("proj-1", chat_id=7))
 
     assert should_continue is False
+    orchestrator.activate.assert_awaited_once_with("proj-1")
+    bot.send_message.assert_awaited_once_with(
+        7,
+        "📁 Build Me A Cli\n"
+        "⚠️ Lost track for a bit -- nudged it back into motion, now at "
+        "'awaiting_merge_approval'.",
+    )
+
+
+def test_poll_once_idle_timeout_falls_back_to_the_generic_message_when_activate_fails():
+    orchestrator = _fake_orchestrator(
+        [_stream_response([])],
+        [_status_response("implementing")],
+    )
+    orchestrator.activate = AsyncMock(side_effect=RuntimeError("orchestrator unreachable"))
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot, max_idle_polls=1)
+    poller._since_seq["proj-1"] = -1
+    poller._idle_polls["proj-1"] = 0
+
+    should_continue = asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    assert should_continue is False
     bot.send_message.assert_awaited_once_with(7, _GIVE_UP_MESSAGE)
+
+
+def test_poll_once_idle_timeout_reports_terminal_phase_when_activate_finishes_the_project():
+    orchestrator = _fake_orchestrator(
+        [_stream_response([])],
+        [_status_response("implementing")],
+    )
+    orchestrator.activate = AsyncMock(return_value=MagicMock(status_code=200))
+    orchestrator.get_status = AsyncMock(
+        side_effect=[_status_response("implementing"), _status_response("done")]
+    )
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot, max_idle_polls=1)
+    poller._since_seq["proj-1"] = -1
+    poller._idle_polls["proj-1"] = 0
+
+    should_continue = asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    assert should_continue is False
+    bot.send_message.assert_awaited_once_with(7, "✅ project done")
 
 
 def test_poll_once_resilient_survives_a_transient_orchestrator_error():
@@ -303,6 +392,7 @@ def test_poll_once_resilient_gives_up_after_idle_budget_of_failures():
 def test_poll_once_resilient_sends_a_give_up_message_when_it_exhausts_the_idle_budget():
     orchestrator = MagicMock()
     orchestrator.stream = AsyncMock(side_effect=RuntimeError("connection refused"))
+    orchestrator.activate = AsyncMock(side_effect=RuntimeError("connection refused"))
     bot = _fake_bot()
     poller = ProgressPoller(orchestrator, bot, max_idle_polls=2)
     poller._since_seq["proj-1"] = -1
@@ -312,6 +402,26 @@ def test_poll_once_resilient_sends_a_give_up_message_when_it_exhausts_the_idle_b
 
     assert should_continue is False
     bot.send_message.assert_awaited_once_with(7, _GIVE_UP_MESSAGE)
+
+
+def test_poll_once_resilient_nudges_via_activate_when_it_exhausts_the_idle_budget():
+    orchestrator = MagicMock()
+    orchestrator.stream = AsyncMock(side_effect=RuntimeError("connection refused"))
+    orchestrator.activate = AsyncMock(return_value=MagicMock(status_code=200))
+    orchestrator.get_status = AsyncMock(return_value=_status_response("awaiting_merge_approval"))
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot, max_idle_polls=2)
+    poller._since_seq["proj-1"] = -1
+    poller._idle_polls["proj-1"] = 1
+
+    should_continue = asyncio.run(poller._poll_once_resilient("proj-1", chat_id=7))
+
+    assert should_continue is False
+    orchestrator.activate.assert_awaited_once_with("proj-1")
+    bot.send_message.assert_awaited_once_with(
+        7,
+        "⚠️ Lost track for a bit -- nudged it back into motion, now at 'awaiting_merge_approval'.",
+    )
 
 
 def test_poll_once_truncates_the_telegram_message_but_keeps_the_full_text_internally():

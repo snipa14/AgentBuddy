@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from services.orchestrator.registry.errors import RegistryError
+from services.orchestrator.registry.naming import slugify
 from services.orchestrator.registry.registration import (
     register_brownfield_from_git,
     register_brownfield_from_local_path,
@@ -52,7 +53,12 @@ def build_parser(stack_choices: Sequence[str]) -> argparse.ArgumentParser:
         An argparse.ArgumentParser configured for the `new-project` CLI.
     """
     parser = argparse.ArgumentParser(prog="new-project")
-    parser.add_argument("project_id")
+    parser.add_argument(
+        "project_id",
+        nargs="?",
+        default=None,
+        help="Defaults to a slug derived from --name (e.g. 'My Project' -> 'my-project')",
+    )
     parser.add_argument("--name", required=True)
     parser.add_argument("--stack", required=True, choices=sorted(stack_choices))
     parser.add_argument("--coverage-threshold", type=int, default=80)
@@ -126,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
     stacks_path = Path(os.environ.get("STACKS_CONFIG_PATH", "config/stacks.yaml"))
     stack_choices = sorted(load_stacks_config(stacks_path).stacks)
     args = build_parser(stack_choices).parse_args(argv)
+    if args.project_id is None:
+        args.project_id = slugify(args.name)
     description = f"{args.name}: a {args.stack} project"
 
     def on_registered(project_id: str) -> None:

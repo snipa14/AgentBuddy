@@ -8,6 +8,7 @@ CALLBACK_APPROVE = "approve"
 CALLBACK_REJECT = "reject"
 CALLBACK_EDIT = "edit"
 CALLBACK_REPLY = "reply"
+CALLBACK_ACTIVATE = "activate"
 
 _DEFAULT_TEXT = "Approval needed."
 
@@ -87,6 +88,39 @@ def render_project_list(projects: list[dict[str, Any]]) -> str:
         return "No projects yet. Send /new <description> to start one."
     return "Projects:\n" + "\n".join(
         f"- {_project_label(project['id'], project.get('name'))}" for project in projects
+    )
+
+
+def render_project_buttons(projects: list[dict[str, Any]]) -> InlineKeyboardMarkup | None:
+    """Builds a tap-to-activate button per project, for /projects' reply_markup.
+
+    Switching projects otherwise means retyping a name or id exactly
+    (typo-prone) after reading it off the list -- each button's
+    callback_data reuses the same "activate:<id>" scheme /continue already
+    drives through OrchestratorService.activate(), so tapping a row does
+    exactly what typing /continue <id> would have.
+
+    Args:
+        projects: Every known project as {"id": project_id, "name":
+            name-or-None} dicts (services/orchestrator/api.py's
+            ProjectSummary shape).
+
+    Returns:
+        An InlineKeyboardMarkup with one row per project, or None when
+        there are no projects to show buttons for.
+    """
+    if not projects:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_project_label(project["id"], project.get("name")),
+                    callback_data=f"{CALLBACK_ACTIVATE}:{project['id']}",
+                )
+            ]
+            for project in projects
+        ]
     )
 
 

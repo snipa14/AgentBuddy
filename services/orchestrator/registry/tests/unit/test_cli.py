@@ -48,6 +48,13 @@ def test_build_parser_parses_minimal_greenfield_args():
     assert args.git_remote is None
 
 
+def test_build_parser_allows_omitting_project_id():
+    args = cli.build_parser(["python"]).parse_args(["--name", "My Project", "--stack", "python"])
+
+    assert args.project_id is None
+    assert args.name == "My Project"
+
+
 def test_build_parser_rejects_both_from_path_and_git_remote():
     parser = cli.build_parser(["python", "node", "go"])
 
@@ -93,6 +100,21 @@ def test_main_registers_greenfield_project_and_starts_intake(
     )
 
     exit_code = cli.main(["my-project", "--name", "My Project", "--stack", "python"])
+
+    assert exit_code == 0
+    assert started == ["my-project"]
+    assert (tmp_path / "my-project").is_dir()
+
+
+def test_main_derives_project_id_from_name_when_omitted(tmp_path, monkeypatch, stacks_config_env):
+    monkeypatch.setattr(cli, "DEFAULT_PROJECTS_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
+    started = []
+    monkeypatch.setattr(
+        cli, "_start_intake", lambda project_id, description: started.append(project_id)
+    )
+
+    exit_code = cli.main(["--name", "My Project", "--stack", "python"])
 
     assert exit_code == 0
     assert started == ["my-project"]

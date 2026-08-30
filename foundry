@@ -10,12 +10,24 @@ Usage: foundry <command> [args]
 Commands:
   up            Start the Foundry stack (accepts --local-llm)
   down          Stop the Foundry stack
+  restart       Stop then start the Foundry stack (accepts --local-llm)
   status        Show status of Foundry services
   new-project   Register a new project (greenfield or brownfield)
-  logs          Tail logs from Foundry services (accepts service names)
+  projects      List every registered project
+  rename        Rename a registered project: rename <id-or-name> <new-name>
+  logs          Tail logs from Foundry services (accepts service names,
+                -f to follow; defaults to the last 200 lines, no follow)
 
   -h, --help    Show this help message
 EOF
+}
+
+_require_orchestrator_running() {
+    if ! docker compose -f "$ROOT_DIR/docker-compose.yml" ps --status running --services \
+        2>/dev/null | grep -qx orchestrator; then
+        echo "foundry: the orchestrator service isn't running -- run './foundry up' first." >&2
+        exit 1
+    fi
 }
 
 command="${1:-}"
@@ -28,6 +40,11 @@ case "$command" in
     down)
         exec "$ROOT_DIR/scripts/stop.sh"
         ;;
+    restart)
+        shift
+        "$ROOT_DIR/scripts/stop.sh"
+        exec "$ROOT_DIR/scripts/start.sh" "$@"
+        ;;
     status)
         # Both -f files unconditionally, like scripts/stop.sh: this script
         # has no record of whether `up` was run with --local-llm, and a
@@ -37,12 +54,32 @@ case "$command" in
         ;;
     logs)
         shift
-        exec docker compose -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.local-llm.yml" logs -f "$@"
+        # No hardcoded -f: an unbounded follow-forever stream is unusable for
+        # "just show me what happened" -- default to a bounded, non-follow
+        # tail, and let the operator pass -f (or their own --tail) explicitly
+        # when they actually want to watch live.
+        if [[ $# -eq 0 ]]; then
+            exec docker compose -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.local-llm.yml" logs --tail=200
+        fi
+        exec docker compose -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.local-llm.yml" logs "$@"
         ;;
     new-project)
         shift
+        _require_orchestrator_running
         exec docker compose -f "$ROOT_DIR/docker-compose.yml" exec orchestrator \
             python3 -m services.orchestrator.registry.cli "$@"
+        ;;
+    projects)
+        shift
+        _require_orchestrator_running
+        exec docker compose -f "$ROOT_DIR/docker-compose.yml" exec orchestrator \
+            python3 -m services.orchestrator.registry.manage_cli projects "$@"
+        ;;
+    rename)
+        shift
+        _require_orchestrator_running
+        exec docker compose -f "$ROOT_DIR/docker-compose.yml" exec orchestrator \
+            python3 -m services.orchestrator.registry.manage_cli rename "$@"
         ;;
     -h|--help|"")
         usage

@@ -4,6 +4,7 @@ from aiogram.types import InlineKeyboardMarkup
 
 from services.telegram_gateway.rendering import (
     render_approval,
+    render_project_buttons,
     render_project_list,
     render_project_status,
     render_task_progress,
@@ -122,3 +123,26 @@ def test_render_project_list_shows_name_and_id_when_named():
 
 def test_render_project_list_shows_hint_when_empty():
     assert render_project_list([]) == "No projects yet. Send /new <description> to start one."
+
+
+def test_render_project_buttons_builds_one_row_per_project():
+    keyboard = render_project_buttons(
+        [
+            {"id": "build-me-a-cli", "name": "Build Me A Cli"},
+            {"id": "my-project", "name": None},
+        ]
+    )
+
+    rows = keyboard.inline_keyboard
+    assert [button.text for row in rows for button in row] == [
+        "Build Me A Cli (build-me-a-cli)",
+        "my-project",
+    ]
+    assert [button.callback_data for row in rows for button in row] == [
+        "activate:build-me-a-cli",
+        "activate:my-project",
+    ]
+
+
+def test_render_project_buttons_returns_none_when_empty():
+    assert render_project_buttons([]) is None

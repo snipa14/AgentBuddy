@@ -23,11 +23,13 @@ from aiogram.types import CallbackQuery, ForceReply, Message
 from services.telegram_gateway.orchestrator_client import OrchestratorClient
 from services.telegram_gateway.progress_poller import ProgressPoller
 from services.telegram_gateway.rendering import (
+    CALLBACK_ACTIVATE,
     CALLBACK_APPROVE,
     CALLBACK_EDIT,
     CALLBACK_REJECT,
     CALLBACK_REPLY,
     render_approval,
+    render_project_buttons,
     render_project_list,
     render_project_status,
     render_task_progress,
@@ -75,13 +77,18 @@ async def _answer_server_error(message: Message) -> None:
     response.json(), or that call raises an unhandled JSONDecodeError
     instead of telling the user anything.
 
+    The wording gives a phone-only operator something to actually do next --
+    "check its logs" assumes terminal access nobody supervising from
+    Telegram necessarily has.
+
     Args:
         message: The incoming message to reply to.
     """
     await message.answer(
-        "The Orchestrator hit an internal error handling that -- check its "
-        "logs. The project may be stuck at the same point; /continue can "
-        "retry it."
+        "Something went wrong on Foundry's end handling that. The project "
+        "may be stuck at the same point -- try /continue in a minute; if it "
+        "keeps happening, whoever runs the Foundry host will need to check "
+        "its logs."
     )
 
 
@@ -144,10 +151,31 @@ async def _answer_timeout_hint(message: Message) -> None:
     )
 
 
+_HELP_TEXT = (
+    "Foundry commands:\n"
+    "/new <description> -- start a new project\n"
+    "/status [project] -- show a project's phase, or list all projects if omitted\n"
+    "/continue <project> -- reactivate a project and show what it's waiting on\n"
+    "/projects -- list every known project\n"
+    "/rename <name> -- rename the active project\n"
+    "/help -- show this message\n"
+    "\n"
+    "<project> accepts either a project's id or its registered name. Free "
+    "text (no leading /) is treated as a reply to whatever the active "
+    "project is currently waiting on."
+)
+
+
 @router.message(Command("start"))
 async def handle_start(message: Message) -> None:
     """Greets the user. Sends nothing to the Orchestrator."""
-    await message.answer("Foundry is online. Send /new to start a project.")
+    await message.answer("Foundry is online. Send /new to start a project, or /help for commands.")
+
+
+@router.message(Command("help"))
+async def handle_help(message: Message) -> None:
+    """Lists every command. Sends nothing to the Orchestrator."""
+    await message.answer(_HELP_TEXT)
 
 
 async def _announce_new_project_name(message: Message, response) -> None:
@@ -253,7 +281,8 @@ async def handle_continue(
 
 @router.message(Command("projects"))
 async def handle_projects(message: Message, orchestrator: OrchestratorClient) -> None:
-    """Lists every known project id via GET /projects.
+    """Lists every known project via GET /projects, with a tap-to-activate
+    button per row so switching projects doesn't require retyping a name.
 
     A >=500 from the Orchestrator has no JSON body in the expected shape
     (see _answer_server_error).
@@ -262,7 +291,10 @@ async def handle_projects(message: Message, orchestrator: OrchestratorClient) ->
     if response.status_code >= 500:
         await _answer_server_error(message)
         return
-    await message.answer(render_project_list(response.json().get("projects", [])))
+    projects = response.json().get("projects", [])
+    await message.answer(
+        render_project_list(projects), reply_markup=render_project_buttons(projects)
+    )
 
 
 @router.message(Command("rename"))
@@ -399,3 +431,37 @@ async def handle_reply_callback(callback: CallbackQuery, orchestrator: Orchestra
         await _answer_server_error(callback.message)
         return
     await callback.message.answer("Type your answer:", reply_markup=ForceReply(selective=True))
+
+
+@router.callback_query(F.data.startswith(CALLBACK_ACTIVATE))
+async def handle_activate_callback(
+    callback: CallbackQuery, orchestrator: OrchestratorClient, poller: ProgressPoller
+) -> None:
+    """Activates the project behind a tapped /projects row button.
+
+    Same effect as typing /continue <id> -- reactivates the project and
+    shows whatever it's currently waiting on -- without having to retype a
+    name or id read off the list (render_project_buttons builds these).
+
+    The tap is acknowledged and the keyboard cleared *before* the slow
+    activate() call, the same ordering handle_approval_callback/
+    handle_reply_callback already use: Telegram invalidates a callback
+    query's answer token long before a slow local-model resume returns.
+    """
+    _, project_id = callback.data.split(":", 1)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    try:
+        response = await orchestrator.activate(project_id)
+    except (httpx.TimeoutException, httpx.ConnectError):
+        if callback.message is not None:
+            await _answer_timeout_hint(callback.message)
+        return
+    if callback.message is None:
+        return
+    if response.status_code == 404:
+        await callback.message.answer(f"Unknown project '{project_id}'. Try /projects.")
+        return
+    _start_poller_from_response(poller, response, callback.message.chat.id)
+    await _relay_webhook_result(callback.message, response)

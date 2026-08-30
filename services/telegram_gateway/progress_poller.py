@@ -148,12 +148,7 @@ class ProgressPoller:
             logger.warning("project %s: progress poll failed, retrying", project_id, exc_info=True)
             self._idle_polls[project_id] = self._idle_polls.get(project_id, 0) + 1
             if self._idle_polls[project_id] >= self._max_idle_polls:
-                try:
-                    await self._relay(project_id, chat_id, _GIVE_UP_MESSAGE)
-                except Exception:
-                    logger.warning(
-                        "project %s: failed to send give-up message", project_id, exc_info=True
-                    )
+                await self._give_up(project_id, chat_id, None)
                 self._stop(project_id)
                 return False
             return True
@@ -172,24 +167,31 @@ class ProgressPoller:
             True if polling should continue, False once this project's poll
             loop should stop (terminal phase reached, or idle timeout hit).
         """
+        status_response = await self._orchestrator.get_status(project_id)
+        body = status_response.json()
+        name = body.get("name")
+        phase = body.get("phase")
+
         stream_response = await self._orchestrator.stream(project_id, self._since_seq[project_id])
         chunks = stream_response.json().get("chunks", [])
         if chunks:
             self._since_seq[project_id] = max(chunk["seq"] for chunk in chunks)
             self._idle_polls[project_id] = 0
-            await self._relay(project_id, chat_id, "\n".join(chunk["text"] for chunk in chunks))
+            await self._relay(
+                project_id, chat_id, "\n".join(chunk["text"] for chunk in chunks), name
+            )
         else:
             self._idle_polls[project_id] += 1
 
-        status_response = await self._orchestrator.get_status(project_id)
-        body = status_response.json()
-        phase = body.get("phase")
         if body.get("pending_approval") is not None:
             self._idle_polls[project_id] = 0
         if phase in TERMINAL_PHASES:
             try:
                 await self._relay(
-                    project_id, chat_id, _terminal_message(phase, body.get("task_progress"))
+                    project_id,
+                    chat_id,
+                    _terminal_message(phase, body.get("task_progress")),
+                    name,
                 )
             except Exception:
                 logger.warning(
@@ -198,12 +200,58 @@ class ProgressPoller:
             self._stop(project_id)
             return False
         if self._idle_polls[project_id] >= self._max_idle_polls:
-            await self._relay(project_id, chat_id, _GIVE_UP_MESSAGE)
+            await self._give_up(project_id, chat_id, name)
             self._stop(project_id)
             return False
         return True
 
-    async def _relay(self, project_id: str, chat_id: int, text: str) -> None:
+    async def _give_up(self, project_id: str, chat_id: int, name: str | None) -> None:
+        """Reached the idle budget with the project still not terminal.
+
+        Tries to nudge it back into motion via `activate()` first -- the
+        same self-heal `/continue` already performs for a project stuck
+        mid-task after an Orchestrator restart (ARCHITECTURE.md's
+        OrchestratorService.activate()) -- instead of just telling the human
+        to type a command themselves. Falls back to the plain give-up notice
+        if the activate() attempt itself fails.
+
+        Args:
+            project_id: The project that's gone idle.
+            chat_id: The Telegram chat to relay the outcome into.
+            name: The project's last-known name, used only as a fallback
+                header if activate() fails before a fresher one can be read.
+        """
+        try:
+            activate_response = await self._orchestrator.activate(project_id)
+            if activate_response.status_code >= 400:
+                raise RuntimeError(f"activate() returned {activate_response.status_code}")
+            status_response = await self._orchestrator.get_status(project_id)
+            body = status_response.json()
+        except Exception:
+            logger.warning(
+                "project %s: give-up activate() attempt failed", project_id, exc_info=True
+            )
+            try:
+                await self._relay(project_id, chat_id, _GIVE_UP_MESSAGE, name)
+            except Exception:
+                logger.warning(
+                    "project %s: failed to send give-up message", project_id, exc_info=True
+                )
+            return
+
+        phase = body.get("phase")
+        if phase in TERMINAL_PHASES:
+            message = _terminal_message(phase, body.get("task_progress"))
+        else:
+            message = f"⚠️ Lost track for a bit -- nudged it back into motion, now at '{phase}'."
+        try:
+            await self._relay(project_id, chat_id, message, body.get("name", name))
+        except Exception:
+            logger.warning("project %s: failed to send give-up message", project_id, exc_info=True)
+
+    async def _relay(
+        self, project_id: str, chat_id: int, text: str, name: str | None = None
+    ) -> None:
         """Sends or edits this project's single progress message with new text.
 
         The full, untruncated text is what's kept in `_messages` and grown on
@@ -215,9 +263,17 @@ class ProgressPoller:
         discrete progress events, not a continuation of the previous batch's
         sentence, so the separator belongs here rather than at each of the
         Orchestrator's many `add_progress` call sites.
+
+        A named project gets a one-line header ("📁 <name>") baked into the
+        very first send, so a chat running several projects at once can tell
+        which live-editing message is which without scrolling up to the
+        original /new reply -- an unnamed (pre-registry-unification) project
+        falls back to the original header-less behavior.
         """
         existing = self._messages.get(project_id)
         previous_text = existing[1] if existing is not None else ""
+        if not previous_text and name:
+            previous_text = f"📁 {name}"
         combined = f"{previous_text}\n{text}" if previous_text else text
 
         if existing is None:

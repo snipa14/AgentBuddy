@@ -12,9 +12,11 @@ import httpx
 import pytest
 
 from services.telegram_gateway.bot import (
+    handle_activate_callback,
     handle_approval_callback,
     handle_continue,
     handle_free_text,
+    handle_help,
     handle_new,
     handle_projects,
     handle_rename,
@@ -80,6 +82,15 @@ def test_handle_start_greets_without_calling_orchestrator(message):
     asyncio.run(handle_start(message))
 
     message.answer.assert_awaited_once()
+
+
+def test_handle_help_lists_commands_without_calling_orchestrator(message):
+    asyncio.run(handle_help(message))
+
+    message.answer.assert_awaited_once()
+    text = message.answer.call_args.args[0]
+    for command in ("/new", "/status", "/continue", "/projects", "/rename", "/help"):
+        assert command in text
 
 
 def test_handle_new_forwards_to_orchestrator_and_acknowledges(message, orchestrator, poller):
@@ -315,7 +326,19 @@ def test_handle_projects_lists_known_ids(message, orchestrator):
     asyncio.run(handle_projects(message, orchestrator))
 
     orchestrator.send_webhook.assert_not_awaited()
-    message.answer.assert_awaited_once_with("Projects:\n- proj-1\n- proj-2")
+    args, kwargs = message.answer.call_args
+    assert args[0] == "Projects:\n- proj-1\n- proj-2"
+    assert kwargs["reply_markup"] is not None
+
+
+def test_handle_projects_attaches_a_tap_to_activate_button_per_project(message, orchestrator):
+    message.text = "/projects"
+
+    asyncio.run(handle_projects(message, orchestrator))
+
+    keyboard = message.answer.call_args.kwargs["reply_markup"]
+    buttons = [row[0] for row in keyboard.inline_keyboard]
+    assert [button.callback_data for button in buttons] == ["activate:proj-1", "activate:proj-2"]
 
 
 def test_handle_projects_hints_new_when_empty(message, orchestrator):
@@ -325,7 +348,7 @@ def test_handle_projects_hints_new_when_empty(message, orchestrator):
     asyncio.run(handle_projects(message, orchestrator))
 
     message.answer.assert_awaited_once_with(
-        "No projects yet. Send /new <description> to start one."
+        "No projects yet. Send /new <description> to start one.", reply_markup=None
     )
 
 
@@ -828,6 +851,70 @@ def test_handle_rename_shows_a_hint_when_the_orchestrator_is_unreachable(message
     asyncio.run(handle_rename(message, orchestrator))
 
     message.answer.assert_awaited_once()
+
+
+def test_handle_activate_callback_activates_and_shows_pending_approval(orchestrator, poller):
+    orchestrator.activate = AsyncMock(
+        return_value=_status_response(
+            status_code=200,
+            project_id="proj-1",
+            phase="awaiting_plan_approval",
+            pending_approval={"thread_id": "proj-1", "summary": "Ready to build?"},
+        )
+    )
+    callback = _callback("activate:proj-1")
+
+    asyncio.run(handle_activate_callback(callback, orchestrator, poller))
+
+    orchestrator.activate.assert_awaited_once_with("proj-1")
+    callback.answer.assert_awaited_once()
+    callback.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+    args, kwargs = callback.message.answer.call_args
+    assert args[0] == "Ready to build?"
+    assert "reply_markup" in kwargs
+
+
+def test_handle_activate_callback_starts_progress_polling(orchestrator, poller):
+    orchestrator.activate = AsyncMock(return_value=_status_response(project_id="proj-1"))
+    callback = _callback("activate:proj-1")
+    callback.message.chat.id = 7
+
+    asyncio.run(handle_activate_callback(callback, orchestrator, poller))
+
+    poller.start.assert_called_once_with("proj-1", 7)
+
+
+def test_handle_activate_callback_reports_unknown_project_on_404(orchestrator, poller):
+    orchestrator.activate = AsyncMock(return_value=_status_response(status_code=404))
+    callback = _callback("activate:nope")
+
+    asyncio.run(handle_activate_callback(callback, orchestrator, poller))
+
+    orchestrator.activate.assert_awaited_once_with("nope")
+    callback.message.answer.assert_awaited_once_with("Unknown project 'nope'. Try /projects.")
+
+
+def test_handle_activate_callback_shows_a_hint_when_the_activate_call_times_out(
+    orchestrator, poller
+):
+    callback = _callback("activate:proj-1")
+    orchestrator.activate = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+
+    asyncio.run(handle_activate_callback(callback, orchestrator, poller))
+
+    callback.message.answer.assert_awaited_once()
+
+
+def test_handle_activate_callback_handles_missing_message_gracefully(orchestrator, poller):
+    orchestrator.activate = AsyncMock(return_value=_status_response(project_id="proj-1"))
+    callback = MagicMock()
+    callback.data = "activate:proj-1"
+    callback.answer = AsyncMock()
+    callback.message = None
+
+    asyncio.run(handle_activate_callback(callback, orchestrator, poller))
+
+    orchestrator.activate.assert_awaited_once_with("proj-1")
 
 
 def test_handle_reply_callback_handles_missing_message_gracefully(orchestrator):

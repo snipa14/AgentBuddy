@@ -47,6 +47,25 @@ if ! docker network inspect foundry_workspace >/dev/null 2>&1; then
   echo "[start] Created foundry_workspace network"
 fi
 
+# The three workspace images are built, not part of the long-lived Compose
+# stack (they're what the Executor launches short-lived task containers
+# from), so `docker compose up` alone never produces them -- skipping this
+# left a first-timer's stack looking healthy right up until their first
+# /new failed deep inside the Coder phase with a bare "no such image"
+# error, several steps removed from anything that looks like a setup
+# problem. Idempotent: a no-op once an image has been built.
+declare -A workspace_images=(
+  ["foundry/workspace-python:3.12"]="images/workspace-python"
+  ["foundry/workspace-node:20"]="images/workspace-node"
+  ["foundry/workspace-go:1.22"]="images/workspace-go"
+)
+for image in "${!workspace_images[@]}"; do
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "[start] Building workspace image $image (first run only)..."
+    docker build -t "$image" "$ROOT_DIR/${workspace_images[$image]}"
+  fi
+done
+
 compose_files=(-f docker-compose.yml)
 if [[ "${1:-}" == "--local-llm" ]]; then
   compose_files+=(-f docker-compose.local-llm.yml)
@@ -54,4 +73,30 @@ fi
 
 docker compose "${compose_files[@]}" up -d
 
-echo "[start] Agent Buddy is up. Message your bot on Telegram to begin."
+_all_healthy() {
+  local service
+  for service in "$@"; do
+    docker compose "${compose_files[@]}" ps "$service" 2>/dev/null | grep -q "(healthy)" || return 1
+  done
+  return 0
+}
+
+# Only these three services declare a healthcheck (see docker-compose.yml);
+# telegram-gateway has none to poll for. `up -d` returns the moment
+# containers are *started*, not once they're actually serving -- printing
+# "up" right after that left a build failure or crash loop looking
+# identical to success, with Telegram just never responding and no pointer
+# to where to look.
+echo "[start] Waiting for services to report healthy (up to 90s)..."
+healthchecked_services=(docker-socket-proxy executor orchestrator)
+deadline=$((SECONDS + 90))
+until _all_healthy "${healthchecked_services[@]}" || (( SECONDS >= deadline )); do
+  sleep 3
+done
+
+if _all_healthy "${healthchecked_services[@]}"; then
+  echo "[start] Agent Buddy is up. Message your bot on Telegram to begin."
+else
+  echo "[start] Stack started, but not every service reported healthy within 90s."
+  echo "[start] Check what's slow with 'docker compose ps' or './foundry logs <service>' before assuming something's wrong -- first boot can take longer."
+fi
