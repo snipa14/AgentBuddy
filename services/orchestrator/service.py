@@ -412,6 +412,65 @@ class OrchestratorService:
         save_registry(self._registry_path, records)
         return self.status(active_id)
 
+    def cancel_project(self, identifier: str | None) -> dict[str, Any]:
+        """Cancels a project by marking its registry entry archived.
+
+        Fully reversible: `resume()`, `activate()`, or `handle_webhook`'s
+        explicit-id branch all revive it automatically the next time they
+        actually run the graph for it (see `_unarchive_if_needed`). A
+        project started before the registry was unified with Telegram's
+        /new flow (or otherwise missing a registry entry) is adopted into
+        the registry by this call, the same way `rename_active_project`
+        already does -- its name defaults to its id (there is no better
+        name to give it), mode to "greenfield", and path to the same
+        `projects/<id>` location every registered project's path follows.
+
+        Args:
+            identifier: A project_id, a registered project's name
+                (case-insensitive), or None to cancel the currently active
+                project.
+
+        Returns:
+            The cancelled project's status dict (see `status()`), with
+            `cancelled` now True.
+
+        Raises:
+            UnknownProjectError: If identifier resolves to no project with
+                checkpoint history, or identifier is None and there is no
+                active project.
+        """
+        if identifier is None:
+            project_id = self._read_active_project_id()
+            if project_id is None:
+                raise UnknownProjectError("<no active project>")
+        else:
+            project_id = self._resolve_identifier(identifier)
+        if not self._project_exists(project_id):
+            raise UnknownProjectError(project_id)
+
+        records = load_registry(self._registry_path)
+        for index, record in enumerate(records):
+            if record.id == project_id:
+                records[index] = record.model_copy(update={"status": "archived"})
+                break
+        else:
+            records.append(
+                ProjectRecord(
+                    id=project_id,
+                    name=project_id,
+                    mode="greenfield",
+                    path=str(self._projects_root / project_id),
+                    stack=_UNSPECIFIED_STACK,
+                    status="archived",
+                )
+            )
+        save_registry(self._registry_path, records)
+
+        if self._read_active_project_id() == project_id:
+            self._write_active_project_id("")
+
+        return self.status(project_id)
+
     def _resolve_identifier(self, identifier: str) -> str:
         """Resolves a project_id-or-name to its canonical project_id.
 

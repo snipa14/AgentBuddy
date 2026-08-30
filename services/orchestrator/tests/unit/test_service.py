@@ -743,6 +743,97 @@ def test_rename_active_project_adopts_a_project_with_no_registry_entry(service):
     assert result["name"] == "My Renamed Project"
 
 
+def test_cancel_project_by_explicit_id_marks_it_archived(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook(None, "/new First idea", force_new=True)
+    service.handle_webhook(None, "/new Second idea", force_new=True)
+
+    result = service.cancel_project("first-idea")
+
+    assert result["project_id"] == "first-idea"
+    assert result["cancelled"] is True
+    assert service.status("second-idea")["cancelled"] is False
+
+
+def test_cancel_project_with_no_argument_cancels_the_active_project(service):
+    service.handle_webhook("my-project", "hello")
+
+    result = service.cancel_project(None)
+
+    assert result["project_id"] == "my-project"
+    assert result["cancelled"] is True
+
+
+def test_cancel_project_clears_the_active_pointer_when_cancelling_the_active_project(service):
+    service.handle_webhook("my-project", "hello")
+
+    service.cancel_project("my-project")
+
+    assert service._read_active_project_id() is None
+
+
+def test_cancel_project_leaves_the_active_pointer_alone_when_cancelling_a_different_project(
+    tmp_path,
+):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook(None, "/new First idea", force_new=True)
+    service.handle_webhook(None, "/new Second idea", force_new=True)
+
+    service.cancel_project("first-idea")
+
+    assert service._read_active_project_id() == "second-idea"
+
+
+def test_cancel_project_raises_for_an_unknown_project(service):
+    with pytest.raises(UnknownProjectError):
+        service.cancel_project("does-not-exist")
+
+
+def test_cancel_project_raises_when_no_argument_and_nothing_is_active(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        FakeRouter([]),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+
+    with pytest.raises(UnknownProjectError):
+        service.cancel_project(None)
+
+
+def test_cancel_project_adopts_a_project_with_no_registry_entry(service):
+    service.handle_webhook("my-project", "hello")
+
+    result = service.cancel_project("my-project")
+
+    assert result["cancelled"] is True
+    records = load_registry(service._registry_path)
+    assert records[0].id == "my-project"
+    assert records[0].status == "archived"
+
+
 def test_status_marks_the_active_project(service):
     service.handle_webhook("my-project", "hello")
 
