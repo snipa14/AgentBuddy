@@ -29,12 +29,19 @@ class RenameRequest(BaseModel):
     name: str
 
 
+class CancelRequest(BaseModel):
+    """Payload carrying an optional target project to cancel."""
+
+    project: str | None = None
+
+
 class ProjectStatusResponse(BaseModel):
     """A project's current phase and any pending approval, rendered by the Gateway."""
 
     project_id: str
     name: str | None = None
     active: bool = False
+    cancelled: bool = False
     phase: str
     pending_approval: dict | None
     task_progress: dict | None
@@ -42,11 +49,12 @@ class ProjectStatusResponse(BaseModel):
 
 
 class ProjectSummary(BaseModel):
-    """One project's id, registered name, and active status, as listed by GET /projects."""
+    """One project's id, name, active status, and cancelled flag, as listed by GET /projects."""
 
     id: str
     name: str | None
     active: bool
+    cancelled: bool
 
 
 class ProjectListResponse(BaseModel):
@@ -145,6 +153,14 @@ def build_app(service: OrchestratorService) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except DuplicateNameError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return ProjectStatusResponse(**result)
+
+    @app.post("/cancel", response_model=ProjectStatusResponse)
+    def cancel(request: CancelRequest) -> ProjectStatusResponse:
+        try:
+            result = service.cancel_project(request.project)
+        except UnknownProjectError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return ProjectStatusResponse(**result)
 
     return app

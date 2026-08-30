@@ -170,8 +170,8 @@ def test_list_projects_returns_created_ids(tmp_path):
 
     assert response.status_code == 200
     assert response.json()["projects"] == [
-        {"id": "project-a", "name": None, "active": False},
-        {"id": "project-b", "name": None, "active": True},
+        {"id": "project-a", "name": None, "active": False, "cancelled": False},
+        {"id": "project-b", "name": None, "active": True, "cancelled": False},
     ]
 
 
@@ -352,3 +352,58 @@ def test_rename_with_a_taken_name_returns_409(tmp_path):
     response = client.post("/rename", json={"name": "First Idea"})
 
     assert response.status_code == 409
+
+
+def test_cancel_marks_the_target_project_cancelled(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    client = TestClient(build_app(service))
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"})
+
+    response = client.post("/cancel", json={"project": "my-project"})
+
+    assert response.status_code == 200
+    assert response.json()["cancelled"] is True
+
+
+def test_cancel_with_no_project_cancels_the_active_one(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    client = TestClient(build_app(service))
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"})
+
+    response = client.post("/cancel", json={})
+
+    assert response.status_code == 200
+    assert response.json()["project_id"] == "my-project"
+    assert response.json()["cancelled"] is True
+
+
+def test_cancel_unknown_project_returns_404(client):
+    response = client.post("/cancel", json={"project": "does-not-exist"})
+
+    assert response.status_code == 404
+
+
+def test_status_includes_cancelled_field(client):
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"})
+
+    response = client.get("/status/my-project")
+
+    assert response.json()["cancelled"] is False
