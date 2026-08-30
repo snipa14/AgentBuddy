@@ -197,8 +197,8 @@ def test_list_projects_returns_known_ids(tmp_path):
     service.handle_webhook("project-b", "hello")
 
     assert service.list_projects() == [
-        {"id": "project-a", "name": None, "active": False},
-        {"id": "project-b", "name": None, "active": True},
+        {"id": "project-a", "name": None, "active": False, "cancelled": False},
+        {"id": "project-b", "name": None, "active": True, "cancelled": False},
     ]
 
 
@@ -579,6 +579,50 @@ def test_status_unregistered_project_has_no_name(service):
 
     assert result["project_id"] == "my-project"
     assert result["name"] is None
+
+
+def test_status_unregistered_project_is_not_cancelled(service):
+    service.handle_webhook("my-project", "hello")
+
+    result = service.status("my-project")
+
+    assert result["cancelled"] is False
+
+
+def test_status_registered_active_project_is_not_cancelled(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook(None, "/new Build me a CLI", force_new=True)
+
+    result = service.status("build-me-a-cli")
+
+    assert result["cancelled"] is False
+
+
+def test_list_projects_includes_cancelled_field(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("my-project", "hello")
+
+    result = service.list_projects()
+
+    assert result == [{"id": "my-project", "name": None, "active": True, "cancelled": False}]
 
 
 def test_rename_active_project_updates_the_registry_and_status(tmp_path):

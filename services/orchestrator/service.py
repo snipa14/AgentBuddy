@@ -303,8 +303,9 @@ class OrchestratorService:
             A dict with `project_id`, `name` (the registered name, or None
             if this project has no registry entry), `active` (True if this
             is the project a bare free-text reply currently routes to, per
-            the active-project pointer), `phase`, `pending_approval`, and
-            `task_progress` (None before task decomposition has run, else
+            the active-project pointer), `cancelled` (True if the project has
+            been archived via `cancel_project()`), `phase`, `pending_approval`,
+            and `task_progress` (None before task decomposition has run, else
             `{"done": int, "total": int, "tasks": list[dict]}`).
 
         Raises:
@@ -327,10 +328,12 @@ class OrchestratorService:
             if task_queue
             else None
         )
+        record = self._lookup_record(project_id)
         return {
             "project_id": project_id,
-            "name": self._lookup_name(project_id),
+            "name": record.name if record else None,
             "active": self._read_active_project_id() == project_id,
+            "cancelled": record.status == "archived" if record else False,
             "phase": phase,
             "pending_approval": snapshot.values["pending_approval"],
             "task_progress": task_progress,
@@ -341,16 +344,24 @@ class OrchestratorService:
 
         Returns:
             A list of `{"id": project_id, "name": name-or-None, "active":
-            bool}` dicts, sorted by id. `name` is None for a project with
+            bool, "cancelled": bool}` dicts, sorted by id. `name` is None for a project with
             no matching `projects.yaml` entry (e.g. one started before
             Telegram's /new flow was unified with the registry). `active`
             marks the project a bare free-text reply currently routes to,
             per the active-project pointer -- at most one entry is True.
+            `cancelled` is True if the project has been archived via `cancel_project()`.
         """
-        names = {record.id: record.name for record in load_registry(self._registry_path)}
+        records = {record.id: record for record in load_registry(self._registry_path)}
         active_id = self._read_active_project_id()
         return [
-            {"id": project_id, "name": names.get(project_id), "active": project_id == active_id}
+            {
+                "id": project_id,
+                "name": records[project_id].name if project_id in records else None,
+                "active": project_id == active_id,
+                "cancelled": (
+                    records[project_id].status == "archived" if project_id in records else False
+                ),
+            }
             for project_id in sorted(self._checkpoint_thread_ids())
         ]
 
@@ -421,10 +432,10 @@ class OrchestratorService:
                 return record.id
         return identifier
 
-    def _lookup_name(self, project_id: str) -> str | None:
+    def _lookup_record(self, project_id: str) -> ProjectRecord | None:
         for record in load_registry(self._registry_path):
             if record.id == project_id:
-                return record.name
+                return record
         return None
 
     def _checkpoint_thread_ids(self) -> set[str]:
