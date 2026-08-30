@@ -14,6 +14,7 @@ import pytest
 from services.telegram_gateway.bot import (
     handle_activate_callback,
     handle_approval_callback,
+    handle_cancel,
     handle_continue,
     handle_free_text,
     handle_help,
@@ -60,6 +61,9 @@ def orchestrator():
         )
     )
     client.rename = AsyncMock(return_value=_status_response(project_id="proj-1", name="New Name"))
+    client.cancel = AsyncMock(
+        return_value=_status_response(project_id="proj-1", name="Proj 1", cancelled=True)
+    )
     return client
 
 
@@ -869,6 +873,74 @@ def test_handle_rename_shows_a_hint_when_the_orchestrator_is_unreachable(message
     orchestrator.rename = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
 
     asyncio.run(handle_rename(message, orchestrator))
+
+    message.answer.assert_awaited_once()
+
+
+def test_handle_cancel_with_no_argument_cancels_the_active_project(message, orchestrator):
+    message.text = "/cancel"
+
+    asyncio.run(handle_cancel(message, orchestrator))
+
+    orchestrator.cancel.assert_awaited_once_with(None)
+    message.answer.assert_awaited_once_with('Cancelled "Proj 1". /continue to bring it back.')
+
+
+def test_handle_cancel_with_an_argument_cancels_that_project(message, orchestrator):
+    message.text = "/cancel my-project"
+
+    asyncio.run(handle_cancel(message, orchestrator))
+
+    orchestrator.cancel.assert_awaited_once_with("my-project")
+
+
+def test_handle_cancel_falls_back_to_the_project_id_when_unnamed(message, orchestrator):
+    message.text = "/cancel"
+    orchestrator.cancel = AsyncMock(
+        return_value=_status_response(project_id="proj-1", name=None, cancelled=True)
+    )
+
+    asyncio.run(handle_cancel(message, orchestrator))
+
+    message.answer.assert_awaited_once_with('Cancelled "proj-1". /continue to bring it back.')
+
+
+def test_handle_cancel_reports_unknown_project_on_404(message, orchestrator):
+    message.text = "/cancel does-not-exist"
+    orchestrator.cancel = AsyncMock(return_value=_status_response(status_code=404))
+
+    asyncio.run(handle_cancel(message, orchestrator))
+
+    message.answer.assert_awaited_once_with("Unknown project 'does-not-exist'. Try /projects.")
+
+
+def test_handle_cancel_reports_no_active_project_on_404_with_no_argument(message, orchestrator):
+    message.text = "/cancel"
+    orchestrator.cancel = AsyncMock(return_value=_status_response(status_code=404))
+
+    asyncio.run(handle_cancel(message, orchestrator))
+
+    message.answer.assert_awaited_once_with("Unknown project 'the active project'. Try /projects.")
+
+
+def test_handle_cancel_shows_a_hint_on_server_error(message, orchestrator):
+    message.text = "/cancel my-project"
+    response = MagicMock()
+    response.status_code = 500
+    response.json.side_effect = ValueError("not JSON")
+    orchestrator.cancel = AsyncMock(return_value=response)
+
+    asyncio.run(handle_cancel(message, orchestrator))
+
+    message.answer.assert_awaited_once()
+    response.json.assert_not_called()
+
+
+def test_handle_cancel_shows_a_hint_when_the_orchestrator_is_unreachable(message, orchestrator):
+    message.text = "/cancel my-project"
+    orchestrator.cancel = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+
+    asyncio.run(handle_cancel(message, orchestrator))
 
     message.answer.assert_awaited_once()
 

@@ -158,6 +158,7 @@ _HELP_TEXT = (
     "/continue <project> -- reactivate a project and show what it's waiting on\n"
     "/projects -- list every known project\n"
     "/rename <name> -- rename the active project\n"
+    "/cancel [project] -- cancel a project (defaults to the active one); /continue undoes it\n"
     "/help -- show this message\n"
     "\n"
     "<project> accepts either a project's id or its registered name. Free "
@@ -329,6 +330,34 @@ async def handle_rename(message: Message, orchestrator: OrchestratorClient) -> N
         await _answer_server_error(message)
         return
     await message.answer(f'Renamed to "{response.json()["name"]}".')
+
+
+@router.message(Command("cancel"))
+async def handle_cancel(message: Message, orchestrator: OrchestratorClient) -> None:
+    """Cancels a project (archives it) via POST /cancel.
+
+    With no argument, cancels the currently active project; with an
+    argument, cancels that project by id or name -- no need to reactivate
+    something first just to cancel it. Fully reversible: /continue on a
+    cancelled project revives it (OrchestratorService._unarchive_if_needed).
+    """
+    parts = (message.text or "").split(maxsplit=1)
+    target = parts[1].strip() if len(parts) > 1 else None
+    try:
+        response = await orchestrator.cancel(target)
+    except (httpx.TimeoutException, httpx.ConnectError):
+        await _answer_timeout_hint(message)
+        return
+    if response.status_code == 404:
+        label = target or "the active project"
+        await message.answer(f"Unknown project '{label}'. Try /projects.")
+        return
+    if response.status_code >= 500:
+        await _answer_server_error(message)
+        return
+    body = response.json()
+    label = body.get("name") or body["project_id"]
+    await message.answer(f'Cancelled "{label}". /continue to bring it back.')
 
 
 @router.message(F.text)
