@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from services.orchestrator.progress_buffer import get_chunks_since
-from services.orchestrator.registry.errors import InvalidProjectIdError
+from services.orchestrator.registry.errors import DuplicateNameError, InvalidProjectIdError
 from services.orchestrator.service import OrchestratorService, UnknownProjectError
 
 
@@ -23,20 +23,34 @@ class ResumeRequest(BaseModel):
     decision: str
 
 
+class RenameRequest(BaseModel):
+    """Payload carrying a new human-readable name for the active project."""
+
+    name: str
+
+
 class ProjectStatusResponse(BaseModel):
     """A project's current phase and any pending approval, rendered by the Gateway."""
 
     project_id: str
+    name: str | None = None
     phase: str
     pending_approval: dict | None
     task_progress: dict | None
     text_applied: bool = True
 
 
-class ProjectListResponse(BaseModel):
-    """The set of known project_ids."""
+class ProjectSummary(BaseModel):
+    """One project's id and registered name, as listed by GET /projects."""
 
-    project_ids: list[str]
+    id: str
+    name: str | None
+
+
+class ProjectListResponse(BaseModel):
+    """The set of known projects."""
+
+    projects: list[ProjectSummary]
 
 
 class StreamChunk(BaseModel):
@@ -109,7 +123,9 @@ def build_app(service: OrchestratorService) -> FastAPI:
 
     @app.get("/projects", response_model=ProjectListResponse)
     def list_projects() -> ProjectListResponse:
-        return ProjectListResponse(project_ids=service.list_projects())
+        return ProjectListResponse(
+            projects=[ProjectSummary(**entry) for entry in service.list_projects()]
+        )
 
     @app.get("/status/{project_id}", response_model=ProjectStatusResponse)
     def status(project_id: str) -> ProjectStatusResponse:
@@ -117,6 +133,16 @@ def build_app(service: OrchestratorService) -> FastAPI:
             result = service.status(project_id)
         except UnknownProjectError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return ProjectStatusResponse(**result)
+
+    @app.post("/rename", response_model=ProjectStatusResponse)
+    def rename(request: RenameRequest) -> ProjectStatusResponse:
+        try:
+            result = service.rename_active_project(request.name)
+        except UnknownProjectError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DuplicateNameError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return ProjectStatusResponse(**result)
 
     return app

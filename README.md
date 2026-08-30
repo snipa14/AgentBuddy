@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🔥 Foundry
+# 🔥 Agent Buddy
 
 ### Give it an idea. Get back reviewed, tested, merge-ready code.
 
@@ -17,7 +17,7 @@
 
 ---
 
-Foundry is a self-hosted multi-agent development platform. Point it at a
+Agent Buddy is a self-hosted multi-agent development platform. Point it at a
 project idea — or an existing repo — and a team of agents interviews you
 about it, plans it, builds it, reviews it, tests it, and opens a PR,
 looping on its own until the work is actually done. You supervise from
@@ -34,7 +34,7 @@ OpenAI-compatible server, or the Claude API — your call, per agent role.
 > isn't wired up yet — see [`TODO.md`](TODO.md) for what's manually vs.
 > automatically verified.
 
-## 🧠 Why Foundry
+## 🧠 Why Agent Buddy
 
 - **The LLM never touches infrastructure directly.** Agents call narrow,
   typed tools (`run_command`, `read_file`, `open_pr`); only the Executor
@@ -53,10 +53,10 @@ OpenAI-compatible server, or the Claude API — your call, per agent role.
 
 Most agent CLIs give you one model, in one session, that you drive turn by
 turn — you're the reviewer, the security boundary, and the "did the tests
-actually pass" check. Foundry is built to need you for exactly two
+actually pass" check. Agent Buddy is built to need you for exactly two
 decisions instead:
 
-| | A single agent session you drive | Foundry |
+| | A single agent session you drive | Agent Buddy |
 |---|---|---|
 | **Security boundary** | Whatever shell access you granted it | Scoped Docker proxy, non-root, `cap_drop: ALL`, per-task isolated containers |
 | **Review** | Same model reviews its own work, if at all | Separate Reviewer, Tester, and Frontend Reviewer agents each take a real pass |
@@ -91,7 +91,7 @@ different hats in the same context:
 flowchart LR
     U["Mate (Telegram)"]
 
-    subgraph FOUNDRY["Foundry - Docker Compose stack (on-demand)"]
+    subgraph FOUNDRY["Agent Buddy - Docker Compose stack (on-demand)"]
         TG["Telegram Gateway"]
         ORCH["Orchestrator (LangGraph + FastAPI)"]
         EXE["Executor"]
@@ -157,18 +157,18 @@ transcript):
 
 > **You:** `/new Build me a small CLI that converts CSV to JSON`
 >
-> **Foundry:** Got it — a couple of questions first. Should it read from
+> **Agent Buddy:** Got it — a couple of questions first. Should it read from
 > a file path, stdin, or both?
 >
 > **You:** Both — file path argument, or stdin if none is given.
 >
-> **Foundry:** *(two more questions, then)* Here's the plan: [...]. While
+> **Agent Buddy:** *(two more questions, then)* Here's the plan: [...]. While
 > critiquing my own draft I found a gap — no handling for malformed CSV
 > rows — and added a task for it. Approve, edit, or reject?
 >
 > **You:** Approve
 >
-> **Foundry:** 🔨 Implementing... ✅ tests passing, 94% coverage. 👀
+> **Agent Buddy:** 🔨 Implementing... ✅ tests passing, 94% coverage. 👀
 > Reviewed — no issues found. Opened PR #1.
 > Ready to merge into `main` — approve?
 
@@ -196,7 +196,7 @@ Useful commands while it's running:
 
 To use a local model for roles that don't need Claude-tier reasoning:
 
-- **GPU on the Foundry host** — runs Ollama as a Compose service:
+- **GPU on the Agent Buddy host** — runs Ollama as a Compose service:
   `./scripts/start.sh --local-llm`.
 - **GPU on a different machine** — e.g. an RTX 3090 PC on the LAN running
   LM Studio's OpenAI-compatible server. Copy the preset over the active
@@ -219,11 +219,11 @@ $ ./foundry --help
 Usage: foundry <command> [args]
 
 Commands:
-  up            Start the Foundry stack (accepts --local-llm)
-  down          Stop the Foundry stack
-  status        Show status of Foundry services
+  up            Start the Agent Buddy stack (accepts --local-llm)
+  down          Stop the Agent Buddy stack
+  status        Show status of Agent Buddy services
   new-project   Register a new project (greenfield or brownfield)
-  logs          Tail logs from Foundry services (accepts service names)
+  logs          Tail logs from Agent Buddy services (accepts service names)
 
   -h, --help    Show this help message
 ```
@@ -233,7 +233,7 @@ Commands:
 > **Demo GIF:** not yet recorded. [`scripts/demo.tape`](scripts/demo.tape)
 > is a [VHS](https://github.com/charmbracelet/vhs) script that captures a
 > real `up` → `status` run — no scripted fake conversation. Run
-> `vhs scripts/demo.tape` on a configured Foundry host to generate
+> `vhs scripts/demo.tape` on a configured Agent Buddy host to generate
 > `assets/demo.gif`.
 
 ## 🧪 Development
@@ -255,6 +255,6 @@ Mate Balogh — [GitHub](https://github.com/snipa14) ·
 
 <div align="center">
 
-If Foundry's useful to you, a ⭐ on the repo helps others find it.
+If Agent Buddy's useful to you, a ⭐ on the repo helps others find it.
 
 </div>

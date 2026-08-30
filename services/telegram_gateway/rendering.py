@@ -60,29 +60,38 @@ def render_project_status(body: dict[str, Any]) -> str:
             (services/orchestrator/api.py's ProjectStatusResponse shape).
 
     Returns:
-        "<project_id>: <phase>", plus render_task_progress's lines when the
-        project has a task_queue.
+        "<name> (<project_id>): <phase>" when the project has a registered
+        name, else "<project_id>: <phase>", plus render_task_progress's
+        lines when the project has a task_queue.
     """
-    lines = [f"{body['project_id']}: {body['phase']}"]
+    lines = [f"{_project_label(body['project_id'], body.get('name'))}: {body['phase']}"]
     task_progress = body.get("task_progress")
     if task_progress:
         lines.append(render_task_progress(task_progress))
     return "\n".join(lines)
 
 
-def render_project_list(project_ids: list[str]) -> str:
-    """Renders the GET /projects id list as a Telegram message.
+def render_project_list(projects: list[dict[str, Any]]) -> str:
+    """Renders the GET /projects list as a Telegram message.
 
     Args:
-        project_ids: Every known project_id, already sorted by the
-            Orchestrator.
+        projects: Every known project as {"id": project_id, "name":
+            name-or-None} dicts (services/orchestrator/api.py's
+            ProjectSummary shape), already sorted by id by the Orchestrator.
 
     Returns:
-        One project per line, or a hint when none exist yet.
+        One project per line ("<name> (<id>)", or bare "<id>" when
+        unnamed), or a hint when none exist yet.
     """
-    if not project_ids:
+    if not projects:
         return "No projects yet. Send /new <description> to start one."
-    return "Projects:\n" + "\n".join(f"- {project_id}" for project_id in project_ids)
+    return "Projects:\n" + "\n".join(
+        f"- {_project_label(project['id'], project.get('name'))}" for project in projects
+    )
+
+
+def _project_label(project_id: str, name: str | None) -> str:
+    return f"{name} ({project_id})" if name else project_id
 
 
 def render_task_progress(task_progress: dict[str, Any]) -> str:

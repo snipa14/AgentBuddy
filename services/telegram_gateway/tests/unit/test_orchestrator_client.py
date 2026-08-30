@@ -96,3 +96,14 @@ def test_activate_posts_to_the_project_specific_url():
 
     args, _ = client.post.call_args
     assert args[0] == "http://orchestrator:8000/activate/proj-1"
+
+
+def test_rename_posts_the_new_name_to_the_rename_url():
+    client = _mock_httpx_client()
+    orchestrator = OrchestratorClient("http://orchestrator:8000", client)
+
+    asyncio.run(orchestrator.rename("CSV Converter"))
+
+    args, kwargs = client.post.call_args
+    assert args[0] == "http://orchestrator:8000/rename"
+    assert kwargs["json"] == {"name": "CSV Converter"}

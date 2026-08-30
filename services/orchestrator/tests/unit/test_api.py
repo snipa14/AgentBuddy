@@ -169,7 +169,10 @@ def test_list_projects_returns_created_ids(tmp_path):
     response = client.get("/projects")
 
     assert response.status_code == 200
-    assert response.json()["project_ids"] == ["project-a", "project-b"]
+    assert response.json()["projects"] == [
+        {"id": "project-a", "name": None},
+        {"id": "project-b", "name": None},
+    ]
 
 
 def test_stream_returns_chunks_recorded_after_since_seq(client):
@@ -245,3 +248,78 @@ def test_activate_known_project_returns_its_status(client):
 
     assert response.status_code == 200
     assert response.json()["project_id"] == "my-project"
+
+
+def test_webhook_new_project_response_includes_derived_name(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    client = TestClient(build_app(service))
+
+    response = client.post("/webhook", json={"user_id": 1, "text": "/new Build me a CLI"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project_id"] == "build-me-a-cli"
+    assert body["name"] == "Build Me A Cli"
+
+
+def test_status_returns_none_name_for_an_unregistered_project(client):
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"})
+
+    response = client.get("/status/my-project")
+
+    assert response.json()["name"] is None
+
+
+def test_rename_renames_the_active_project(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    client = TestClient(build_app(service))
+    client.post("/webhook", json={"user_id": 1, "text": "/new Build me a CLI"})
+
+    response = client.post("/rename", json={"name": "CSV Converter"})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "CSV Converter"
+
+
+def test_rename_with_no_active_project_returns_404(client):
+    response = client.post("/rename", json={"name": "New Name"})
+
+    assert response.status_code == 404
+
+
+def test_rename_with_a_taken_name_returns_409(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    client = TestClient(build_app(service))
+    client.post("/webhook", json={"user_id": 1, "text": "/new First idea", "force_new": True})
+    client.post("/webhook", json={"user_id": 1, "text": "/new Second idea", "force_new": True})
+
+    response = client.post("/rename", json={"name": "First Idea"})
+
+    assert response.status_code == 409

@@ -3,15 +3,17 @@
 Routing-by-thread-id, restart-safe interrupt lookup, and cross-project
 listing don't need branching logic of their own, so Phase 5 implements them
 as a plain Python service over the compiled per-project subgraph rather than
-a second nested StateGraph. The persistent project registry that will back
-`list_projects()` with real per-project metadata (mode, coverage threshold,
-PR mode overrides) is Phase 7 -- for now, project existence and status are
-derived entirely from checkpointer state, which is why they survive a
-process restart without any registry file at all.
+a second nested StateGraph. Project existence and status are derived
+entirely from checkpointer state, which is why they survive a process
+restart without depending on the registry file. `projects.yaml`
+(services.orchestrator.registry) is consulted alongside the checkpointer for
+metadata the checkpointer doesn't carry -- today, just each project's
+human-readable name: every project this service starts (Telegram's /new as
+much as the `new-project` CLI) is registered there, with the id/name pair
+either caller-supplied or derived from the request text.
 """
 
 import logging
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +27,23 @@ from services.orchestrator.memory.global_store import GlobalMemoryConnection
 from services.orchestrator.model_router.router import ModelRouter
 from services.orchestrator.plugins.discovery import LoadedPlugin
 from services.orchestrator.progress_buffer import add_progress, clear_progress
+from services.orchestrator.registry.errors import DuplicateNameError
+from services.orchestrator.registry.naming import (
+    dedupe_id,
+    dedupe_name,
+    derive_project_name,
+    slugify,
+)
+from services.orchestrator.registry.registration import register_greenfield
+from services.orchestrator.registry.schemas import ProjectRecord
+from services.orchestrator.registry.store import load_registry, save_registry
 from services.orchestrator.registry.validation import validate_project_id
 from services.orchestrator.stacks import StacksConfig
 
 _TERMINAL_PHASES = frozenset({"done", "blocked"})
 _ACTIVE_PROJECT_FILENAME = ".active_project_id"
+_REGISTRY_FILENAME = "projects.yaml"
+_UNSPECIFIED_STACK = "unspecified"
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +90,7 @@ class OrchestratorService:
         """
         self._checkpointer = checkpointer
         self._projects_root = projects_root
+        self._registry_path = projects_root / _REGISTRY_FILENAME
         self._graph = build_project_graph(
             checkpointer,
             router,
@@ -172,11 +187,46 @@ class OrchestratorService:
                         return self.status(active_id)
                     return {**active_status, "text_applied": False}
 
-        new_id = uuid.uuid4().hex[:12]
-        initial_state = new_project_state(new_id, initial_message=text)
-        self._invoke_graph(initial_state, new_id)
+        new_id = self._register_new_project(text)
         self._write_active_project_id(new_id)
         return self.status(new_id)
+
+    def _register_new_project(self, text: str) -> str:
+        """Derives a unique name/id pair from `text` and registers it.
+
+        Backs the Telegram `/new` flow, which -- unlike the `new-project`
+        CLI -- has no explicit `--name`/project_id: both are derived from
+        the message itself (services.orchestrator.registry.naming), deduped
+        against every id/name already in use, then registered exactly the
+        way `new-project` registers a greenfield project. Registration's
+        `on_registered` hook starts the intake graph once the registry
+        entry and on-disk project directory are committed.
+
+        Args:
+            text: The free-text message that started this project.
+
+        Returns:
+            The new project's id.
+        """
+        records = load_registry(self._registry_path)
+        existing_ids = {record.id for record in records} | self._checkpoint_thread_ids()
+        existing_names = {record.name for record in records}
+        name = dedupe_name(derive_project_name(text), existing_names)
+        new_id = dedupe_id(slugify(name), existing_ids)
+
+        def on_registered(project_id: str) -> None:
+            initial_state = new_project_state(project_id, initial_message=text)
+            self._invoke_graph(initial_state, project_id)
+
+        register_greenfield(
+            self._registry_path,
+            self._projects_root,
+            new_id,
+            name,
+            _UNSPECIFIED_STACK,
+            on_registered=on_registered,
+        )
+        return new_id
 
     def resume(self, project_id: str, decision: str) -> dict[str, Any]:
         """Resumes a paused project thread with a human decision.
@@ -194,6 +244,7 @@ class OrchestratorService:
         Raises:
             UnknownProjectError: If project_id has no checkpoint history.
         """
+        project_id = self._resolve_identifier(project_id)
         if not self._project_exists(project_id):
             raise UnknownProjectError(project_id)
         self._write_active_project_id(project_id)
@@ -232,6 +283,7 @@ class OrchestratorService:
         Raises:
             UnknownProjectError: If project_id has no checkpoint history.
         """
+        project_id = self._resolve_identifier(project_id)
         if not self._project_exists(project_id):
             raise UnknownProjectError(project_id)
         self._write_active_project_id(project_id)
@@ -244,16 +296,20 @@ class OrchestratorService:
         """Reads a project's current phase and any pending approval.
 
         Args:
-            project_id: The project to look up.
+            project_id: The project to look up -- a project_id, or a
+                registered project's name (case-insensitive).
 
         Returns:
-            A dict with `project_id`, `phase`, `pending_approval`, and
-            `task_progress` (None before task decomposition has run, else
-            `{"done": int, "total": int, "tasks": list[dict]}`).
+            A dict with `project_id`, `name` (the registered name, or None
+            if this project has no registry entry), `phase`,
+            `pending_approval`, and `task_progress` (None before task
+            decomposition has run, else `{"done": int, "total": int,
+            "tasks": list[dict]}`).
 
         Raises:
             UnknownProjectError: If project_id has no checkpoint history.
         """
+        project_id = self._resolve_identifier(project_id)
         snapshot = self._graph.get_state(self._config(project_id))
         if not snapshot.values:
             raise UnknownProjectError(project_id)
@@ -272,23 +328,105 @@ class OrchestratorService:
         )
         return {
             "project_id": project_id,
+            "name": self._lookup_name(project_id),
             "phase": phase,
             "pending_approval": snapshot.values["pending_approval"],
             "task_progress": task_progress,
         }
 
-    def list_projects(self) -> list[str]:
-        """Lists every project_id with checkpoint history.
+    def list_projects(self) -> list[dict[str, str | None]]:
+        """Lists every project with checkpoint history, alongside its registered name.
 
         Returns:
-            A sorted list of distinct project_ids, derived from the
-            checkpointer's own thread history (no separate registry yet).
+            A list of `{"id": project_id, "name": name-or-None}` dicts,
+            sorted by id. `name` is None for a project with no matching
+            `projects.yaml` entry (e.g. one started before Telegram's /new
+            flow was unified with the registry).
         """
-        thread_ids = {
+        names = {record.id: record.name for record in load_registry(self._registry_path)}
+        return [
+            {"id": project_id, "name": names.get(project_id)}
+            for project_id in sorted(self._checkpoint_thread_ids())
+        ]
+
+    def rename_active_project(self, new_name: str) -> dict[str, Any]:
+        """Renames the chat's currently active project.
+
+        A project started before the registry was unified with Telegram's
+        /new flow (or otherwise missing a registry entry) is adopted into
+        the registry by this call rather than rejected -- its mode defaults
+        to "greenfield" (every pre-unification project was, since the old
+        /new flow never asked) and its path to the same `projects/<id>`
+        location every registered project's path already follows.
+
+        Args:
+            new_name: The new human-readable name.
+
+        Returns:
+            The renamed project's status dict (see `status()`).
+
+        Raises:
+            UnknownProjectError: If no project is currently active, or the
+                active project no longer has checkpoint history.
+            DuplicateNameError: If new_name is already used by another
+                registered project (case-insensitive).
+        """
+        active_id = self._read_active_project_id()
+        if active_id is None or not self._project_exists(active_id):
+            raise UnknownProjectError(active_id or "<no active project>")
+        records = load_registry(self._registry_path)
+        if any(
+            record.id != active_id and record.name.lower() == new_name.lower() for record in records
+        ):
+            raise DuplicateNameError(new_name)
+        for index, record in enumerate(records):
+            if record.id == active_id:
+                records[index] = record.model_copy(update={"name": new_name})
+                break
+        else:
+            records.append(
+                ProjectRecord(
+                    id=active_id,
+                    name=new_name,
+                    mode="greenfield",
+                    path=str(self._projects_root / active_id),
+                    stack=_UNSPECIFIED_STACK,
+                )
+            )
+        save_registry(self._registry_path, records)
+        return self.status(active_id)
+
+    def _resolve_identifier(self, identifier: str) -> str:
+        """Resolves a project_id-or-name to its canonical project_id.
+
+        Args:
+            identifier: A project_id, or a registered project's name.
+
+        Returns:
+            `identifier` unchanged if it's already a known project_id;
+            otherwise the id of the registered project whose name matches
+            case-insensitively; otherwise `identifier` unchanged (letting
+            the caller's own not-found handling apply).
+        """
+        if self._project_exists(identifier):
+            return identifier
+        lowered = identifier.lower()
+        for record in load_registry(self._registry_path):
+            if record.name.lower() == lowered:
+                return record.id
+        return identifier
+
+    def _lookup_name(self, project_id: str) -> str | None:
+        for record in load_registry(self._registry_path):
+            if record.id == project_id:
+                return record.name
+        return None
+
+    def _checkpoint_thread_ids(self) -> set[str]:
+        return {
             checkpoint_tuple.config["configurable"]["thread_id"]
             for checkpoint_tuple in self._checkpointer.list(None)
         }
-        return sorted(thread_ids)
 
     def _project_exists(self, project_id: str) -> bool:
         snapshot = self._graph.get_state(self._config(project_id))

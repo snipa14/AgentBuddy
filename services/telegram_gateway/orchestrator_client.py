@@ -53,3 +53,7 @@ class OrchestratorClient:
     async def get_projects(self) -> httpx.Response:
         """Lists every known project_id via GET /projects."""
         return await self._client.get(f"{self._base_url}/projects")
+
+    async def rename(self, name: str) -> httpx.Response:
+        """Renames the active project via POST /rename."""
+        return await self._client.post(f"{self._base_url}/rename", json={"name": name})

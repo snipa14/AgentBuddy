@@ -150,6 +150,23 @@ async def handle_start(message: Message) -> None:
     await message.answer("Foundry is online. Send /new to start a project.")
 
 
+async def _announce_new_project_name(message: Message, response) -> None:
+    """Tells the user the name the Orchestrator picked for a just-started project.
+
+    A 5xx here has no JSON body to read a name out of; _relay_webhook_result
+    (called right after this in handle_new) already tells the user about
+    that case, so this just no-ops instead of duplicating that message.
+    """
+    if response.status_code >= 500:
+        return
+    body = response.json()
+    name = body.get("name")
+    if name:
+        await message.answer(
+            f'Started project "{name}" ({body["project_id"]}). /rename to change it.'
+        )
+
+
 @router.message(Command("new"))
 async def handle_new(
     message: Message, orchestrator: OrchestratorClient, poller: ProgressPoller
@@ -163,6 +180,7 @@ async def handle_new(
         await _answer_timeout_hint(message)
         return
     _start_poller_from_response(poller, response, message.chat.id)
+    await _announce_new_project_name(message, response)
     await _relay_webhook_result(message, response)
 
 
@@ -182,8 +200,10 @@ async def handle_status(message: Message, orchestrator: OrchestratorClient) -> N
         if projects_response.status_code >= 500:
             await _answer_server_error(message)
             return
-        project_ids = projects_response.json().get("project_ids", [])
-        await message.answer("Usage: /status <project_id>\n" + render_project_list(project_ids))
+        projects = projects_response.json().get("projects", [])
+        await message.answer(
+            "Usage: /status <project_id or name>\n" + render_project_list(projects)
+        )
         return
 
     response = await orchestrator.get_status(project_id)
@@ -242,7 +262,41 @@ async def handle_projects(message: Message, orchestrator: OrchestratorClient) ->
     if response.status_code >= 500:
         await _answer_server_error(message)
         return
-    await message.answer(render_project_list(response.json().get("project_ids", [])))
+    await message.answer(render_project_list(response.json().get("projects", [])))
+
+
+@router.message(Command("rename"))
+async def handle_rename(message: Message, orchestrator: OrchestratorClient) -> None:
+    """Renames the chat's currently active project via POST /rename.
+
+    "Active" is the same server-side pointer /continue and free-text replies
+    already resolve against, so this normally targets whatever project the
+    chat most recently started, resumed, or activated -- no id typing needed.
+    """
+    parts = (message.text or "").split(maxsplit=1)
+    name = parts[1].strip() if len(parts) > 1 else ""
+    if not name:
+        await message.answer("Usage: /rename <new name>")
+        return
+    try:
+        response = await orchestrator.rename(name)
+    except (httpx.TimeoutException, httpx.ConnectError):
+        await _answer_timeout_hint(message)
+        return
+    if response.status_code == 404:
+        await message.answer(
+            "No active project to rename -- start one with /new, or /continue one."
+        )
+        return
+    if response.status_code == 409:
+        await message.answer(
+            f"'{name}' is already used by another project -- pick a different name."
+        )
+        return
+    if response.status_code >= 500:
+        await _answer_server_error(message)
+        return
+    await message.answer(f'Renamed to "{response.json()["name"]}".')
 
 
 @router.message(F.text)

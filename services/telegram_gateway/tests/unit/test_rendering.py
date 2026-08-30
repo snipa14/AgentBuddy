@@ -4,6 +4,8 @@ from aiogram.types import InlineKeyboardMarkup
 
 from services.telegram_gateway.rendering import (
     render_approval,
+    render_project_list,
+    render_project_status,
     render_task_progress,
 )
 
@@ -91,3 +93,32 @@ def test_render_approval_shows_approve_reject_edit_for_every_other_kind():
     assert text == "Merge to main?"
     buttons = keyboard.inline_keyboard[0]
     assert [button.text for button in buttons] == ["Approve", "Reject", "Edit"]
+
+
+def test_render_project_status_shows_name_and_id_when_named():
+    text = render_project_status(
+        {"project_id": "build-me-a-cli", "name": "Build Me A Cli", "phase": "implementing"}
+    )
+
+    assert text == "Build Me A Cli (build-me-a-cli): implementing"
+
+
+def test_render_project_status_falls_back_to_bare_id_when_unnamed():
+    text = render_project_status({"project_id": "my-project", "name": None, "phase": "done"})
+
+    assert text == "my-project: done"
+
+
+def test_render_project_list_shows_name_and_id_when_named():
+    text = render_project_list(
+        [
+            {"id": "build-me-a-cli", "name": "Build Me A Cli"},
+            {"id": "my-project", "name": None},
+        ]
+    )
+
+    assert text == "Projects:\n- Build Me A Cli (build-me-a-cli)\n- my-project"
+
+
+def test_render_project_list_shows_hint_when_empty():
+    assert render_project_list([]) == "No projects yet. Send /new <description> to start one."

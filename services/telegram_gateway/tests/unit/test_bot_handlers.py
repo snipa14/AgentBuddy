@@ -17,6 +17,7 @@ from services.telegram_gateway.bot import (
     handle_free_text,
     handle_new,
     handle_projects,
+    handle_rename,
     handle_reply_callback,
     handle_start,
     handle_status,
@@ -51,7 +52,12 @@ def orchestrator():
             project_id="proj-1", phase="implementing", pending_approval=None, task_progress=None
         )
     )
-    client.get_projects = AsyncMock(return_value=_status_response(project_ids=["proj-1", "proj-2"]))
+    client.get_projects = AsyncMock(
+        return_value=_status_response(
+            projects=[{"id": "proj-1", "name": None}, {"id": "proj-2", "name": None}]
+        )
+    )
+    client.rename = AsyncMock(return_value=_status_response(project_id="proj-1", name="New Name"))
     return client
 
 
@@ -156,7 +162,7 @@ def test_handle_status_without_argument_lists_projects(message, orchestrator):
 
     orchestrator.get_projects.assert_awaited_once()
     text = message.answer.call_args.args[0]
-    assert "Usage: /status <project_id>" in text
+    assert "Usage: /status <project_id or name>" in text
     assert "proj-1" in text and "proj-2" in text
 
 
@@ -314,7 +320,7 @@ def test_handle_projects_lists_known_ids(message, orchestrator):
 
 def test_handle_projects_hints_new_when_empty(message, orchestrator):
     message.text = "/projects"
-    orchestrator.get_projects = AsyncMock(return_value=_status_response(project_ids=[]))
+    orchestrator.get_projects = AsyncMock(return_value=_status_response(projects=[]))
 
     asyncio.run(handle_projects(message, orchestrator))
 
@@ -735,6 +741,93 @@ def test_handle_new_shows_a_hint_when_the_orchestrator_call_times_out(
 
     message.answer.assert_awaited_once()
     poller.start.assert_not_called()
+
+
+def test_handle_new_announces_the_derived_project_name(message, orchestrator, poller):
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "project_id": "build-me-a-cli",
+        "name": "Build Me A Cli",
+        "phase": "intake",
+        "pending_approval": None,
+    }
+    orchestrator.send_webhook = AsyncMock(return_value=response)
+
+    asyncio.run(handle_new(message, orchestrator, poller))
+
+    first_call_text = message.answer.await_args_list[0].args[0]
+    assert first_call_text == (
+        'Started project "Build Me A Cli" (build-me-a-cli). /rename to change it.'
+    )
+
+
+def test_handle_new_does_not_announce_a_name_when_none_was_returned(message, orchestrator, poller):
+    """The webhook fixture's response has no "name" key -- covers a legacy
+    or explicit-project_id response that still isn't registered."""
+    asyncio.run(handle_new(message, orchestrator, poller))
+
+    message.answer.assert_awaited_once_with("Got it -- working on that.")
+
+
+def test_handle_rename_without_argument_shows_usage(message, orchestrator):
+    message.text = "/rename"
+
+    asyncio.run(handle_rename(message, orchestrator))
+
+    orchestrator.rename.assert_not_awaited()
+    message.answer.assert_awaited_once_with("Usage: /rename <new name>")
+
+
+def test_handle_rename_renames_and_confirms(message, orchestrator):
+    message.text = "/rename New Name"
+
+    asyncio.run(handle_rename(message, orchestrator))
+
+    orchestrator.rename.assert_awaited_once_with("New Name")
+    message.answer.assert_awaited_once_with('Renamed to "New Name".')
+
+
+def test_handle_rename_reports_no_active_project_on_404(message, orchestrator):
+    message.text = "/rename New Name"
+    orchestrator.rename = AsyncMock(return_value=_status_response(status_code=404))
+
+    asyncio.run(handle_rename(message, orchestrator))
+
+    args = message.answer.call_args.args[0]
+    assert "No active project" in args
+
+
+def test_handle_rename_reports_a_taken_name_on_409(message, orchestrator):
+    message.text = "/rename Taken Name"
+    orchestrator.rename = AsyncMock(return_value=_status_response(status_code=409))
+
+    asyncio.run(handle_rename(message, orchestrator))
+
+    args = message.answer.call_args.args[0]
+    assert "already used" in args
+
+
+def test_handle_rename_shows_a_hint_on_server_error(message, orchestrator):
+    message.text = "/rename New Name"
+    response = MagicMock()
+    response.status_code = 500
+    response.json.side_effect = ValueError("not JSON")
+    orchestrator.rename = AsyncMock(return_value=response)
+
+    asyncio.run(handle_rename(message, orchestrator))
+
+    message.answer.assert_awaited_once()
+    response.json.assert_not_called()
+
+
+def test_handle_rename_shows_a_hint_when_the_orchestrator_is_unreachable(message, orchestrator):
+    message.text = "/rename New Name"
+    orchestrator.rename = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+
+    asyncio.run(handle_rename(message, orchestrator))
+
+    message.answer.assert_awaited_once()
 
 
 def test_handle_reply_callback_handles_missing_message_gracefully(orchestrator):

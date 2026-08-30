@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts the Foundry stack. Runs the secrets wizard first if any required
+# Starts the Agent Buddy stack. Runs the secrets wizard first if any required
 # secret is missing, then brings the Compose stack up.
 #
 # Usage:
@@ -9,6 +9,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+
+cat <<'BANNER'
+    _       ____   _____   _   _   _____      ____    _   _   ____    ____   __   __
+   / \     / ___| | ____| | \ | | |_   _|    | __ )  | | | | |  _ \  |  _ \  \ \ / /
+  / _ \   | |  _  |  _|   |  \| |   | |      |  _ \  | | | | | | | | | | | |  \ V /
+ / ___ \  | |_| | | |___  | |\  |   | |      | |_) | | |_| | | |_| | | |_| |   | |
+/_/   \_\  \____| |_____| |_| \_|   |_|      |____/   \___/  |____/  |____/    |_|
+BANNER
+echo "[start] Waking up Agent Buddy..."
 
 # setup.sh's own prompt_secret calls are the single source of truth for
 # which secrets are required -- it's idempotent (skips any secret that
@@ -44,3 +53,5 @@ if [[ "${1:-}" == "--local-llm" ]]; then
 fi
 
 docker compose "${compose_files[@]}" up -d
+
+echo "[start] Agent Buddy is up. Message your bot on Telegram to begin."

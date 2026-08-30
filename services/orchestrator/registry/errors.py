@@ -13,5 +13,9 @@ class DuplicateProjectIdError(RegistryError):
     """Raised when a project_id is already present in the registry."""
 
 
+class DuplicateNameError(RegistryError):
+    """Raised when a project name is already present in the registry (case-insensitive)."""
+
+
 class BrownfieldSourceError(RegistryError):
     """Raised when a brownfield source (local path or git remote) can't be linked in."""

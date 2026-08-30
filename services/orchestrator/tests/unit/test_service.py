@@ -23,6 +23,8 @@ from services.orchestrator.graph.tests.unit.planner_fakes import (
 )
 from services.orchestrator.memory.global_store import build_global_memory_connection
 from services.orchestrator.progress_buffer import get_chunks_since
+from services.orchestrator.registry.errors import DuplicateNameError
+from services.orchestrator.registry.store import load_registry
 from services.orchestrator.service import OrchestratorService, UnknownProjectError
 from services.orchestrator.stacks import StacksConfig
 
@@ -194,7 +196,10 @@ def test_list_projects_returns_known_ids(tmp_path):
     service.handle_webhook("project-a", "hello")
     service.handle_webhook("project-b", "hello")
 
-    assert service.list_projects() == ["project-a", "project-b"]
+    assert service.list_projects() == [
+        {"id": "project-a", "name": None},
+        {"id": "project-b", "name": None},
+    ]
 
 
 def test_handle_webhook_resumes_a_plan_questions_paused_active_project_with_free_text(
@@ -501,6 +506,142 @@ def test_activate_leaves_a_project_paused_at_a_real_gate_untouched(tmp_path):
     status = service.status("proj-1")
     assert status["phase"] == "awaiting_plan_approval"
     assert status["pending_approval"] is not None
+
+
+def test_handle_webhook_new_project_derives_name_and_slug_id_and_registers_it(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+
+    result = service.handle_webhook(
+        None, "/new Build me a CLI that converts CSV to JSON", force_new=True
+    )
+
+    assert result["project_id"] == "build-me-a-cli-that-converts"
+    assert result["name"] == "Build Me A Cli That Converts"
+    records = load_registry(tmp_path / "projects" / "projects.yaml")
+    assert [r.id for r in records] == ["build-me-a-cli-that-converts"]
+    assert records[0].name == "Build Me A Cli That Converts"
+    assert records[0].mode == "greenfield"
+
+
+def test_handle_webhook_new_project_dedupes_name_and_id_on_repeat_message(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+
+    first = service.handle_webhook(None, "/new Build me a CLI", force_new=True)
+    second = service.handle_webhook(None, "/new Build me a CLI", force_new=True)
+
+    assert first["project_id"] == "build-me-a-cli"
+    assert first["name"] == "Build Me A Cli"
+    assert second["project_id"] == "build-me-a-cli-2"
+    assert second["name"] == "Build Me A Cli (2)"
+
+
+def test_status_resolves_a_registered_project_by_name(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    started = service.handle_webhook(None, "/new Build me a CLI", force_new=True)
+
+    result = service.status("build me a cli")
+
+    assert result["project_id"] == started["project_id"]
+    assert result["name"] == "Build Me A Cli"
+
+
+def test_status_unregistered_project_has_no_name(service):
+    service.handle_webhook("my-project", "hello")
+
+    result = service.status("my-project")
+
+    assert result["project_id"] == "my-project"
+    assert result["name"] is None
+
+
+def test_rename_active_project_updates_the_registry_and_status(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    started = service.handle_webhook(None, "/new Build me a CLI", force_new=True)
+
+    result = service.rename_active_project("CSV Converter")
+
+    assert result["project_id"] == started["project_id"]
+    assert result["name"] == "CSV Converter"
+    assert service.status(started["project_id"])["name"] == "CSV Converter"
+
+
+def test_rename_active_project_rejects_a_name_already_in_use(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook(None, "/new First idea", force_new=True)
+    service.handle_webhook(None, "/new Second idea", force_new=True)
+
+    with pytest.raises(DuplicateNameError):
+        service.rename_active_project("First Idea")
+
+
+def test_rename_active_project_raises_when_nothing_is_active(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        FakeRouter([]),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+
+    with pytest.raises(UnknownProjectError):
+        service.rename_active_project("New Name")
+
+
+def test_rename_active_project_adopts_a_project_with_no_registry_entry(service):
+    service.handle_webhook("my-project", "hello")
+
+    result = service.rename_active_project("My Renamed Project")
+
+    assert result["project_id"] == "my-project"
+    assert result["name"] == "My Renamed Project"
 
 
 def test_activate_unknown_project_raises(tmp_path):
