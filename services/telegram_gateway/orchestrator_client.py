@@ -57,3 +57,7 @@ class OrchestratorClient:
     async def rename(self, name: str) -> httpx.Response:
         """Renames the active project via POST /rename."""
         return await self._client.post(f"{self._base_url}/rename", json={"name": name})
+
+    async def cancel(self, project: str | None = None) -> httpx.Response:
+        """Cancels project (or the active project if None) via POST /cancel."""
+        return await self._client.post(f"{self._base_url}/cancel", json={"project": project})

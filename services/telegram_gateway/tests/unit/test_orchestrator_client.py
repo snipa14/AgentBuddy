@@ -107,3 +107,24 @@ def test_rename_posts_the_new_name_to_the_rename_url():
     args, kwargs = client.post.call_args
     assert args[0] == "http://orchestrator:8000/rename"
     assert kwargs["json"] == {"name": "CSV Converter"}
+
+
+def test_cancel_posts_the_target_project_to_the_cancel_url():
+    client = _mock_httpx_client()
+    orchestrator = OrchestratorClient("http://orchestrator:8000", client)
+
+    asyncio.run(orchestrator.cancel("my-project"))
+
+    args, kwargs = client.post.call_args
+    assert args[0] == "http://orchestrator:8000/cancel"
+    assert kwargs["json"] == {"project": "my-project"}
+
+
+def test_cancel_defaults_to_no_target_project():
+    client = _mock_httpx_client()
+    orchestrator = OrchestratorClient("http://orchestrator:8000", client)
+
+    asyncio.run(orchestrator.cancel())
+
+    _, kwargs = client.post.call_args
+    assert kwargs["json"] == {"project": None}
