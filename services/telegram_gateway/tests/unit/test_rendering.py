@@ -118,6 +118,28 @@ def test_render_project_status_marks_the_active_project():
     assert text == "my-project: implementing (active)"
 
 
+def test_render_project_status_marks_a_cancelled_project():
+    text = render_project_status(
+        {"project_id": "my-project", "name": None, "phase": "implementing", "cancelled": True}
+    )
+
+    assert text == "my-project: implementing (cancelled)"
+
+
+def test_render_project_status_marks_active_and_cancelled_together():
+    text = render_project_status(
+        {
+            "project_id": "my-project",
+            "name": None,
+            "phase": "implementing",
+            "active": True,
+            "cancelled": True,
+        }
+    )
+
+    assert text == "my-project: implementing (active) (cancelled)"
+
+
 def test_render_project_list_shows_name_and_id_when_named():
     text = render_project_list(
         [
@@ -138,6 +160,14 @@ def test_render_project_list_marks_the_active_project():
     )
 
     assert text == "Projects:\n- Build Me A Cli (build-me-a-cli)\n-> my-project"
+
+
+def test_render_project_list_marks_a_cancelled_project():
+    text = render_project_list(
+        [{"id": "my-project", "name": None, "active": False, "cancelled": True}]
+    )
+
+    assert text == "Projects:\n- my-project (cancelled)"
 
 
 def test_render_project_list_shows_hint_when_empty():
@@ -180,3 +210,12 @@ def test_render_project_buttons_marks_the_active_project():
         "-> Build Me A Cli (build-me-a-cli)",
         "my-project",
     ]
+
+
+def test_render_project_buttons_marks_a_cancelled_project():
+    keyboard = render_project_buttons(
+        [{"id": "my-project", "name": None, "active": False, "cancelled": True}]
+    )
+
+    rows = keyboard.inline_keyboard
+    assert [button.text for row in rows for button in row] == ["my-project (cancelled)"]

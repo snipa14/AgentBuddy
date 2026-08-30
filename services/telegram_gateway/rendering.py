@@ -68,7 +68,8 @@ def render_project_status(body: dict[str, Any]) -> str:
     """
     label = _project_label(body["project_id"], body.get("name"))
     active_suffix = " (active)" if body.get("active") else ""
-    lines = [f"{label}: {body['phase']}{active_suffix}"]
+    cancelled_suffix = " (cancelled)" if body.get("cancelled") else ""
+    lines = [f"{label}: {body['phase']}{active_suffix}{cancelled_suffix}"]
     task_progress = body.get("task_progress")
     if task_progress:
         lines.append(render_task_progress(task_progress))
@@ -95,6 +96,7 @@ def render_project_list(projects: list[dict[str, Any]]) -> str:
     return "Projects:\n" + "\n".join(
         f"{'-> ' if project.get('active') else '- '}"
         f"{_project_label(project['id'], project.get('name'))}"
+        f"{' (cancelled)' if project.get('cancelled') else ''}"
         for project in projects
     )
 
@@ -127,6 +129,7 @@ def render_project_buttons(projects: list[dict[str, Any]]) -> InlineKeyboardMark
                     text=(
                         f"{'-> ' if project.get('active') else ''}"
                         f"{_project_label(project['id'], project.get('name'))}"
+                        f"{' (cancelled)' if project.get('cancelled') else ''}"
                     ),
                     callback_data=f"{CALLBACK_ACTIVATE}:{project['id']}",
                 )
