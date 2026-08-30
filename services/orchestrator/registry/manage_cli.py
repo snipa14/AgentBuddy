@@ -26,11 +26,11 @@ DEFAULT_REGISTRY_PATH = DEFAULT_PROJECTS_ROOT / "projects.yaml"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Builds the `projects`/`rename` argument parser.
+    """Builds the `projects`/`rename`/`cancel` argument parser.
 
     Returns:
         An argparse.ArgumentParser with a required `command` subparser
-        ("projects" or "rename").
+        ("projects", "rename", or "cancel").
     """
     parser = argparse.ArgumentParser(prog="foundry")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -38,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     rename_parser = subparsers.add_parser("rename", help="Rename a registered project")
     rename_parser.add_argument("project", help="The project's id or current registered name")
     rename_parser.add_argument("new_name", help="The new human-readable name")
+    cancel_parser = subparsers.add_parser("cancel", help="Cancel (archive) a registered project")
+    cancel_parser.add_argument("project", help="The project's id or current registered name")
     return parser
 
 
@@ -83,6 +85,32 @@ def rename_project(registry_path: Path, identifier: str, new_name: str) -> Proje
     return updated
 
 
+def cancel_project(registry_path: Path, identifier: str) -> ProjectRecord:
+    """Cancels a registered project by setting its status to 'archived'.
+
+    Args:
+        registry_path: Path to the projects.yaml registry file.
+        identifier: The project's id, or its current registered name
+            (case-insensitive).
+
+    Returns:
+        The updated ProjectRecord.
+
+    Raises:
+        LookupError: If identifier matches no registered project.
+    """
+    records = load_registry(registry_path)
+    target = _resolve(records, identifier)
+    if target is None:
+        raise LookupError(identifier)
+    updated = target.model_copy(update={"status": "archived"})
+    save_registry(
+        registry_path,
+        [updated if record.id == target.id else record for record in records],
+    )
+    return updated
+
+
 def _print_projects(registry_path: Path) -> int:
     records = load_registry(registry_path)
     if not records:
@@ -106,6 +134,16 @@ def _rename(registry_path: Path, identifier: str, new_name: str) -> int:
     return 0
 
 
+def _cancel(registry_path: Path, identifier: str) -> int:
+    try:
+        updated = cancel_project(registry_path, identifier)
+    except LookupError:
+        print(f"cancel: unknown project {identifier!r}", file=sys.stderr)
+        return 1
+    print(f"cancelled {updated.id!r} ({updated.name!r})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parses arguments and runs the requested registry command.
 
@@ -119,6 +157,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "projects":
         return _print_projects(DEFAULT_REGISTRY_PATH)
+    if args.command == "cancel":
+        return _cancel(DEFAULT_REGISTRY_PATH, args.project)
     return _rename(DEFAULT_REGISTRY_PATH, args.project, args.new_name)
 
 

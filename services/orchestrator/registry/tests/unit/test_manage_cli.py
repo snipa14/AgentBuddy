@@ -84,6 +84,64 @@ def test_rename_project_allows_renaming_to_its_own_current_name(tmp_path):
     assert updated.name == "My Project"
 
 
+def test_cancel_project_by_id_marks_it_archived(tmp_path):
+    registry_path = tmp_path / "projects.yaml"
+    _register(tmp_path, "my-project", "My Project")
+
+    updated = manage_cli.cancel_project(registry_path, "my-project")
+
+    assert updated.status == "archived"
+    from services.orchestrator.registry.store import load_registry
+
+    assert load_registry(registry_path)[0].status == "archived"
+
+
+def test_cancel_project_by_name_is_case_insensitive(tmp_path):
+    registry_path = tmp_path / "projects.yaml"
+    _register(tmp_path, "my-project", "My Project")
+
+    updated = manage_cli.cancel_project(registry_path, "my project")
+
+    assert updated.id == "my-project"
+    assert updated.status == "archived"
+
+
+def test_cancel_project_raises_lookup_error_for_unknown_project(tmp_path):
+    registry_path = tmp_path / "projects.yaml"
+    _register(tmp_path, "my-project", "My Project")
+
+    with pytest.raises(LookupError):
+        manage_cli.cancel_project(registry_path, "does-not-exist")
+
+
+def test_build_parser_parses_cancel():
+    args = manage_cli.build_parser().parse_args(["cancel", "my-project"])
+
+    assert args.command == "cancel"
+    assert args.project == "my-project"
+
+
+def test_main_cancel_updates_the_registry_and_prints_confirmation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(manage_cli, "DEFAULT_PROJECTS_ROOT", tmp_path)
+    monkeypatch.setattr(manage_cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
+    _register(tmp_path, "my-project", "My Project")
+
+    exit_code = manage_cli.main(["cancel", "my-project"])
+
+    assert exit_code == 0
+    assert "my-project" in capsys.readouterr().out
+
+
+def test_main_cancel_returns_error_code_for_unknown_project(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(manage_cli, "DEFAULT_PROJECTS_ROOT", tmp_path)
+    monkeypatch.setattr(manage_cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
+
+    exit_code = manage_cli.main(["cancel", "does-not-exist"])
+
+    assert exit_code == 1
+    assert "unknown project" in capsys.readouterr().err
+
+
 def test_main_projects_prints_a_hint_when_registry_is_empty(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(manage_cli, "DEFAULT_REGISTRY_PATH", tmp_path / "projects.yaml")
 

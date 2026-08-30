@@ -15,6 +15,7 @@ Commands:
   new-project   Register a new project (greenfield or brownfield)
   projects      List every registered project
   rename        Rename a registered project: rename <id-or-name> <new-name>
+  cancel        Cancel (archive) a registered project: cancel <id-or-name>
   logs          Tail logs from Foundry services (accepts service names,
                 -f to follow; defaults to the last 200 lines, no follow)
 
@@ -80,6 +81,12 @@ case "$command" in
         _require_orchestrator_running
         exec docker compose -f "$ROOT_DIR/docker-compose.yml" exec orchestrator \
             python3 -m services.orchestrator.registry.manage_cli rename "$@"
+        ;;
+    cancel)
+        shift
+        _require_orchestrator_running
+        exec docker compose -f "$ROOT_DIR/docker-compose.yml" exec orchestrator \
+            python3 -m services.orchestrator.registry.manage_cli cancel "$@"
         ;;
     -h|--help|"")
         usage
