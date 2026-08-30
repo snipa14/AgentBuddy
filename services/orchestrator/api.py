@@ -54,7 +54,7 @@ class ProjectSummary(BaseModel):
     id: str
     name: str | None
     active: bool
-    cancelled: bool
+    cancelled: bool = False
 
 
 class ProjectListResponse(BaseModel):

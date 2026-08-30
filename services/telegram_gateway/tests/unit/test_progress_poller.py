@@ -161,6 +161,29 @@ def test_poll_once_never_requests_an_already_seen_chunk_again():
     orchestrator.stream.assert_awaited_once_with("proj-1", -1)
 
 
+def test_poll_once_stops_without_relaying_when_the_project_is_cancelled():
+    """A cancelled project must never reach the give-up/activate() path --
+    that's the revival hook, and a background poller silently reviving a
+    project the operator explicitly cancelled would defeat /cancel. The
+    operator already knows they cancelled it, so this is a silent stop, not
+    a relayed message."""
+    orchestrator = _fake_orchestrator(
+        [],
+        [_status_response("blocked", cancelled=True)],
+    )
+    bot = _fake_bot()
+    poller = ProgressPoller(orchestrator, bot)
+    poller._since_seq["proj-1"] = 5
+    poller._idle_polls["proj-1"] = 0
+
+    should_continue = asyncio.run(poller._poll_once("proj-1", chat_id=7))
+
+    assert should_continue is False
+    orchestrator.stream.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    bot.edit_message_text.assert_not_awaited()
+
+
 def test_poll_once_stops_and_sends_a_done_message_once_the_project_reaches_done():
     orchestrator = _fake_orchestrator(
         [_stream_response([])],

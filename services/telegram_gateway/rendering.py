@@ -64,7 +64,9 @@ def render_project_status(body: dict[str, Any]) -> str:
         "<name> (<project_id>): <phase>" when the project has a registered
         name, else "<project_id>: <phase>", with " (active)" appended when
         this is the project a bare free-text reply currently routes to,
-        plus render_task_progress's lines when the project has a task_queue.
+        and " (cancelled)" appended when the project has been archived via
+        /cancel, plus render_task_progress's lines when the project has a
+        task_queue.
     """
     label = _project_label(body["project_id"], body.get("name"))
     active_suffix = " (active)" if body.get("active") else ""
@@ -88,7 +90,8 @@ def render_project_list(projects: list[dict[str, Any]]) -> str:
     Returns:
         One project per line ("<name> (<id>)", or bare "<id>" when
         unnamed), with a "-> " marker on the active project (the one a
-        bare free-text reply currently routes to), or a hint when none
+        bare free-text reply currently routes to) and a " (cancelled)" tag
+        appended to any project archived via /cancel, or a hint when none
         exist yet.
     """
     if not projects:
@@ -117,7 +120,8 @@ def render_project_buttons(projects: list[dict[str, Any]]) -> InlineKeyboardMark
 
     Returns:
         An InlineKeyboardMarkup with one row per project (the active
-        project's button prefixed "-> "), or None when there are no
+        project's button prefixed "-> ", and any project archived via
+        /cancel suffixed " (cancelled)"), or None when there are no
         projects to show buttons for.
     """
     if not projects:

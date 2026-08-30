@@ -138,6 +138,19 @@ def test_resume_revives_a_cancelled_project(service):
     assert result["cancelled"] is False
 
 
+def test_handle_webhook_with_explicit_id_revives_a_cancelled_project(service):
+    """handle_webhook()'s explicit-id branch is the third documented
+    revival path (alongside resume() and activate()) -- a project already
+    exists, so this branch just calls _write_active_project_id() without
+    re-invoking the graph, and that alone must un-cancel it."""
+    service.handle_webhook("some-id", "hello")
+    service.cancel_project("some-id")
+
+    result = service.handle_webhook("some-id", "some other text")
+
+    assert result["cancelled"] is False
+
+
 def test_activate_revives_a_cancelled_project_paused_at_a_gate(tmp_path):
     checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
     memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
@@ -660,6 +673,20 @@ def test_status_registered_active_project_is_not_cancelled(tmp_path):
     result = service.status("build-me-a-cli")
 
     assert result["cancelled"] is False
+
+
+def test_status_does_not_revive_a_cancelled_project(service):
+    """status() is a read-only call, and cancelling a project is meant to
+    stick until the human deliberately re-engages with it (resume()/
+    activate()/handle_webhook()'s explicit-id branch) -- not the moment
+    anyone merely looks at its status."""
+    service.handle_webhook("my-project", "hello")
+    service.cancel_project("my-project")
+
+    service.status("my-project")
+    service.status("my-project")
+
+    assert service.status("my-project")["cancelled"] is True
 
 
 def test_list_projects_includes_cancelled_field(tmp_path):

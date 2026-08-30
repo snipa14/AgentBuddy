@@ -163,12 +163,25 @@ class ProgressPoller:
         approval gate resets its idle budget rather than spending it -- it's
         waiting on exactly what it's supposed to wait on, not stuck.
 
+        A cancelled project stops the loop immediately, before any chunk
+        fetch or idle-budget bookkeeping: `_give_up()` calls
+        `OrchestratorClient.activate()`, which un-cancels a project the
+        moment it becomes active again (see
+        `OrchestratorService._unarchive_if_needed()`), and that revival hook
+        is meant for the human re-engaging with the project, not a
+        background timer. No message is relayed for this stop -- the
+        operator already knows they cancelled it.
+
         Returns:
             True if polling should continue, False once this project's poll
-            loop should stop (terminal phase reached, or idle timeout hit).
+            loop should stop (terminal phase reached, idle timeout hit, or
+            the project was cancelled).
         """
         status_response = await self._orchestrator.get_status(project_id)
         body = status_response.json()
+        if body.get("cancelled"):
+            self._stop(project_id)
+            return False
         name = body.get("name")
         phase = body.get("phase")
 
