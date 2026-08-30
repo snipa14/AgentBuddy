@@ -468,13 +468,39 @@ class OrchestratorService:
         content = path.read_text().strip()
         return content or None
 
+    def _unarchive_if_needed(self, project_id: str) -> None:
+        """Un-cancels project_id if its registry entry is currently archived.
+
+        Args:
+            project_id: The project to check. A falsy value -- e.g. the
+                empty string `cancel_project()` writes to *clear* the
+                active pointer -- is always a no-op, never treated as a
+                real project id to look up.
+        """
+        if not project_id:
+            return
+        records = load_registry(self._registry_path)
+        for index, record in enumerate(records):
+            if record.id == project_id and record.status == "archived":
+                records[index] = record.model_copy(update={"status": "active"})
+                save_registry(self._registry_path, records)
+                return
+
     def _write_active_project_id(self, project_id: str) -> None:
         """Overwrites the active-project pointer with project_id.
+
+        Also revives project_id if it's currently cancelled (registry
+        `status` is `"archived"`) -- every caller of this method represents
+        the human engaging with project_id again (resuming a gate,
+        continuing a stuck project, replying to its interview), so becoming
+        the active project is what un-cancels it. `status()` never calls
+        this method, so merely viewing a cancelled project never revives it.
 
         No locking: this is a single-operator system (ADR-002) with
         Telegram delivering one chat's messages in order, and a whole-file
         overwrite is atomic enough for this scope.
         """
+        self._unarchive_if_needed(project_id)
         path = self._active_project_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(project_id)

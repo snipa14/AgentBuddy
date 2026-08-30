@@ -24,7 +24,8 @@ from services.orchestrator.graph.tests.unit.planner_fakes import (
 from services.orchestrator.memory.global_store import build_global_memory_connection
 from services.orchestrator.progress_buffer import get_chunks_since
 from services.orchestrator.registry.errors import DuplicateNameError
-from services.orchestrator.registry.store import load_registry
+from services.orchestrator.registry.schemas import ProjectRecord
+from services.orchestrator.registry.store import load_registry, save_registry
 from services.orchestrator.service import OrchestratorService, UnknownProjectError
 from services.orchestrator.stacks import StacksConfig
 
@@ -114,6 +115,60 @@ def test_resume_known_project_progresses_through_merge_gate_to_done(service):
     after_merge_approval = service.resume("my-project", "approve")
     assert after_merge_approval["phase"] == "done"
     assert after_merge_approval["pending_approval"] is None
+
+
+def test_resume_revives_a_cancelled_project(service):
+    service.handle_webhook("my-project", "hello")
+    save_registry(
+        service._registry_path,
+        [
+            ProjectRecord(
+                id="my-project",
+                name="My Project",
+                mode="greenfield",
+                path=str(service._projects_root / "my-project"),
+                stack="unspecified",
+                status="archived",
+            )
+        ],
+    )
+
+    result = service.resume("my-project", "approve")
+
+    assert result["cancelled"] is False
+
+
+def test_activate_revives_a_cancelled_project_paused_at_a_gate(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=1),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("proj-1", "build me a thing")
+    status_before = service.status("proj-1")
+    assert status_before["pending_approval"] is not None
+    save_registry(
+        service._registry_path,
+        [
+            ProjectRecord(
+                id="proj-1",
+                name="Proj 1",
+                mode="greenfield",
+                path=str(tmp_path / "projects" / "proj-1"),
+                stack="unspecified",
+                status="archived",
+            )
+        ],
+    )
+
+    service.activate("proj-1")
+
+    assert service.status("proj-1")["cancelled"] is False
 
 
 def test_resume_crash_logs_with_project_context_and_records_a_progress_event(tmp_path, caplog):
