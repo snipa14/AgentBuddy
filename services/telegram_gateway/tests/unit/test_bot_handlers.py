@@ -341,6 +341,26 @@ def test_handle_projects_attaches_a_tap_to_activate_button_per_project(message, 
     assert [button.callback_data for button in buttons] == ["activate:proj-1", "activate:proj-2"]
 
 
+def test_handle_projects_marks_the_active_project(message, orchestrator):
+    message.text = "/projects"
+    orchestrator.get_projects = AsyncMock(
+        return_value=_status_response(
+            projects=[
+                {"id": "proj-1", "name": None, "active": False},
+                {"id": "proj-2", "name": None, "active": True},
+            ]
+        )
+    )
+
+    asyncio.run(handle_projects(message, orchestrator))
+
+    text = message.answer.call_args.args[0]
+    assert text == "Projects:\n- proj-1\n-> proj-2"
+    keyboard = message.answer.call_args.kwargs["reply_markup"]
+    buttons = [row[0] for row in keyboard.inline_keyboard]
+    assert [button.text for button in buttons] == ["proj-1", "-> proj-2"]
+
+
 def test_handle_projects_hints_new_when_empty(message, orchestrator):
     message.text = "/projects"
     orchestrator.get_projects = AsyncMock(return_value=_status_response(projects=[]))

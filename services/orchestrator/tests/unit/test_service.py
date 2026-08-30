@@ -197,8 +197,8 @@ def test_list_projects_returns_known_ids(tmp_path):
     service.handle_webhook("project-b", "hello")
 
     assert service.list_projects() == [
-        {"id": "project-a", "name": None},
-        {"id": "project-b", "name": None},
+        {"id": "project-a", "name": None, "active": False},
+        {"id": "project-b", "name": None, "active": True},
     ]
 
 
@@ -642,6 +642,50 @@ def test_rename_active_project_adopts_a_project_with_no_registry_entry(service):
 
     assert result["project_id"] == "my-project"
     assert result["name"] == "My Renamed Project"
+
+
+def test_status_marks_the_active_project(service):
+    service.handle_webhook("my-project", "hello")
+
+    assert service.status("my-project")["active"] is True
+
+
+def test_status_marks_an_inactive_project_as_not_active(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("project-a", "hello")
+    service.handle_webhook("project-b", "hello")
+
+    assert service.status("project-a")["active"] is False
+    assert service.status("project-b")["active"] is True
+
+
+def test_activate_switches_which_project_is_marked_active(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    service.handle_webhook("project-a", "hello")
+    service.handle_webhook("project-b", "hello")
+
+    service.activate("project-a")
+
+    assert service.status("project-a")["active"] is True
+    assert service.status("project-b")["active"] is False
 
 
 def test_activate_unknown_project_raises(tmp_path):

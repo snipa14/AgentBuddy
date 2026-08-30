@@ -110,6 +110,14 @@ def test_render_project_status_falls_back_to_bare_id_when_unnamed():
     assert text == "my-project: done"
 
 
+def test_render_project_status_marks_the_active_project():
+    text = render_project_status(
+        {"project_id": "my-project", "name": None, "phase": "implementing", "active": True}
+    )
+
+    assert text == "my-project: implementing (active)"
+
+
 def test_render_project_list_shows_name_and_id_when_named():
     text = render_project_list(
         [
@@ -119,6 +127,17 @@ def test_render_project_list_shows_name_and_id_when_named():
     )
 
     assert text == "Projects:\n- Build Me A Cli (build-me-a-cli)\n- my-project"
+
+
+def test_render_project_list_marks_the_active_project():
+    text = render_project_list(
+        [
+            {"id": "build-me-a-cli", "name": "Build Me A Cli", "active": False},
+            {"id": "my-project", "name": None, "active": True},
+        ]
+    )
+
+    assert text == "Projects:\n- Build Me A Cli (build-me-a-cli)\n-> my-project"
 
 
 def test_render_project_list_shows_hint_when_empty():
@@ -146,3 +165,18 @@ def test_render_project_buttons_builds_one_row_per_project():
 
 def test_render_project_buttons_returns_none_when_empty():
     assert render_project_buttons([]) is None
+
+
+def test_render_project_buttons_marks_the_active_project():
+    keyboard = render_project_buttons(
+        [
+            {"id": "build-me-a-cli", "name": "Build Me A Cli", "active": True},
+            {"id": "my-project", "name": None, "active": False},
+        ]
+    )
+
+    rows = keyboard.inline_keyboard
+    assert [button.text for row in rows for button in row] == [
+        "-> Build Me A Cli (build-me-a-cli)",
+        "my-project",
+    ]

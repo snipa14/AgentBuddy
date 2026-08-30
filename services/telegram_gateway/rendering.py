@@ -62,10 +62,13 @@ def render_project_status(body: dict[str, Any]) -> str:
 
     Returns:
         "<name> (<project_id>): <phase>" when the project has a registered
-        name, else "<project_id>: <phase>", plus render_task_progress's
-        lines when the project has a task_queue.
+        name, else "<project_id>: <phase>", with " (active)" appended when
+        this is the project a bare free-text reply currently routes to,
+        plus render_task_progress's lines when the project has a task_queue.
     """
-    lines = [f"{_project_label(body['project_id'], body.get('name'))}: {body['phase']}"]
+    label = _project_label(body["project_id"], body.get("name"))
+    active_suffix = " (active)" if body.get("active") else ""
+    lines = [f"{label}: {body['phase']}{active_suffix}"]
     task_progress = body.get("task_progress")
     if task_progress:
         lines.append(render_task_progress(task_progress))
@@ -77,17 +80,22 @@ def render_project_list(projects: list[dict[str, Any]]) -> str:
 
     Args:
         projects: Every known project as {"id": project_id, "name":
-            name-or-None} dicts (services/orchestrator/api.py's
-            ProjectSummary shape), already sorted by id by the Orchestrator.
+            name-or-None, "active": bool} dicts (services/orchestrator/
+            api.py's ProjectSummary shape), already sorted by id by the
+            Orchestrator.
 
     Returns:
         One project per line ("<name> (<id>)", or bare "<id>" when
-        unnamed), or a hint when none exist yet.
+        unnamed), with a "-> " marker on the active project (the one a
+        bare free-text reply currently routes to), or a hint when none
+        exist yet.
     """
     if not projects:
         return "No projects yet. Send /new <description> to start one."
     return "Projects:\n" + "\n".join(
-        f"- {_project_label(project['id'], project.get('name'))}" for project in projects
+        f"{'-> ' if project.get('active') else '- '}"
+        f"{_project_label(project['id'], project.get('name'))}"
+        for project in projects
     )
 
 
@@ -102,12 +110,13 @@ def render_project_buttons(projects: list[dict[str, Any]]) -> InlineKeyboardMark
 
     Args:
         projects: Every known project as {"id": project_id, "name":
-            name-or-None} dicts (services/orchestrator/api.py's
-            ProjectSummary shape).
+            name-or-None, "active": bool} dicts (services/orchestrator/
+            api.py's ProjectSummary shape).
 
     Returns:
-        An InlineKeyboardMarkup with one row per project, or None when
-        there are no projects to show buttons for.
+        An InlineKeyboardMarkup with one row per project (the active
+        project's button prefixed "-> "), or None when there are no
+        projects to show buttons for.
     """
     if not projects:
         return None
@@ -115,7 +124,10 @@ def render_project_buttons(projects: list[dict[str, Any]]) -> InlineKeyboardMark
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=_project_label(project["id"], project.get("name")),
+                    text=(
+                        f"{'-> ' if project.get('active') else ''}"
+                        f"{_project_label(project['id'], project.get('name'))}"
+                    ),
                     callback_data=f"{CALLBACK_ACTIVATE}:{project['id']}",
                 )
             ]

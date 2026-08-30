@@ -170,8 +170,8 @@ def test_list_projects_returns_created_ids(tmp_path):
 
     assert response.status_code == 200
     assert response.json()["projects"] == [
-        {"id": "project-a", "name": None},
-        {"id": "project-b", "name": None},
+        {"id": "project-a", "name": None, "active": False},
+        {"id": "project-b", "name": None, "active": True},
     ]
 
 
@@ -277,6 +277,35 @@ def test_status_returns_none_name_for_an_unregistered_project(client):
     response = client.get("/status/my-project")
 
     assert response.json()["name"] is None
+
+
+def test_status_marks_the_active_project(client):
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "my-project"})
+
+    response = client.get("/status/my-project")
+
+    assert response.json()["active"] is True
+
+
+def test_activate_switches_which_project_is_marked_active(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "foundry_memory.db")
+    memory_conn = build_global_memory_connection(tmp_path / "foundry_memory.db")
+    service = OrchestratorService(
+        checkpointer,
+        start_only_router(projects=2),
+        _StubExecutorClient(),
+        memory_conn,
+        tmp_path / "projects",
+        StacksConfig(stacks={}),
+    )
+    client = TestClient(build_app(service))
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "project-a"})
+    client.post("/webhook", json={"user_id": 1, "text": "hi", "project_id": "project-b"})
+
+    response = client.post("/activate/project-a")
+
+    assert response.json()["active"] is True
+    assert client.get("/status/project-b").json()["active"] is False
 
 
 def test_rename_renames_the_active_project(tmp_path):

@@ -34,6 +34,7 @@ class ProjectStatusResponse(BaseModel):
 
     project_id: str
     name: str | None = None
+    active: bool = False
     phase: str
     pending_approval: dict | None
     task_progress: dict | None
@@ -41,10 +42,11 @@ class ProjectStatusResponse(BaseModel):
 
 
 class ProjectSummary(BaseModel):
-    """One project's id and registered name, as listed by GET /projects."""
+    """One project's id, registered name, and active status, as listed by GET /projects."""
 
     id: str
     name: str | None
+    active: bool
 
 
 class ProjectListResponse(BaseModel):
