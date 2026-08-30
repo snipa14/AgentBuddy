@@ -33,14 +33,23 @@ mid-task.
 
 ## Revival rule
 
-Rather than special-casing only `/continue`, any call that actually runs
-the graph -- `OrchestratorService.resume()`, `.activate()`, or
-`.handle_webhook()`'s explicit-`project_id` branch -- un-archives the
-project first, via a new check at the top of the shared `_invoke_graph()`
-entry point. `status()` (read-only) never revives anything. This keeps
-"reviving" one uniform rule instead of three special cases, while still
-matching the practical expectation that `/continue <cancelled-project>`
-is what brings it back.
+Rather than special-casing only `/continue`, any call that makes a project
+the active one again -- `OrchestratorService.resume()`, `.activate()`, or
+`.handle_webhook()`'s explicit-`project_id` branch -- un-archives it first,
+via a new check inside the shared `_write_active_project_id()` method
+(every one of those three calls it unconditionally). `status()` (read-only)
+never revives anything.
+
+This is deliberately *not* hooked into `_invoke_graph()`, despite that
+being the more obvious "this is where the graph actually runs" seam:
+`activate()` only calls `_invoke_graph()` when a project is genuinely
+*stuck* (no `pending_approval`) -- for a project cancelled while paused at
+a normal gate, which per the reasoning above is the realistic case,
+`/continue` just rewrites the active pointer and returns without ever
+calling `_invoke_graph()`. Hooking the revival there would mean the most
+common case never revives at all. `_write_active_project_id()` has no such
+gap: it's the one call every real "the human is engaging with this project
+again" path makes unconditionally.
 
 ## Cancel target
 
@@ -65,8 +74,9 @@ carry the destructive weight that would justify one.
   project is also the current active pointer -- clears the active pointer
   (written as an empty string, which `_read_active_project_id()` already
   treats as "none"). Returns `status(project_id)`.
-- `_invoke_graph()` gains a pre-step: if the target project's registry
-  entry is `"archived"`, flip it back to `"active"` before invoking.
+- `_write_active_project_id()` gains a pre-step (`_unarchive_if_needed()`):
+  if the target project's registry entry is `"archived"`, flip it back to
+  `"active"` before writing the pointer.
 - `status()` and `list_projects()` gain a `cancelled: bool` field (True
   iff the registry entry's `status == "archived"`).
 
@@ -106,8 +116,9 @@ practice.
 - `service.py`: `cancel_project` with an explicit target, with no arg
   (defaults to active), against an unregistered/legacy project (gets
   adopted), against an unknown identifier (raises). Active-pointer
-  clearing only when the cancelled project was active. `_invoke_graph`'s
-  un-archive-on-revival via `resume()`, `activate()`, and
+  clearing only when the cancelled project was active. `_write_active_project_id()`'s
+  un-archive-on-revival via `resume()`, `activate()` (including the case
+  where the project is paused at a real gate, not stuck), and
   `handle_webhook`'s explicit-id path. `status()`/`list_projects()`
   surfacing `cancelled`.
 - `api.py`: `POST /cancel` with/without a target, 404 on unknown project.
