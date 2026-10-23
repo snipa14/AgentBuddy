@@ -19,6 +19,7 @@ import pytest
 from services.executor.config import ExecutorConfig
 from services.executor.docker_client import build_docker_client
 from services.executor.stacks import load_stacks_config
+from services.executor.tests.integration.project_dirs import make_writable_by_workspace_uid
 from services.executor.tools import tool_run_command, tool_run_tests, tool_write_file
 
 pytest.importorskip("yaml")
@@ -105,7 +106,9 @@ def executor_config(tmp_path, workspace_image, workspace_network):
 @pytest.fixture
 def project_id(executor_config):
     new_project_id = f"go-int-{uuid.uuid4().hex[:8]}"
-    (executor_config.projects_host_path / new_project_id).mkdir()
+    project_dir = executor_config.projects_host_path / new_project_id
+    project_dir.mkdir()
+    make_writable_by_workspace_uid(project_dir)
     return new_project_id
 
 
