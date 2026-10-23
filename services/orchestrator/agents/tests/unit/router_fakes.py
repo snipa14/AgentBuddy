@@ -1,4 +1,4 @@
-"""Shared ModelRouter/BaseChatModel fakes for agent unit tests (ADR-025).
+"""Shared ModelRouter/BaseChatModel fakes for agent tests, both tiers (ADR-025).
 
 Fakes the `BaseChatModel` surface agent code actually drives -- `.ainvoke()`
 for the Coder's tool-calling loop, `.bind_tools()` to accept the loop's tool
@@ -7,6 +7,13 @@ other agent's single-shot structured response -- rather than mocking at the
 old text-completion `Provider.complete()` boundary. Per .claude/rules/
 testing.md, this still mocks at the model_router.resolve() boundary, just
 one layer further out now that `resolve()` itself returns a `BaseChatModel`.
+
+Despite living under tests/unit/, these are the fakes the integration tier
+uses too (agents/tests/integration/test_coder_end_to_end.py): that tier
+fakes only the model, never the Executor or Docker. Keeping one
+implementation means a change to the surface agent code drives -- such as
+the Coder's move from `.ainvoke()` to `.astream()` -- cannot update one
+copy and leave another behind.
 """
 
 from dataclasses import dataclass

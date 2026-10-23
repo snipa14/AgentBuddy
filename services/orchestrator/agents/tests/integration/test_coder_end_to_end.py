@@ -14,6 +14,13 @@ tests use docker.from_env() directly rather than routing through
 docker-socket-proxy (a production concern for the Executor's own runtime
 wiring, not something a local test run needs).
 
+The model itself is faked with tests/unit/router_fakes.py's FakeRouter --
+the same fake the unit tier drives -- rather than a second scripted model
+local to this file. An earlier local copy implemented only `.ainvoke()` and
+silently rotted when the Coder moved to streaming, which no test could catch
+while the integration tier had no environment to run in. One fake, one place
+to keep current.
+
 Run with: pytest -m integration services/orchestrator/agents/tests/integration
 """
 
@@ -28,6 +35,7 @@ from services.executor.api import build_app
 from services.executor.config import ExecutorConfig
 from services.executor.docker_client import build_docker_client
 from services.orchestrator.agents.coder import run_coder_task
+from services.orchestrator.agents.tests.unit.router_fakes import FakeRouter
 from services.orchestrator.executor_client import ExecutorClient
 
 WORKSPACE_IMAGE = "foundry/workspace-python:3.12"
@@ -35,37 +43,6 @@ DOCKERFILE_DIR = "images/workspace-python"
 TEST_NETWORK_NAME = "foundry_workspace_test"
 
 pytestmark = pytest.mark.integration
-
-
-class _ScriptedCoderModel:
-    """Scripts a fixed sequence of tool-calling turns -- no real LLM involved.
-
-    Stands in for the BaseChatModel `ModelRouter.resolve()` would normally
-    return: `.bind_tools()` is a no-op (returns self), and `.ainvoke()`
-    ignores the messages and returns the next scripted AIMessage.
-    """
-
-    def __init__(self, turns: list[AIMessage]):
-        self._turns = list(turns)
-
-    def bind_tools(self, tools):
-        return self
-
-    async def ainvoke(self, messages, **kwargs):
-        return self._turns.pop(0)
-
-
-class _ScriptedCoderRouter:
-    """Stands in for ModelRouter: `.resolve(role)` returns a scripted model."""
-
-    def __init__(self, turns: list[AIMessage]):
-        self._model = _ScriptedCoderModel(turns)
-
-    def resolve(self, role):
-        return self._model
-
-    def cost_usd(self, role, usage):
-        return 0.0
 
 
 @pytest.fixture(scope="session")
@@ -124,7 +101,7 @@ def project_id(projects_root):
 def test_coder_writes_a_real_file_inside_a_real_workspace_container(
     executor_client, projects_root, project_id
 ):
-    router = _ScriptedCoderRouter(
+    router = FakeRouter(
         [
             AIMessage(
                 content="",
@@ -154,7 +131,7 @@ def test_coder_reads_an_existing_file_before_overwriting_it(
 ):
     host_file = projects_root / project_id / "notes.txt"
     host_file.write_text("original content")
-    router = _ScriptedCoderRouter(
+    router = FakeRouter(
         [
             AIMessage(
                 content="",
