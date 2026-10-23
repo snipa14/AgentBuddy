@@ -27,7 +27,11 @@ the same operations through the Docker SDK:
     against a real compose-managed deployment.
 
 When the `docker` CLI *is* present, the fixtures use it directly, matching
-the original subprocess-based design.
+the original subprocess-based design -- which is what GitHub Actions runners
+do, since they ship both a daemon and the CLI. Those branches therefore run
+for the first time in CI and must not assume this sandbox's own layout: the
+compose invocations below resolve their working directory from REPO_ROOT
+rather than a hardcoded path.
 
 The SDK-fallback branches never touch PROXY_CONTAINER_NAME/PROXY_NETWORK_NAME
 (the real names a docker-compose.yml-managed production deployment would
@@ -67,7 +71,8 @@ PROXY_PORT = 2375
 # private sandbox instead.
 FALLBACK_CONTAINER_NAME = "foundry-docker-socket-proxy-sdk-fallback-test"
 FALLBACK_NETWORK_NAME = "foundry_internal_sdk_fallback_test"
-COMPOSE_FILE_PATH = Path(__file__).resolve().parents[4] / "docker-compose.yml"
+REPO_ROOT = Path(__file__).resolve().parents[4]
+COMPOSE_FILE_PATH = REPO_ROOT / "docker-compose.yml"
 
 DOCKER_CLI_AVAILABLE = shutil.which("docker") is not None
 
@@ -115,7 +120,7 @@ def running_proxy(daemon_client):
 
         up = subprocess.run(
             ["docker", "compose", "up", "-d", "docker-socket-proxy"],
-            cwd="/workspace",
+            cwd=REPO_ROOT,
             capture_output=True,
             text=True,
         )
@@ -131,7 +136,7 @@ def running_proxy(daemon_client):
         if not already_running:
             stop = subprocess.run(
                 ["docker", "compose", "stop", "docker-socket-proxy"],
-                cwd="/workspace",
+                cwd=REPO_ROOT,
                 capture_output=True,
                 text=True,
             )
