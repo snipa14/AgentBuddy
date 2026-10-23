@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "foundry"
 version = "0.1.0"
@@ -27,6 +31,15 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
 ]
+
+# This repo is a flat layout whose root holds non-package directories
+# (config/, secrets/, images/, plugins/, docs/, scripts/, projects/).
+# setuptools' automatic discovery refuses a flat layout with more than one
+# candidate top-level package and aborts the build, so the two real package
+# trees are named explicitly -- this also keeps secrets/ and config/ out of
+# any built artifact, which auto-discovery would otherwise have swept in.
+[tool.setuptools.packages.find]
+include = ["services*", "skills*"]
 
 [tool.ruff]
 target-version = "py312"
