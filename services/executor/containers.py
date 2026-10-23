@@ -139,6 +139,7 @@ def workspace_container(
                 security_opt=["no-new-privileges:true"],
                 network=config.network_name,
                 mem_limit=config.mem_limit,
+                memswap_limit=config.mem_limit,
                 nano_cpus=config.nano_cpus,
                 pids_limit=config.pids_limit,
             )

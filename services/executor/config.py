@@ -28,6 +28,9 @@ class ExecutorConfig(BaseModel):
 
     mem_limit, nano_cpus, and pids_limit are process-wide defaults for v1; Phase 7's
     projects.yaml is expected to add per-project overrides on top of these.
+    mem_limit is passed to Docker as both the memory and the memory+swap
+    ceiling (ADR-059), so it is the real total a workspace container can
+    reach rather than half of it.
     `stacks` is the validated stack registry (ADR-045); it defaults to an
     empty registry so tests can construct a config without touching the
     filesystem, while from_env always loads the real config/stacks.yaml.
